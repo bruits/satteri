@@ -42,7 +42,7 @@ function referenceHtml(md: string, plugin: RemarkPluginAndSatteri["remark"]): st
 async function satteriHtml(md: string, plugin: MdastPluginFactory): Promise<string> {
   const { html } = await markdownToHtml(md, {
     features: { directive: true, gfm: true, frontmatter: false, math: false },
-    mdastPlugins: [defineMdastPlugin({ name: "hdata-test", ...plugin() })],
+    mdastPlugins: [defineMdastPlugin({ name: "hdata-test", ...plugin(), before() {} })],
   });
   return normalize(html);
 }

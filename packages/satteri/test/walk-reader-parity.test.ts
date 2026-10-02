@@ -80,6 +80,7 @@ function walkAndReader<T extends MdastNode["type"]>(md: string, type: T, mdx = f
     [type](node: MdastNodeOf<T>) {
       walked.push(node);
     },
+    before() {},
   });
   visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
   const tree = materializeMdastTree(new MdastReader(serializeHandle(handle)));

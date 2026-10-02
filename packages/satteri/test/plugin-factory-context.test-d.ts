@@ -5,6 +5,14 @@ type Expect<T extends true> = T;
 type ExpectFalse<T extends false> = T;
 type IsPromise<T> = [T] extends [Promise<unknown>] ? true : false;
 
+// Plugins need at least one visitor or lifecycle hook.
+// @ts-expect-error - a name alone is not an executable MDAST plugin
+defineMdastPlugin({ name: "empty-mdast" });
+// @ts-expect-error - options alone do not make a HAST plugin executable
+defineHastPlugin({ name: "empty-hast", options: {} });
+// @ts-expect-error - entries passed directly to the compile API are checked too
+markdownToHtml("x", { hastPlugins: [{ name: "empty-hast" }] });
+
 const asyncMdast = defineMdastPlugin({
   name: "async-mdast",
   async code() {

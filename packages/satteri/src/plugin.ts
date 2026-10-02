@@ -20,9 +20,20 @@ export interface PluginFactoryContext {
   readonly data: Data;
 }
 
-export type MdastPluginDefinition = MdastPluginInstance & { name: string };
+type RequireAtLeastOne<T, K extends keyof T> = Omit<T, K> &
+  {
+    [P in K]-?: Required<Pick<T, P>> & Partial<Pick<T, Exclude<K, P>>>;
+  }[K];
 
-export type HastPluginDefinition = HastVisitorInstance & { name: string };
+export type MdastPluginDefinition = RequireAtLeastOne<
+  MdastPluginInstance,
+  Exclude<keyof MdastPluginInstance, "options">
+> & { name: string };
+
+export type HastPluginDefinition = RequireAtLeastOne<
+  HastVisitorInstance,
+  Exclude<keyof HastVisitorInstance, "options">
+> & { name: string };
 
 type PluginEntry<D> =
   | D
