@@ -3082,8 +3082,8 @@ describe("nodes kept from another compile", () => {
 });
 
 describe("plugins on the tree functions", () => {
-  const noopMdast = defineMdastPlugin({ name: "noop-mdast" });
-  const noopHast = defineHastPlugin({ name: "noop-hast" });
+  const noopMdast = defineMdastPlugin({ name: "noop-mdast", before() {} });
+  const noopHast = defineHastPlugin({ name: "noop-hast", before() {} });
   const source = "# Title\n\nsome *text*\n";
 
   test("markdownToMdast runs mdast plugins", () => {
