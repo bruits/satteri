@@ -1,5 +1,20 @@
 # satteri-plugin-api
 
+## 0.6.0 — 2026-10-02
+
+### Minor changes
+
+- [81be9ae](https://github.com/bruits/satteri/commit/81be9aecd95870a747162e6034ab7a8e7d3bc143) Added `ctx.setField` for a node's own fields and `ctx.setAttribute` for `attributes` entries, so plugins can now rename elements, MDX JSX elements and directives, and set directive attributes. `ctx.setProperty` keeps setting HAST element properties; using it for fields or MDX JSX attributes is deprecated, and it is deprecated outright on MDAST. — Thanks @Princesseuh!
+
+### Patch changes
+
+- [897072d](https://github.com/bruits/satteri/commit/897072d74310b89ea6fb6fb807126596d1bfd270) Fixed raw MDAST content adding paragraph wrappers in phrasing-content mutations. — Thanks @Princesseuh!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Added `hastToHtml`, which serializes a HAST tree, a single node, or a list of nodes back to an HTML string, the reverse of `htmlToHast`. — Thanks @Princesseuh!
+- [6a66463](https://github.com/bruits/satteri/commit/6a664639e80256fc82541968203309ba07e277b8) A node read from the tree and handed back to `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, `insertChildAt` or `replaceNode`, or returned from a visitor, is now that node rather than a snapshot of how it looked when you read it, so it arrives carrying every change the pass made to it. This is how reused children already behaved when nested inside new content, and it means an inserted node no longer silently misses a transform another visitor queued on it in the same pass. Pass `structuredClone(node)` during its visitor pass when you want a detached copy instead; a node from another tree or pass cannot be inserted as a reference.
+  
+  Two shapes have no answer under that rule and now report an error when queued edits are applied, instead of quietly inserting a stale copy: inserting a node inside itself, as `insertAfter(node, ctx.parent(node))` does, and swapping or sorting siblings with a pair of inserts that each name the other's node. Reorder by handing the parent the order you want, with `setProperty(parent, "children", [...])`. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.4.0, satteri-ast (Cargo)@0.6.0
+
 ## 0.5.3 — 2026-08-19
 
 ### Patch changes
