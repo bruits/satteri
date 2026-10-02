@@ -93,7 +93,7 @@ import {
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
-  type SettableScalarFieldKey,
+  type SettableFieldKey,
   withMdxJsxAttribute,
 } from "../visitor-shared.js";
 import { ru32 } from "../wire-read.js";
@@ -330,11 +330,13 @@ export class MdastVisitorContext {
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs, true);
   }
 
-  setField<N extends MdastTarget, K extends SettableScalarFieldKey<N>>(
+  setField<N extends MdastTarget, K extends SettableFieldKey<N, true>>(
     node: Readonly<N>,
     key: K,
     value: Exclude<N[K], undefined>,
   ): void;
+  /** Table alignment is an array stored in the table's typed data. */
+  setField(node: Readonly<Table>, key: "align", value: Table["align"]): void;
   /** `children` is structural and every parent accepts it, including node-type unions. */
   setField(node: Readonly<MdastTarget>, key: "children", value: readonly MdastTarget[]): void;
   /** `data` is an open per-node bag serialized to JSON. `null` clears it. */
@@ -346,6 +348,14 @@ export class MdastVisitorContext {
       if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
+      return;
+    }
+    if (
+      (key === "attributes" && (isMdxJsxElement(node) || isDirective(node))) ||
+      (key === "align" && node.type === "table")
+    ) {
+      // These are structured node fields, so re-encode the node rather than a scalar command.
+      this.replaceNode(node, { ...node, [key]: value } as MdastTarget);
       return;
     }
     if (key === "data") value = value != null ? JSON.stringify(value) : null;
@@ -428,6 +438,11 @@ export class MdastVisitorContext {
       if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
+      return;
+    }
+    const target = this.#pendingNodes.get(id) ?? node;
+    if (key === "attributes" && isMdxJsxElement(target)) {
+      this.replaceNode(node, { ...target, attributes: value } as MdastTarget);
       return;
     }
     if (key === "data") value = value != null ? JSON.stringify(value) : null;

@@ -3,15 +3,44 @@
 import { releaseCommandBuffer, type CommandBuffer } from "./command-buffer.js";
 import type { MdxJsxAttributeUnion } from "./types.js";
 
-/** Node fields representable by the named-value command. Container fields use dedicated commands. */
+/** Fields representable by named-value commands or explicit structured-field handlers. */
 type ScalarFieldValue = string | number | boolean | null;
 
-export type SettableScalarFieldKey<N> = {
+export type SettableFieldKey<N, IsMdast extends boolean = false> = {
   [K in keyof N & string]-?: K extends "type"
     ? never
     : Exclude<N[K], undefined> extends ScalarFieldValue
       ? K
-      : never;
+      : K extends "attributes"
+        ? (
+            IsMdast extends true
+              ? N extends {
+                  type: "mdxJsxFlowElement" | "mdxJsxTextElement";
+                  attributes: unknown[];
+                }
+                ? true
+                : N extends {
+                      type: "containerDirective" | "leafDirective" | "textDirective";
+                      attributes?: unknown;
+                    }
+                  ? true
+                  : false
+              : N extends {
+                    type: "mdxJsxFlowElement" | "mdxJsxTextElement";
+                    attributes: unknown[];
+                  }
+                ? true
+                : false
+          ) extends true
+          ? K
+          : never
+        : K extends "properties"
+          ? IsMdast extends false
+            ? N extends { type: "element"; properties: object }
+              ? K
+              : never
+            : never
+          : never;
 }[keyof N & string];
 
 /** Return a replacement copy with one named MDX JSX attribute upserted at the end. */
