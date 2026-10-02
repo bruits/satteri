@@ -10,6 +10,34 @@ Typically, differences are unwanted and are bugs to be fixed. However, in certai
 
 ## AST
 
+### Lists after indented code blocks
+
+After an indented code block, remark treats a following ordered list that starts with a number other than `1` as plain text. CommonMark treats it as a list: the restriction to start at `1` applies only when a list interrupts a paragraph, and a code block is not a paragraph ([§5.2–5.3](https://spec.commonmark.org/0.31.2/#list-items)).
+
+```markdown
+    code
+
+2. item
+```
+
+| Parser   | Output                                                               |
+| -------- | -------------------------------------------------------------------- |
+| `remark` | code + paragraph (`2. item`); `<p>2. item</p>`                       |
+| Sätteri  | code + ordered list (`start: 2`); `<ol start="2"><li>item</li></ol>` |
+
+The same applies to `2) item`, and to any number of intervening blank lines. A following unordered marker is also a list, even when its item is empty: CommonMark permits empty list items when they do not interrupt a paragraph.
+
+```markdown
+\t9
+
+-
+```
+
+| Parser   | Output                                                 |
+| -------- | ------------------------------------------------------ |
+| `remark` | code + paragraph (`-`); `<p>-</p>`                     |
+| Sätteri  | code + empty unordered list item; `<ul><li></li></ul>` |
+
 ### Unclosed frontmatter delimiters
 
 When `remark-frontmatter` sees `---` or `+++` at line 1 and can't find a matching close, it suppresses list and blockquote detection for the rest of the document. Sätteri doesn't.

@@ -1,3 +1,4 @@
+import type { Root } from "mdast";
 import { encodeHastDocument } from "./hast/hast-visitor.js";
 import { featuresToNative, mdxOptionsToNative } from "./compile-options.js";
 import type {
@@ -74,7 +75,7 @@ import { HastReader } from "./hast/hast-reader.js";
 import { materializeMdastTree } from "./mdast/mdast-materializer.js";
 import { MdastReader } from "./mdast/mdast-reader.js";
 import { normalizePlugins } from "./plugin.js";
-import type { HastNode, MdastNode, SourceFormat } from "./types.js";
+import type { HastNode, SourceFormat } from "./types.js";
 
 export function markdownToHtml(source: string): MarkdownToHtmlResult;
 export function markdownToHtml<O extends CompileOptions>(
@@ -432,7 +433,7 @@ export function evaluate(
   return new Function(result.code)(runtime);
 }
 
-function materializeMdastHandle(handle: MdastHandle): MdastNode {
+function materializeMdastHandle(handle: MdastHandle): Root {
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
@@ -469,7 +470,7 @@ function toMdastImpl(
   source: string,
   options: MdastTreeOptions,
   mdx: boolean,
-): MdastNode | Promise<MdastNode> {
+): Root | Promise<Root> {
   const { features, fileURL, data = {} } = options;
   const sourceFormat: SourceFormat = mdx ? "mdx" : "markdown";
   const mdastPlugins = normalizePlugins(
@@ -589,28 +590,28 @@ function toHastImpl(
 }
 
 /** Parse Markdown source into a materialized mdast tree. */
-export function markdownToMdast(source: string): MdastNode;
+export function markdownToMdast(source: string): Root;
 export function markdownToMdast<O extends MdastTreeOptions>(
   source: string,
   options?: O,
-): ResultFor<O, MdastNode>;
+): ResultFor<O, Root>;
 export function markdownToMdast(
   source: string,
   options: MdastTreeOptions = {},
-): MdastNode | Promise<MdastNode> {
+): Root | Promise<Root> {
   return toMdastImpl(source, options, false);
 }
 
 /** Parse MDX source into a materialized mdast tree. */
-export function mdxToMdast(source: string): MdastNode;
+export function mdxToMdast(source: string): Root;
 export function mdxToMdast<O extends MdastTreeOptions>(
   source: string,
   options?: O,
-): ResultFor<O, MdastNode>;
+): ResultFor<O, Root>;
 export function mdxToMdast(
   source: string,
   options: MdastTreeOptions = {},
-): MdastNode | Promise<MdastNode> {
+): Root | Promise<Root> {
   return toMdastImpl(source, options, true);
 }
 

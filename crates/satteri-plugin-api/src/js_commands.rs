@@ -344,6 +344,17 @@ fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u3
     id
 }
 
+/// A `keep_children` expansion names each child's *position*, so it must carry
+/// whatever else was spliced there rather than the child alone.
+fn emit_slot_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u32 {
+    let id = builder.open_node(REF_NODE_TYPE);
+    let mut data = ref_id.to_le_bytes().to_vec();
+    data.push(satteri_ast::patch::REF_KIND_SLOT);
+    builder.set_data_current(&data);
+    builder.close_node();
+    id
+}
+
 // Generated per-type arena encoder, driven by the node registry. See
 // `crates/satteri-layout-codegen`.
 use crate::generated::encode::{
@@ -862,7 +873,7 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                 }
                 let children = builder.arena_ref().get_children(anchor).to_vec();
                 for child in children {
-                    let ref_id = emit_ref_node(child, builder);
+                    let ref_id = emit_slot_ref_node(child, builder);
                     if stack.is_empty() {
                         roots.push(ref_id);
                     }
@@ -1144,6 +1155,54 @@ fn read_mdast_payload(
             ))
         }
         other => Err(CommandError::UnknownPayloadType(other)),
+    }
+}
+
+fn mdast_sibling_slot_parent_type(arena: &Arena<Mdast>, node_id: u32) -> u8 {
+    let node = arena.get_node(node_id);
+    if node_id == 0 {
+        node.node_type
+    } else {
+        arena.get_node(node.parent).node_type
+    }
+}
+
+fn mdast_parent_accepts_phrasing_content(node_type: u8) -> bool {
+    use MdastNodeType::*;
+    matches!(
+        MdastNodeType::from_u8(node_type),
+        Some(
+            Paragraph
+                | Heading
+                | Emphasis
+                | Strong
+                | Link
+                | LinkReference
+                | Delete
+                | TableCell
+                | TextDirective
+                | Superscript
+                | Subscript
+                | DescriptionTerm
+                | MdxJsxTextElement
+        )
+    )
+}
+
+/// Raw Markdown is parsed as a document. When it is spliced into a phrasing
+/// slot, remove its single document paragraph. Other parsed shapes pass through
+/// unchanged, leaving structural validity to the plugin author.
+fn normalize_mdast_raw_payload_for_parent(content: &mut PatchContent<Mdast>, parent_type: u8) {
+    if !mdast_parent_accepts_phrasing_content(parent_type) {
+        return;
+    }
+    let PatchContent::Tree(tree) = content else {
+        return;
+    };
+    let roots = tree.get_children(0).to_vec();
+    if roots.len() == 1 && tree.get_node(roots[0]).node_type == MdastNodeType::Paragraph as u8 {
+        let children = tree.get_children(roots[0]).to_vec();
+        tree.set_children(0, &children);
     }
 }
 
@@ -1553,7 +1612,8 @@ pub fn apply_mdast_commands_lenient_with_options(
 
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (new_tree, _) = read_mdast_payload(
+                let parent_type = mdast_sibling_slot_parent_type(builder.arena_ref(), node_id);
+                let (mut new_tree, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1561,12 +1621,14 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
+                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (new_tree, _) = read_mdast_payload(
+                let parent_type = mdast_sibling_slot_parent_type(builder.arena_ref(), node_id);
+                let (mut new_tree, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1574,12 +1636,14 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
+                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (child_tree, _) = read_mdast_payload(
+                let parent_type = builder.arena_ref().get_node(node_id).node_type;
+                let (mut child_tree, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1587,6 +1651,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
+                normalize_mdast_raw_payload_for_parent(&mut child_tree, parent_type);
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -1595,7 +1660,8 @@ pub fn apply_mdast_commands_lenient_with_options(
 
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (child_tree, _) = read_mdast_payload(
+                let parent_type = builder.arena_ref().get_node(node_id).node_type;
+                let (mut child_tree, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1603,6 +1669,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
+                normalize_mdast_raw_payload_for_parent(&mut child_tree, parent_type);
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -1633,7 +1700,8 @@ pub fn apply_mdast_commands_lenient_with_options(
 
             CMD_REPLACE => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (new_tree, keep_children) = read_mdast_payload(
+                let parent_type = mdast_sibling_slot_parent_type(builder.arena_ref(), node_id);
+                let (mut new_tree, keep_children) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1641,6 +1709,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
+                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -1650,7 +1719,8 @@ pub fn apply_mdast_commands_lenient_with_options(
 
             CMD_SET_CHILDREN => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (new_children, _) = read_mdast_payload(
+                let parent_type = builder.arena_ref().get_node(node_id).node_type;
+                let (mut new_children, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1658,6 +1728,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
+                normalize_mdast_raw_payload_for_parent(&mut new_children, parent_type);
                 patches.push(Patch::SetChildren {
                     node_id,
                     new_children,
@@ -2045,9 +2116,12 @@ mod tests {
         let children = arena.get_children(heading).to_vec();
         assert_eq!(children.len(), 1);
         assert_eq!(arena.get_node(children[0]).node_type, REF_NODE_TYPE);
+        let td = arena.get_type_data(children[0]);
+        assert_eq!(u32::from_le_bytes(td[..4].try_into().unwrap()), orig_text);
         assert_eq!(
-            u32::from_le_bytes(arena.get_type_data(children[0]).try_into().unwrap()),
-            orig_text
+            td.get(4),
+            Some(&satteri_ast::patch::REF_KIND_SLOT),
+            "keep_children names each child's position, not the child alone"
         );
     }
 

@@ -670,7 +670,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         self.tree.push();
                         // Emit the label as a real inline-tokenized child so the
                         // normal inline pass resolves emphasis/strong/links/code.
-                        if label_start != 0 || label_end != 0 {
+                        if label_start < label_end {
                             self.append_container_directive_label(label_start, label_end);
                         }
                         return line_end;
@@ -1356,6 +1356,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
         }
         ix += line_start.bytes_scanned();
+        if self.at_closing_directive_fence(&line_start) {
+            return None;
+        }
         if scan_paragraph_interrupt_no_table(
             &bytes[ix..],
             current_container,
@@ -2942,7 +2945,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         }
                     }
                 }
-                ItemBody::HtmlBlock(..) | ItemBody::List(..) | ItemBody::ListItem(..) => {}
+                ItemBody::HtmlBlock(..)
+                | ItemBody::List(..)
+                | ItemBody::ListItem(..)
+                | ItemBody::Table(..)
+                | ItemBody::TableHead
+                | ItemBody::TableRow
+                | ItemBody::TableCell => {}
                 _ => break,
             }
         }
@@ -3217,15 +3226,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.tree[child].item.end = last_nonblank_ix;
         }
         self.pop(end_ix);
-        // Set `interrupt`-equivalent state ONLY when this code block wasn't a
-        // one-line lazy block opened immediately after a popped blockquote.
-        // For `>\n\t9\n+` micromark's `interrupt` is false at `+` (the bq's
-        // blank-line state propagates through the lazy code), so the empty
-        // marker is allowed to open a list. For `\t9\n+` and `code\n\n2.b`,
-        // the code wasn't lazy and the suppression should fire.
-        if !lazy_one_line {
-            self.list_interrupted_paragraph = true;
-        }
         ix
     }
 
@@ -5868,15 +5868,26 @@ fn scan_directive_attributes(bytes: &[u8]) -> Option<(Vec<(CowStr<'_>, CowStr<'_
         return None;
     }
     let mut i = 1;
+    let mut quote = None;
     let end = loop {
         if i >= bytes.len() {
             return None;
         }
-        match bytes[i] {
-            b'}' => break i,
-            b'\n' | b'\r' => return None,
-            b'\\' if i + 1 < bytes.len() => i += 2,
-            _ => i += 1,
+        match (quote, bytes[i]) {
+            (Some(_), b'\\') if i + 1 < bytes.len() => i += 2,
+            (Some(q), c) if c == q => {
+                quote = None;
+                i += 1;
+            }
+            (Some(_), _) => i += 1,
+            (None, b'\'') | (None, b'"') => {
+                quote = Some(bytes[i]);
+                i += 1;
+            }
+            (None, b'}') => break i,
+            (None, b'\n' | b'\r') => return None,
+            (None, b'\\') if i + 1 < bytes.len() => i += 2,
+            (None, _) => i += 1,
         }
     };
     let inner = &bytes[1..end];

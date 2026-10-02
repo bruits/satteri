@@ -82,7 +82,6 @@ export const STRUCTURAL_CMD: Record<StructuralOp, number> = {
 export class CommandBuffer extends OpWriter {
   // Commands must not interleave bytes while a structural payload is being emitted.
   #inOpstream = false;
-
   constructor() {
     super(INITIAL_SIZE);
   }
@@ -104,7 +103,6 @@ export class CommandBuffer extends OpWriter {
   emitOpstreamCommand(cmd: number, nodeId: number, emit: () => boolean): boolean {
     const commandStart = this.n;
     const lenPos = this.#beginOpstream(cmd, nodeId);
-    // ok starts false so a throwing emit still hits the abort in finally
     let ok = false;
     try {
       ok = emit();

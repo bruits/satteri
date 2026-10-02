@@ -11,6 +11,14 @@ fn parse_to_html_ext(input: &str, opts: Options) -> String {
 }
 
 #[test]
+fn ordered_list_after_indented_code_block_preserves_start_number() {
+    let input = "    x\n\n2. a\n";
+    let expected = "<pre><code>x\n</code></pre>\n<ol start=\"2\">\n<li>a</li>\n</ol>\n";
+
+    assert_eq!(expected, parse_to_html(input));
+}
+
+#[test]
 fn html_test_1() {
     let original = r##"Little header
 

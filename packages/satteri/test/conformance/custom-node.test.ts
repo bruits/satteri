@@ -22,7 +22,7 @@ function referenceHtml(md: string, transform: (tree: MdastRoot) => void): string
 async function satteriHtml(md: string, plugin: MdastPluginInstance): Promise<string> {
   const { html } = await markdownToHtml(md, {
     features: { gfm: true, frontmatter: false, math: false },
-    mdastPlugins: [defineMdastPlugin({ name: "custom-conformance", ...plugin })],
+    mdastPlugins: [defineMdastPlugin({ name: "custom-conformance", ...plugin, before() {} })],
   });
   return normalize(html);
 }

@@ -5,6 +5,7 @@ describe("defineMdastPlugin", () => {
   it("returns the definition unchanged (identity)", () => {
     const def = {
       name: "my-plugin",
+      paragraph() {},
     };
     const result = defineMdastPlugin(def);
     expect(result).toBe(def);
@@ -14,6 +15,7 @@ describe("defineMdastPlugin", () => {
     expect(() =>
       defineMdastPlugin({
         name: "",
+        paragraph() {},
       }),
     ).toThrow(/name/);
   });
@@ -27,6 +29,7 @@ describe("defineMdastPlugin", () => {
   it("works with a minimal valid definition", () => {
     const def = defineMdastPlugin({
       name: "minimal",
+      before() {},
     });
     expect(def.name).toBe("minimal");
   });
