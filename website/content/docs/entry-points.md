@@ -163,4 +163,4 @@ const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
 // <div> is now a real element wrapping the parsed <p><strong>hi</strong></p>
 ```
 
-The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Positions are not preserved through the reparse.
+The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Markdown-derived positions are retained when the source association is unambiguous, as are spans of self-contained raw blocks containing exactly one element. Split or coalesced nodes, parser-created clones, and nodes parsed within a raw block have no positions. Original code-fence elements retain their `data.lang` and `data.meta`.

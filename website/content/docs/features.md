@@ -200,7 +200,7 @@ MDX treats `{...}` as a JavaScript expression, which normally collides with the 
 # Welcome {name}
 ```
 
-A `{...}` that *is* valid JavaScript stays an expression even when it looks like attributes: `{hidden}`, `{level=2}` and `{title="Home"}` evaluate rather than apply — silently, and unlike in plain Markdown. Add a `#`/`.` shorthand to force attributes; `{#id hidden}` applies both.
+A `{...}` that _is_ valid JavaScript stays an expression even when it looks like attributes: `{hidden}`, `{level=2}` and `{title="Home"}` evaluate rather than apply — silently, and unlike in plain Markdown. Add a `#`/`.` shorthand to force attributes; `{#id hidden}` applies both.
 
 ## Directives
 
@@ -286,7 +286,7 @@ rawHtml?: boolean
 
 By default, raw HTML embedded in Markdown is kept as opaque `raw` nodes and re-emitted verbatim. `rawHtml: true` reparses it into real HAST element, text, and comment nodes. The reparse runs during the mdast→hast conversion, so `markdownToHast`, `markdownToHtml`, and the plugin pipelines all reparse identically, and HAST plugins always see the reparsed elements.
 
-The whole tree goes through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Attributes are normalised into typed hast properties (`class` → `className: ["…"]`, `disabled` → `true`, `tabindex` → a number, `data-foo-bar` → `dataFooBar`). In MDX, JSX elements and expressions are preserved in place while the raw HTML around them is still resolved. Positions are not preserved through the reparse.
+The whole tree goes through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Attributes are normalised into typed hast properties (`class` → `className: ["…"]`, `disabled` → `true`, `tabindex` → a number, `data-foo-bar` → `dataFooBar`). In MDX, JSX elements and expressions are preserved in place while the raw HTML around them is still resolved. Markdown-derived positions are retained when the source association is unambiguous, as are spans of self-contained raw blocks containing exactly one element. Split or coalesced nodes, parser-created clones, and nodes parsed within a raw block have no positions. Original code-fence elements retain their `data.lang` and `data.meta`; user-supplied raw HTML and parser-created clones do not acquire fence metadata.
 
 ```js
 import { markdownToHast } from "satteri";

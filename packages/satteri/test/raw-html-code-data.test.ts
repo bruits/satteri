@@ -22,7 +22,8 @@ test.each([false, true])("markdownToHast keeps fence data with rawHtml=%s", asyn
   const code = pre.children[0];
   if (!code) throw new Error("expected code");
   expect(code.data).toEqual(fenceData);
-  expect(code.position).toEqual(rawHtml ? undefined : pre.position);
+  expect(code.position).toEqual(pre.position);
+  expect(code.position).toBeDefined();
 });
 
 test.each([false, true])("mdxToJs HAST plugins observe fence data with rawHtml=%s", (rawHtml) => {
@@ -54,7 +55,8 @@ test.each([false, true])(
   "raw HTML lookalikes never acquire fence data (mdast plugin=%s)",
   async (withMdast) => {
     const raw = '<pre><code class="language-js" data-lang="fake">x\n</code></pre>\n\n';
-    const repeated = raw + source + "\n" + raw + source.replace("a.js", "b.js") + "\n" + raw;
+    const repeated =
+      "# 👋 café\n\n" + raw + source + "\n" + raw + source.replace("a.js", "b.js") + "\n" + raw;
     const seen: unknown[] = [];
     const observer = defineHastPlugin({
       name: "observe-originals",
@@ -77,24 +79,33 @@ test.each([false, true])(
       { lang: "js", meta: 'title="b.js"' },
       undefined,
     ];
-    expect(codeElements(tree).map((node) => node.data)).toEqual(expected);
+    const codes = codeElements(tree);
+    expect(codes.map((node) => node.data)).toEqual(expected);
+    expect(codes.filter((node) => node.data).map((node) => node.position)).toEqual(
+      codeElements(await markdownToHast(repeated)).map((node) => node.position),
+    );
+    expect(codes.filter((node) => !node.data).every((node) => node.position === undefined)).toBe(
+      true,
+    );
     expect(seen).toEqual(expected);
   },
 );
 
 test("foster parenting relocates fences without swapping identical code blocks' data", async () => {
-  const tree = await markdownToHast(
+  const input =
     "<table>\n\n" +
-      source +
-      "\n<tr><td>\n\n" +
-      source.replace("a.js", "b.js") +
-      "\n</td></tr></table>\n",
-    { features: { rawHtml: true } },
-  );
+    source +
+    "\n<tr><td>\n\n" +
+    source.replace("a.js", "b.js") +
+    "\n</td></tr></table>\n";
+  const tree = await markdownToHast(input, { features: { rawHtml: true } });
   if (tree.type !== "root") throw new Error("expected root");
   expect(tree.children[0]).toMatchObject({ type: "element", tagName: "pre" });
   const codes = codeElements(tree);
   expect(codes.map((node) => node.data)).toEqual([fenceData, { lang: "js", meta: 'title="b.js"' }]);
+  expect(codes.map((node) => node.position)).toEqual(
+    codeElements(await markdownToHast(input)).map((node) => node.position),
+  );
   const table = tree.children.find((node) => node.type === "element" && node.tagName === "table");
   expect(table && codeElements(table).map((node) => node.data)).toEqual([
     { lang: "js", meta: 'title="b.js"' },
@@ -142,22 +153,39 @@ test.each([
   }
 });
 
-test("MDX compilation preserves metadata in nested JSX children", () => {
+test("MDX compilation preserves metadata and positions in nested JSX children", () => {
+  const input = "<Outer>\n\n<Inner>\n\n" + source + "\n</Inner>\n\n</Outer>\n";
   const seen: unknown[] = [];
+  const positions: unknown[] = [];
   const observer = defineHastPlugin({
     name: "observe-nested-fences",
     element: {
       filter: ["code"],
       visit(node) {
         seen.push(node.data);
+        positions.push(node.position);
       },
     },
   });
-  const { code } = mdxToJs("<Outer>\n\n<Inner>\n\n" + source + "\n</Inner>\n\n</Outer>\n", {
+  const baselinePositions: unknown[] = [];
+  const baselineObserver = defineHastPlugin({
+    name: "observe-baseline-positions",
+    element: {
+      filter: ["code"],
+      visit(node) {
+        baselinePositions.push(node.position);
+      },
+    },
+  });
+  mdxToJs(input, { hastPlugins: [baselineObserver] });
+  const { code } = mdxToJs(input, {
     features: { rawHtml: true },
     hastPlugins: [observer],
   });
   expect(seen).toEqual([fenceData]);
+  expect(positions).toEqual(baselinePositions);
+  // MDX currently omits these nested fence positions even without reparsing;
+  // preserving provenance must not invent a span that the source arena lacks.
   expect(code).toContain("Outer");
   expect(code).toContain("Inner");
   expect(code).toContain("language-js");
