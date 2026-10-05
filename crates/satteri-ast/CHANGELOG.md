@@ -1,5 +1,30 @@
 # satteri-ast
 
+## 0.6.0 — 2026-10-05
+
+### Minor changes
+
+- [5a49ee3](https://github.com/bruits/satteri/commit/5a49ee38bc0002c29d55df3d378285e90ab93ac4) Improved Markdown parsing, HAST conversion, and HTML rendering performance for prose, tables, links, autolinks, code spans, and strong emphasis. Reduced unnecessary allocations when compiling MDX with configured ignored elements, and fixed panics and incorrect strong-emphasis output when an autolink immediately follows an inline link.
+  
+  Changed Rust tree APIs to use `Document` for both borrowed and owned source text, with `NodePosition` arguments for construction and position setters. JavaScript APIs and wire layouts are unchanged. — Thanks @Princesseuh!
+
+### Patch changes
+
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed SVG script and style text being corrupted and elements with HTML void-element names losing children or absorbing siblings during HTML serialization and rawHtml reparsing. HTML content inside SVG integration points keeps its normal serialization rules, including with optimizeStatic. — Thanks @gtritchie!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made parsing, HTML rendering, and tree building faster, by 3% to 35% depending on the document and output, with the largest gains on small documents. — Thanks @Princesseuh!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made `markdownToMdast`, `markdownToHast`, and the MDX tree functions faster and less memory-hungry, with the largest gains on text-heavy and non-ASCII documents. — Thanks @Princesseuh!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Fixed list-valued properties on HAST elements: numeric items (like `coords`) no longer disappear, lists are separated by comma or space according to the schema of the element they sit in, and a comma-separated attribute parsed from HTML round-trips unchanged. — Thanks @Princesseuh!
+- [036507d](https://github.com/bruits/satteri/commit/036507d18f2ca40987049ac122f9d56b6a373818) Fixed raw HTML MathML default namespace attributes being serialized as `:xmlns` instead of `xmlns`. — Thanks @odysseus0 for your first contribution 🎉!
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed `rawHtml` losing the SVG attribute schema for raw HTML inside a JSX `<svg>` element, so `fill-rule` now maps to `fillRule` instead of passing through as an unknown property. — Thanks @gtritchie!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Fixed text inside an element nested in `<script>` or `<style>` rendering unescaped; only text directly inside those elements is left as-is. — Thanks @Princesseuh!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Added `hastToHtml`, which serializes a HAST tree, a single node, or a list of nodes back to an HTML string, the reverse of `htmlToHast`. — Thanks @Princesseuh!
+- [597ed59](https://github.com/bruits/satteri/commit/597ed5922e565ecc0cd22f6e49b5fccb37cc6600) Fixed the default `elementAttributeNameCase: "react"` compiling the SVG `datatype` attribute to `data-type`. It now emits `datatype`, while custom `data-*` attributes on SVG and HTML elements are still kebab-cased. — Thanks @gtritchie!
+- [6a66463](https://github.com/bruits/satteri/commit/6a664639e80256fc82541968203309ba07e277b8) A node read from the tree and handed back to `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, `insertChildAt` or `replaceNode`, or returned from a visitor, is now that node rather than a snapshot of how it looked when you read it, so it arrives carrying every change the pass made to it. This is how reused children already behaved when nested inside new content, and it means an inserted node no longer silently misses a transform another visitor queued on it in the same pass. Pass `structuredClone(node)` during its visitor pass when you want a detached copy instead; a node from another tree or pass cannot be inserted as a reference.
+  
+  Two shapes have no answer under that rule and now report an error when queued edits are applied, instead of quietly inserting a stale copy: inserting a node inside itself, as `insertAfter(node, ctx.parent(node))` does, and swapping or sorting siblings with a pair of inserts that each name the other's node. Reorder by handing the parent the order you want, with `setProperty(parent, "children", [...])`. — Thanks @Princesseuh!
+- [0c2c869](https://github.com/bruits/satteri/commit/0c2c8695c8ad654ffa1dfde1a171cd38e444d734) Fixed raw MathML children inside MDX <math> elements being parsed as HTML. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.4.0, satteri-property-info (Cargo)@0.2.1
+
 ## 0.5.3 — 2026-08-19
 
 ### Patch changes
