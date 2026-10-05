@@ -6,9 +6,13 @@
 //! that is then emitted into the builder in document order.
 
 use std::cell::{Cell, Ref, RefCell};
+use std::ops::Range;
 
+use html5ever::buffer_queue::BufferQueue;
 use html5ever::interface::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::{StrTendril, TendrilSink};
+use html5ever::tokenizer::{TagKind, Token, TokenSink, TokenSinkResult, Tokenizer};
+use html5ever::tree_builder::TreeBuilder;
 use html5ever::{
     Attribute, LocalName, Namespace, ParseOpts, QualName, parse_document, parse_fragment,
     tree_builder::TreeBuilderOpts,
@@ -90,6 +94,8 @@ struct Node {
     parent: Option<usize>,
     children: Vec<usize>,
     data: NodeData,
+    /// Source fence that created this handle, retained through tree-builder moves.
+    fence_origin: Option<u32>,
 }
 
 enum NodeData {
@@ -126,6 +132,7 @@ impl HtmlSink {
                 parent: None,
                 children: Vec::new(),
                 data: NodeData::Document,
+                fence_origin: None,
             }]),
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
             stitch,
@@ -192,6 +199,7 @@ fn new_node(nodes: &mut Vec<Node>, data: NodeData) -> usize {
         parent: None,
         children: Vec::new(),
         data,
+        fence_origin: None,
     });
     id
 }
@@ -512,6 +520,11 @@ fn emit(
                 let element = builder.open_node(HastNodeType::Element as u8);
                 let data = encode_element_data(tag_ref, &props);
                 builder.arena_mut().set_type_data(element, &data);
+                if let Some(origin) = nodes[id].fence_origin
+                    && let Some(data) = stitching.and_then(|s| s.src.get_node_data(origin))
+                {
+                    builder.arena_mut().set_node_data(element, data.to_vec());
+                }
 
                 stack.push(EmitTask::Close);
                 // `<template>` content lives in a detached document, not the
@@ -698,6 +711,7 @@ fn reparse_children_into(
     let prefix = stitch_prefix();
     let mut html = String::new();
     let mut stitches: Vec<u32> = Vec::new();
+    let mut fences = Vec::new();
     let context = RenderOptions::new(false, space.is_svg());
     {
         let mut on_mdx = |out: &mut String, node_id: u32| {
@@ -707,12 +721,26 @@ fn reparse_children_into(
             out.push_str("-->");
             stitches.push(node_id);
         };
+        let mut on_element = |id, span| {
+            let data = src.get_type_data(id);
+            if src.get_str(decode_element_tag(data)) == "code" && src.get_node_data(id).is_some() {
+                fences.push(FenceOrigin { span, id });
+            }
+        };
         for &child in src.get_children(parent) {
-            render_node_inner(child, src, &mut html, context, Some(&mut on_mdx), 0);
+            render_node_inner(
+                child,
+                src,
+                &mut html,
+                context,
+                Some(&mut on_mdx),
+                Some(&mut on_element),
+                0,
+            );
         }
     }
     let recognizer = StitchRecognizer::new(prefix, stitches.len());
-    let (nodes, roots, leaked) = parse_fragment_nodes(&html, Some(recognizer), space);
+    let (nodes, roots, leaked) = parse_fragment_nodes(&html, Some(recognizer), space, &fences);
     let stitching = Stitching {
         src,
         stitches: &stitches,
@@ -855,7 +883,7 @@ pub fn html_to_hast_arena(html: &str) -> Arena<Hast> {
 /// fragment's own top-level nodes, with no synthesised `<html>`/`<head>`/
 /// `<body>` wrapper. `space` picks the namespace that content parses in.
 pub fn html_fragment_to_hast_arena(html: &str, space: HtmlSpace) -> Arena<Hast> {
-    let (nodes, roots, _) = parse_fragment_nodes(html, None, space);
+    let (nodes, roots, _) = parse_fragment_nodes(html, None, space, &[]);
 
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
     builder.open_node(HastNodeType::Root as u8);
@@ -869,7 +897,7 @@ pub fn html_fragment_to_hast_arena(html: &str, space: HtmlSpace) -> Arena<Hast> 
 /// around it is ignored; anything else (no element, extra top-level nodes, a
 /// void element) errors with the reason.
 pub fn html_fragment_to_wrap_arena(html: &str) -> Result<Arena<Hast>, String> {
-    let (nodes, roots, _) = parse_fragment_nodes(html, None, HtmlSpace::Html);
+    let (nodes, roots, _) = parse_fragment_nodes(html, None, HtmlSpace::Html, &[]);
     let mut wrapper: Option<usize> = None;
     for &r in &roots {
         match &nodes[r].data {
@@ -902,14 +930,115 @@ pub fn html_fragment_to_wrap_arena(html: &str) -> Result<Arena<Hast>, String> {
 /// no synthesised `<html>`/`<head>`/`<body>` wrapper.
 ///
 /// MDX nodes have no HTML form; they are carried through as placeholder
-/// comments and spliced back afterwards. Positions are not preserved: the
-/// tree is rebuilt from serialised HTML.
+/// comments and spliced back afterwards. Original code elements retain their
+/// node data when their opening tags survive tokenization. Positions and arena
+/// ids are not preserved: the tree is rebuilt from serialised HTML.
 pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
     builder.open_node(HastNodeType::Root as u8);
     reparse_children_into(arena, 0, &mut builder, HtmlSpace::Html);
     builder.close_node();
     builder.finish()
+}
+
+struct FenceOrigin {
+    span: Range<usize>,
+    id: u32,
+}
+
+/// Associate serialized fence tags with the handles created from those exact
+/// tokens, not with output order, text, or attributes. In particular, foster
+/// parenting can move a handle, and formatting reconstruction can clone one.
+struct FenceTokenSink<'a> {
+    tree: TreeBuilder<usize, HtmlSink>,
+    input: &'a BufferQueue,
+    input_len: usize,
+    fences: &'a [FenceOrigin],
+    previous_end: Cell<usize>,
+}
+
+impl TokenSink for FenceTokenSink<'_> {
+    type Handle = usize;
+
+    fn process_token(&self, token: Token, line: u64) -> TokenSinkResult<usize> {
+        // Parse errors do not delimit source tokens. Counting one as a boundary
+        // could claim a tag that began in malformed user-supplied raw HTML.
+        if matches!(token, Token::ParseError(_)) {
+            return self.tree.process_token(token, line);
+        }
+        let remaining = self.input.clone();
+        let mut remaining_len = 0;
+        while let Some(buffer) = remaining.pop_front() {
+            remaining_len += buffer.len();
+        }
+        let end = self.input_len - remaining_len;
+        // Fence <code> tags directly follow their <pre> token. Requiring both
+        // boundaries to match also rejects tags partly consumed into raw HTML.
+        let start = self.previous_end.replace(end);
+        let origin = if matches!(&token, Token::TagToken(tag) if tag.kind == TagKind::StartTag && &*tag.name == "code")
+        {
+            self.fences
+                .binary_search_by_key(&end, |fence| fence.span.end)
+                .ok()
+                .map(|index| &self.fences[index])
+                .filter(|fence| fence.span.start == start)
+        } else {
+            None
+        };
+        let first_new = if origin.is_some() {
+            self.tree.sink.nodes.borrow().len()
+        } else {
+            0
+        };
+        let result = self.tree.process_token(token, line);
+        if let Some(origin) = origin {
+            let mut nodes = self.tree.sink.nodes.borrow_mut();
+            // A code start tag first reconstructs active formatting, then
+            // inserts its own element. Only that last new code is the original;
+            // reconstructed clones must not inherit the fence's metadata.
+            if let Some(node) = nodes[first_new..].iter_mut().rev().find(
+                |node| matches!(&node.data, NodeData::Element { name, .. } if &*name.local == "code"),
+            ) {
+                node.fence_origin = Some(origin.id);
+            }
+        }
+        result
+    }
+
+    fn end(&self) {
+        self.tree.end();
+    }
+
+    fn adjusted_current_node_present_but_not_in_html_namespace(&self) -> bool {
+        self.tree
+            .adjusted_current_node_present_but_not_in_html_namespace()
+    }
+}
+
+fn parse_with_fence_origins(
+    tree: TreeBuilder<usize, HtmlSink>,
+    html: &str,
+    fences: &[FenceOrigin],
+) -> HtmlSink {
+    let opts = html5ever::tokenizer::TokenizerOpts {
+        initial_state: Some(tree.tokenizer_state_for_context_elem(false)),
+        ..parse_opts().tokenizer
+    };
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from(html));
+    let tokenizer = Tokenizer::new(
+        FenceTokenSink {
+            tree,
+            input: &input,
+            input_len: html.len(),
+            fences,
+            previous_end: Cell::new(0),
+        },
+        opts,
+    );
+    while !matches!(tokenizer.feed(&input), html5ever::TokenizerResult::Done) {}
+    tokenizer.end();
+    tokenizer.sink.tree.sink.finish()
 }
 
 /// Parse an HTML fragment in `space`'s context element, the insertion mode the
@@ -921,15 +1050,20 @@ fn parse_fragment_nodes(
     html: &str,
     stitch: Option<StitchRecognizer>,
     space: HtmlSpace,
+    fences: &[FenceOrigin],
 ) -> (Vec<Node>, Vec<usize>, Vec<String>) {
-    let sink = parse_fragment(
+    let parser = parse_fragment(
         HtmlSink::new(stitch),
         parse_opts(),
         space.context_element(),
         Vec::new(),
         false,
-    )
-    .one(html);
+    );
+    let sink = if fences.is_empty() {
+        parser.one(html)
+    } else {
+        parse_with_fence_origins(parser.tokenizer.sink, html, fences)
+    };
     let leaked = sink
         .stitch
         .map(StitchRecognizer::leaked_markers)
@@ -1490,7 +1624,7 @@ mod tests {
     }
 
     /// Open a hast element with `(name, kind, value)` props; the caller closes it.
-    fn open_element(b: &mut ArenaBuilder<Hast>, tag: &str, props: &[(&str, u8, &str)]) {
+    fn open_element(b: &mut ArenaBuilder<Hast>, tag: &str, props: &[(&str, u8, &str)]) -> u32 {
         let tag = b.alloc_string(tag);
         let props: Vec<(StringRef, u8, StringRef)> = props
             .iter()
@@ -1499,6 +1633,165 @@ mod tests {
         let el = b.open_node(HastNodeType::Element as u8);
         let data = encode_element_data(tag, &props);
         b.arena_mut().set_type_data(el, &data);
+        el
+    }
+
+    fn add_code_with_data(b: &mut ArenaBuilder<Hast>, meta: &str) {
+        let code = open_element(b, "code", &[("className", PROP_SPACE_SEP, "language-js")]);
+        let data = format!(r#"{{"lang":"js","meta":"{meta}"}}"#);
+        b.arena_mut().set_node_data(code, data.into_bytes());
+        let value = b.alloc_string("x\n");
+        let text = b.add_leaf(HastNodeType::Text as u8);
+        b.arena_mut().set_type_data(text, &value.as_bytes());
+        b.close_node();
+    }
+
+    fn add_fence(b: &mut ArenaBuilder<Hast>, meta: &str) {
+        open_element(b, "pre", &[]);
+        add_code_with_data(b, meta);
+        b.close_node();
+    }
+
+    fn code_metadata(arena: &Arena<Hast>) -> Vec<Option<serde_json::Value>> {
+        (0..arena.len() as u32)
+            .filter(|&id| {
+                arena.get_node(id).node_type == HastNodeType::Element as u8
+                    && arena.get_str(decode_element_tag(arena.get_type_data(id))) == "code"
+            })
+            .map(|id| {
+                arena
+                    .get_node_data(id)
+                    .map(|data| serde_json::from_slice(data).unwrap())
+            })
+            .collect()
+    }
+
+    fn fence_data(meta: &str) -> Option<serde_json::Value> {
+        Some(serde_json::json!({ "lang": "js", "meta": meta }))
+    }
+
+    #[test]
+    fn raw_reparse_keeps_metadata_on_relocated_and_repeated_fences_only() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(HastNodeType::Root as u8);
+        add_raw_node(&mut b, "<table>");
+        add_fence(&mut b, "first");
+        add_raw_node(&mut b, "<tr><td>");
+        add_fence(&mut b, "second");
+        add_raw_node(
+            &mut b,
+            "</td></tr></table><pre><code class=language-js>x\n</code></pre>",
+        );
+        add_fence(&mut b, "third");
+        b.close_node();
+        let source = b.finish();
+        let reparsed = raw_to_hast_arena(&source);
+        assert_eq!(
+            code_metadata(&reparsed),
+            [
+                fence_data("first"),
+                fence_data("second"),
+                None,
+                fence_data("third")
+            ]
+        );
+        assert!(
+            hast_arena_to_html(&reparsed)
+                .starts_with("<pre><code class=\"language-js\">x\n</code></pre><table>")
+        );
+        assert_eq!(
+            code_metadata(&source),
+            [
+                fence_data("first"),
+                fence_data("second"),
+                fence_data("third")
+            ]
+        );
+    }
+
+    #[test]
+    fn raw_reparse_does_not_reassign_metadata_from_swallowed_fences() {
+        for (open, close) in [
+            ("<script>", "</script>"),
+            ("<!--", "-->"),
+            ("<textarea>", "</textarea>"),
+        ] {
+            let mut b = ArenaBuilder::<Hast>::new(String::new());
+            b.open_node(HastNodeType::Root as u8);
+            add_raw_node(&mut b, open);
+            add_fence(&mut b, "swallowed");
+            add_raw_node(&mut b, close);
+            add_raw_node(&mut b, "<pre><code class=language-js>x\n</code></pre>");
+            add_fence(&mut b, "survivor");
+            b.close_node();
+            let reparsed = raw_to_hast_arena(&b.finish());
+            assert_eq!(
+                code_metadata(&reparsed),
+                [None, fence_data("survivor")],
+                "{open}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_reparse_does_not_claim_tags_begun_in_raw_html() {
+        for prefix in [
+            "<code ",
+            "<code class=language-js ",
+            "<code title=\"",
+            "<code title=",
+            "<code /",
+            "<!--",
+            "<script>",
+        ] {
+            let mut b = ArenaBuilder::<Hast>::new(String::new());
+            b.open_node(HastNodeType::Root as u8);
+            add_raw_node(&mut b, prefix);
+            add_code_with_data(&mut b, "not-an-original-token");
+            b.close_node();
+            let reparsed = raw_to_hast_arena(&b.finish());
+            assert!(
+                code_metadata(&reparsed).iter().all(Option::is_none),
+                "{prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_reparse_does_not_give_metadata_to_formatting_clones() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(HastNodeType::Root as u8);
+        open_element(&mut b, "pre", &[]);
+        let code = open_element(&mut b, "code", &[]);
+        b.arena_mut()
+            .set_node_data(code, br#"{"lang":"js","meta":"original"}"#.to_vec());
+        add_raw_node(&mut b, "a<p>b");
+        b.close_node();
+        b.close_node();
+        add_raw_node(&mut b, "</p><code><p>raw");
+        add_fence(&mut b, "next");
+        b.close_node();
+        let reparsed = raw_to_hast_arena(&b.finish());
+        let metadata = code_metadata(&reparsed);
+        assert!(metadata.len() > 3, "formatting reconstruction must occur");
+        assert_eq!(metadata[0], fence_data("original"));
+        assert_eq!(metadata.last(), Some(&fence_data("next")));
+        assert!(metadata[1..metadata.len() - 1].iter().all(Option::is_none));
+    }
+
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_keeps_fence_data_inside_nested_mdx_elements() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(HastNodeType::Root as u8);
+        open_mdx_element(&mut b, "Outer");
+        open_mdx_element(&mut b, "Inner");
+        add_fence(&mut b, "nested");
+        b.close_node();
+        b.close_node();
+        b.close_node();
+        let reparsed = raw_to_hast_arena(&b.finish());
+        assert_eq!(code_metadata(&reparsed), [fence_data("nested")]);
     }
 
     #[cfg(feature = "mdx")]
