@@ -34,6 +34,7 @@ use crate::shared::{
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
+const MATHML_NAMESPACE: &str = "http://www.w3.org/1998/Math/MathML";
 
 /// The namespace HTML content is parsed in; for a fragment, that of its own
 /// top-level content.
@@ -42,6 +43,7 @@ pub enum HtmlSpace {
     #[default]
     Html,
     Svg,
+    MathMl,
 }
 
 impl HtmlSpace {
@@ -55,6 +57,8 @@ impl HtmlSpace {
     fn of_arena_element(self, tag: &str) -> HtmlSpace {
         if self.is_svg() || tag == "svg" {
             HtmlSpace::Svg
+        } else if self == HtmlSpace::MathMl || tag == "math" {
+            HtmlSpace::MathMl
         } else {
             HtmlSpace::Html
         }
@@ -65,6 +69,10 @@ impl HtmlSpace {
     fn inside(self, tag: &str) -> HtmlSpace {
         if self.is_svg() && !is_svg_html_integration_point(tag) {
             HtmlSpace::Svg
+        } else if self == HtmlSpace::MathMl && matches!(tag, "mi" | "mo" | "mn" | "ms" | "mtext") {
+            HtmlSpace::Html
+        } else if self == HtmlSpace::MathMl {
+            HtmlSpace::MathMl
         } else {
             HtmlSpace::Html
         }
@@ -81,6 +89,11 @@ impl HtmlSpace {
             HtmlSpace::Svg => {
                 QualName::new(None, Namespace::from(SVG_NAMESPACE), LocalName::from("svg"))
             }
+            HtmlSpace::MathMl => QualName::new(
+                None,
+                Namespace::from(MATHML_NAMESPACE),
+                LocalName::from("math"),
+            ),
         }
     }
 }
@@ -505,6 +518,7 @@ fn emit(
                 // context does not apply to it; its children take theirs from it.
                 let element_space = match &*name.ns {
                     SVG_NAMESPACE => HtmlSpace::Svg,
+                    MATHML_NAMESPACE => HtmlSpace::MathMl,
                     _ => HtmlSpace::Html,
                 };
                 let child_space = element_space.inside(&name.local);
@@ -1514,6 +1528,31 @@ mod tests {
         let mdx = b.open_node(HastNodeType::MdxJsxElement as u8);
         let data = encode_mdx_jsx_element_data(name, &[], true);
         b.arena_mut().set_type_data(mdx, &data);
+    }
+
+    /// Raw MathML inside an MDX `<math>` element keeps self-closing elements
+    /// closed and preserves following siblings.
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_keeps_mathml_self_closing_elements_inside_mdx_math() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(HastNodeType::Root as u8);
+        open_mdx_element(&mut b, "math");
+        add_raw_node(&mut b, r#"<mspace width="1em"/><mi>x</mi>"#);
+        b.close_node(); // </math>
+        b.close_node(); // </root>
+
+        let reparsed = raw_to_hast_arena(&b.finish());
+        let math = reparsed.get_children(0)[0];
+        let children = reparsed.get_children(math);
+        assert_eq!(
+            children
+                .iter()
+                .map(|&id| reparsed.get_str(decode_element_tag(reparsed.get_type_data(id))))
+                .collect::<Vec<_>>(),
+            ["mspace", "mi"]
+        );
+        assert!(reparsed.get_children(children[0]).is_empty());
     }
 
     /// Raw HTML inside an MDX `<svg>` element reparses with the SVG schema,
