@@ -397,7 +397,7 @@ pub struct ConvertOptions {
     /// Reparse raw HTML embedded in the converted tree into real HAST nodes
     /// (see [`raw_to_hast_arena`](crate::hast::from_html::raw_to_hast_arena)).
     /// Applied as the final conversion step so every pipeline that converts
-    /// MDAST to HAST gets it. Positions are not preserved through the reparse.
+    /// MDAST to HAST gets it. Unambiguously associated nodes retain their positions.
     /// Default: `false`.
     #[cfg(feature = "from-html")]
     pub raw_html: bool,
