@@ -7,7 +7,8 @@ import rehypeRaw from "rehype-raw";
 import rehypeStringify from "rehype-stringify";
 import type { Nodes as MdastNodes } from "mdast";
 import { pathToFileURL } from "node:url";
-import { mdxToHast, markdownToHast } from "../src/index.js";
+import { defineMdastPlugin, mdxToHast, markdownToHast } from "../src/index.js";
+import { assertMdxPluginConformance } from "./conformance/helpers.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 
 // Pass MDX nodes through both reference transforms so raw-HTML reparsing preserves them.
@@ -57,6 +58,47 @@ const cases: Array<{ name: string; md: string }> = [
 ];
 
 describe("mdx + rawHtml (rehype-raw) conformance", () => {
+  test("raw MathML children in a JSX <math> element match @mdx-js/mdx", async () => {
+    const mathml = '<mspace width="1em"/><mi>x</mi>';
+    const injectReferenceMathMl = () => (tree: MdastNodes) => {
+      const walk = (node: MdastNodes): void => {
+        if (!("children" in node) || !node.children) return;
+        node.children = node.children.flatMap((child) => {
+          if (child.type === "paragraph") {
+            return [
+              {
+                type: "mdxJsxFlowElement",
+                name: "mspace",
+                attributes: [{ type: "mdxJsxAttribute", name: "width", value: "1em" }],
+                children: [],
+              },
+              {
+                type: "mdxJsxFlowElement",
+                name: "mi",
+                attributes: [],
+                children: [{ type: "text", value: "x" }],
+              },
+            ] as unknown as MdastNodes[];
+          }
+          walk(child as MdastNodes);
+          return [child];
+        }) as typeof node.children;
+      };
+      walk(tree);
+    };
+    const injectSatteriHtml = defineMdastPlugin({
+      name: "inject-mathml-html",
+      paragraph() {
+        return { type: "html" as const, value: mathml };
+      },
+    });
+
+    await assertMdxPluginConformance("<math>\n\ntext\n\n</math>\n", {
+      reference: { remarkPlugins: [injectReferenceMathMl] },
+      satteri: { mdastPlugins: [injectSatteriHtml], features: { rawHtml: true } },
+    });
+  });
+
   describe("the reference ecosystem cannot serialize MDX through rehype-raw", () => {
     for (const { name, md } of cases) {
       test(name, () => {
