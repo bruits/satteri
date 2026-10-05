@@ -1,5 +1,19 @@
 # satteri-pulldown-cmark
 
+## 0.6.4 — 2026-10-05
+
+### Patch changes
+
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made `position: false` faster and fixes cases were it could lower performance by accident compared to enabling positions. — Thanks @Princesseuh!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made parsing, HTML rendering, and tree building faster, by 3% to 35% depending on the document and output, with the largest gains on small documents. — Thanks @Princesseuh!
+- [5a49ee3](https://github.com/bruits/satteri/commit/5a49ee38bc0002c29d55df3d378285e90ab93ac4) Improved Markdown parsing, HAST conversion, and HTML rendering performance for prose, tables, links, autolinks, code spans, and strong emphasis. Reduced unnecessary allocations when compiling MDX with configured ignored elements, and fixed panics and incorrect strong-emphasis output when an autolink immediately follows an inline link.
+  
+  Changed Rust tree APIs to use `Document` for both borrowed and owned source text, with `NodePosition` arguments for construction and position setters. JavaScript APIs and wire layouts are unchanged. — Thanks @Princesseuh!
+- [565f6d4](https://github.com/bruits/satteri/commit/565f6d40e6094a7ade2f1b7d58b6ac3a3f0151d7) Fix tables consuming directive closing fences — Thanks @Princesseuh!
+- [b5f5cbc](https://github.com/bruits/satteri/commit/b5f5cbc99fe6a0b9563ba78c6d1dad7e8da19c7d) Fixed directive attributes containing braces in quoted values. — Thanks @Princesseuh!
+- [2a9ad06](https://github.com/bruits/satteri/commit/2a9ad06c744125ed5a271ed6e485d2e35abe0715) Fixes empty titles appearing in rendered output when a directive has an empty label. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.4.0, satteri-ast (Cargo)@0.6.0
+
 ## 0.6.3 — 2026-08-19
 
 ### Patch changes

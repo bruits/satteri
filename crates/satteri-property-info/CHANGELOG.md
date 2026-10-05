@@ -1,5 +1,11 @@
 # satteri-property-info
 
+## 0.2.1 — 2026-10-05
+
+### Patch changes
+
+- [597ed59](https://github.com/bruits/satteri/commit/597ed5922e565ecc0cd22f6e49b5fccb37cc6600) Fixed the default `elementAttributeNameCase: "react"` compiling the SVG `datatype` attribute to `data-type`. It now emits `datatype`, while custom `data-*` attributes on SVG and HTML elements are still kebab-cased. — Thanks @gtritchie!
+
 ## 0.2.0 — 2026-08-18
 
 ### Minor changes
