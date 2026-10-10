@@ -942,7 +942,7 @@ describe("MDAST conformance: `~` beside a `*` run without GFM", () => {
     assertCommonMarkMdastConformance("~~a*~~*");
   });
 
-  test("`*` and `_` keep forcing runs open and closed", () => {
+  test("`*` and `_` beside a `*` run follow the flanking rules", () => {
     assertCommonMarkMdastConformance("a*_x_*");
     assertCommonMarkMdastConformance("a*__x__*");
   });

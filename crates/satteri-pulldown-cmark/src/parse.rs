@@ -1502,7 +1502,9 @@ impl<'input> ParserInner<'input> {
                             // Otherwise `[^X][Y]` would be resolved as a link whose
                             // text happens to start with `^`, which diverges from
                             // remark-gfm's two-node parse (footnote + trailing ref).
-                            let first_bracket_start = self.tree[tos.node].item.start;
+                            // An image keeps its `!` in the opener, so the label
+                            // starts at the opener's last byte.
+                            let first_bracket_start = self.tree[tos.node].item.end - 1;
                             let first_bracket_end = self.tree[cur_ix].item.end;
                             let first_bracket_text =
                                 &self.text[first_bracket_start..first_bracket_end];
@@ -1511,6 +1513,13 @@ impl<'input> ParserInner<'input> {
                                 // A code span can swallow the label's `]`, leaving `cur_ix` on a later one.
                                 && label_len == first_bracket_text.len()
                                 && self.allocs.footdefs.contains(&footlabel)
+                                // remark keeps `![^X][Y]` an image when `Y` is defined.
+                                && !(tos.ty == LinkStackTy::Image
+                                    && matches!(
+                                        scan_reference(&self.tree, block_text, next, self.options),
+                                        RefScan::LinkLabel(label, _)
+                                            if self.allocs.refdefs.get(label.as_ref()).is_some()
+                                    ))
                             {
                                 let footref = self.allocs.allocate_cow(footlabel);
                                 if let Some(def) = self
