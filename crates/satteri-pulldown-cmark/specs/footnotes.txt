@@ -760,3 +760,48 @@ Lorem ipsum.[^a] [^b]
 </ol>
 </section>
 ````````````````````````````````
+
+An image opener over a defined footnote label falls back to `!` and the
+footnote reference when what follows is not a resolved reference, even an
+unclosed `[` (https://github.com/bruits/satteri/issues/326).
+
+```````````````````````````````` example
+[^1]:![^1][
+
+x[^1]
+.
+<p>x<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref aria-describedby="footnote-label">1</a></sup></p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-1">
+<p>!<sup><a href="#user-content-fn-1" id="user-content-fnref-1-2" data-footnote-ref aria-describedby="footnote-label">1</a></sup>[ <a href="#user-content-fnref-1" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a> <a href="#user-content-fnref-1-2" data-footnote-backref="" aria-label="Back to reference 1-2" class="data-footnote-backref">↩<sup>2</sup></a></p>
+</li>
+</ol>
+</section>
+````````````````````````````````
+
+```````````````````````````````` example
+x![^1][nope]
+
+[^1]: a
+.
+<p>x!<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref aria-describedby="footnote-label">1</a></sup>[nope]</p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-1">
+<p>a <a href="#user-content-fnref-1" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a></p>
+</li>
+</ol>
+</section>
+````````````````````````````````
+
+A full reference that resolves keeps the image.
+
+```````````````````````````````` example
+x![^1][ref]
+
+[ref]: /u
+[^1]: a
+.
+<p>x<img src="/u" alt="^1"></p>
+````````````````````````````````

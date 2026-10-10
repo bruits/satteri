@@ -3146,3 +3146,62 @@ next line
 <p>text <img alt=www.foo.com><br />
 next line</p>
 ````````````````````````````````
+
+https://github.com/bruits/satteri/issues/326
+
+Whether a `*` run opens or closes follows the CommonMark flanking rules, where
+a neighboring `*` or `_` is plain punctuation: a run after one and before a
+letter is not right-flanking. An escaped `\*` counts the same.
+
+```````````````````````````````` example
+*_*a
+
+**_**a
+
+*\**3
+
+_**c*
+.
+<p>*_*a</p>
+<p>**_**a</p>
+<p>***3</p>
+<p>_*<em>c</em></p>
+````````````````````````````````
+
+A tab after a list marker counts to the next tab stop from the start of the
+line, past any blockquote marker. Five or more columns after the marker open
+an indented code block, so there is no paragraph for a task list marker.
+
+```````````````````````````````` example
+> - →[x] -
+.
+<blockquote>
+<ul>
+<li>
+<pre><code>[x] -
+</code></pre>
+</li>
+</ul>
+</blockquote>
+````````````````````````````````
+
+```````````````````````````````` example
+  - →[x] -
+.
+<ul>
+<li>
+<pre><code>[x] -
+</code></pre>
+</li>
+</ul>
+````````````````````````````````
+
+Fewer columns leave the task list marker in place.
+
+```````````````````````````````` example
+- →[x] -
+.
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" checked disabled> -</li>
+</ul>
+````````````````````````````````

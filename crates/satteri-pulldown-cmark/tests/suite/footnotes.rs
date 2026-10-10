@@ -767,3 +767,54 @@ fn footnotes_test_26() {
 
     test_markdown_html(original, expected, 2052, false, false, false, false, false, false);
 }
+
+#[test]
+fn footnotes_test_27() {
+    let original = r##"[^1]:![^1][
+
+x[^1]
+"##;
+    let expected = r##"<p>x<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref aria-describedby="footnote-label">1</a></sup></p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-1">
+<p>!<sup><a href="#user-content-fn-1" id="user-content-fnref-1-2" data-footnote-ref aria-describedby="footnote-label">1</a></sup>[ <a href="#user-content-fnref-1" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a> <a href="#user-content-fnref-1-2" data-footnote-backref="" aria-label="Back to reference 1-2" class="data-footnote-backref">↩<sup>2</sup></a></p>
+</li>
+</ol>
+</section>
+"##;
+
+    test_markdown_html(original, expected, 2052, false, false, false, false, false, false);
+}
+
+#[test]
+fn footnotes_test_28() {
+    let original = r##"x![^1][nope]
+
+[^1]: a
+"##;
+    let expected = r##"<p>x!<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref aria-describedby="footnote-label">1</a></sup>[nope]</p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-1">
+<p>a <a href="#user-content-fnref-1" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a></p>
+</li>
+</ol>
+</section>
+"##;
+
+    test_markdown_html(original, expected, 2052, false, false, false, false, false, false);
+}
+
+#[test]
+fn footnotes_test_29() {
+    let original = r##"x![^1][ref]
+
+[ref]: /u
+[^1]: a
+"##;
+    let expected = r##"<p>x<img src="/u" alt="^1"></p>
+"##;
+
+    test_markdown_html(original, expected, 2052, false, false, false, false, false, false);
+}
