@@ -243,7 +243,7 @@ Default: `false`.
 definitionList?: boolean
 ```
 
-A term line followed by one or more colon-marked definitions becomes a definition list, following the [pandoc / PHP Markdown Extra](https://pandoc.org/MANUAL.html#definition-lists) syntax:
+A term line followed by one or more definitions, each marked with a colon (`:`) or a tilde (`~`), becomes a definition list, following the [pandoc / PHP Markdown Extra](https://pandoc.org/MANUAL.html#definition-lists) syntax:
 
 ```text
 Apple

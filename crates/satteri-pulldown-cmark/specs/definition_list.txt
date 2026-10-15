@@ -364,3 +364,55 @@ Apple
 <p>Apple</p>
 <p>:   Red.</p>
 ````````````````````````````````
+
+## Tilde marker
+
+A definition can also begin with a tilde, as in Pandoc:
+
+```````````````````````````````` example_deflists
+Apple
+~   Red.
+.
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+</dl>
+````````````````````````````````
+
+Colon and tilde markers can be mixed under one term:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+~   Green.
+.
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+<dd>Green.</dd>
+</dl>
+````````````````````````````````
+
+Only a lone tilde is a marker, so a tilde code fence after a term is still a
+code fence:
+
+```````````````````````````````` example_deflists
+Apple
+~~~
+Red.
+~~~
+.
+<p>Apple</p>
+<pre><code>Red.
+</code></pre>
+````````````````````````````````
+
+A tilde glued to the text after it is not a marker:
+
+```````````````````````````````` example_deflists
+Apple
+~Red.
+.
+<p>Apple
+~Red.</p>
+````````````````````````````````
