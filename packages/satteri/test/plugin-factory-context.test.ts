@@ -1,5 +1,12 @@
 import { describe, test, expect } from "vitest";
-import { markdownToHtml, markdownToJs, mdxToJs, defineMdastPlugin } from "../src/index.js";
+import {
+  markdownToHtml,
+  markdownToJs,
+  markdownToHast,
+  markdownToMdast,
+  mdxToJs,
+  defineMdastPlugin,
+} from "../src/index.js";
 import type { PluginFactoryContext } from "../src/index.js";
 
 function recordMdast(order: string[], name: string) {
@@ -48,6 +55,42 @@ describe("plugin factory context", () => {
     });
 
     expect(seen).toBeUndefined();
+  });
+
+  test("a factory can compile a fragment with the document's features", () => {
+    let fragment = "";
+
+    markdownToHtml("# Title", {
+      features: { definitionList: true },
+      mdastPlugins: [
+        (ctx) => {
+          fragment = markdownToHtml("Apple\n:   Red.", { features: ctx.features }).html;
+          return null;
+        },
+      ],
+    });
+
+    expect(fragment).toContain("<dd>Red.</dd>");
+  });
+
+  test("every entry point hands its features to factories", () => {
+    const features = { math: true };
+    const seen: unknown[] = [];
+    const probe = (ctx: PluginFactoryContext) => {
+      seen.push(ctx.features);
+      return null;
+    };
+
+    markdownToHtml("x", { features, mdastPlugins: [probe], hastPlugins: [probe] });
+    markdownToJs("x", { features, mdastPlugins: [probe] });
+    mdxToJs("x", { features, hastPlugins: [probe] });
+    markdownToMdast("x", { features, mdastPlugins: [probe] });
+    markdownToHast("x", { features, hastPlugins: [probe] });
+    markdownToHtml("x", { mdastPlugins: [probe] });
+
+    expect(seen.slice(0, 6).every((value) => value === features)).toBe(true);
+    // Without the option a factory gets the defaults, which it can pass on just the same.
+    expect(seen[6]).toEqual({});
   });
 
   test("sourceFormat distinguishes mdx from markdown", () => {
