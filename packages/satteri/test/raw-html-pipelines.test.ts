@@ -1,5 +1,12 @@
 import { test, expect } from "vitest";
-import { markdownToHtml, markdownToJs, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
+import {
+  markdownToHtml,
+  markdownToHast,
+  markdownToJs,
+  mdxToJs,
+  defineMdastPlugin,
+  defineHastPlugin,
+} from "../src/index.js";
 
 // Class whitespace and implied tbody distinguish reparsed HTML from verbatim output.
 const src = '<div class="a  b">\n\n**hi**\n\n</div>\n\n<table><tr><td>x</td></tr></table>\n';
@@ -121,6 +128,27 @@ test("plugin-spliced raw HTML is reparsed too", () => {
     }),
   );
   expect(html).toContain('<aside class="n m">hi</aside>');
+});
+
+test("rawHtml keeps the document span on the root", () => {
+  const md = "# Hi\n\n<div>hello</div>\n\nBye\n";
+  expect(markdownToHast(md, { features: { rawHtml: true } }).position).toEqual(
+    markdownToHast(md).position,
+  );
+});
+
+// Offsets are UTF-16 code units, so only a multibyte document exposes a lost source.
+test("rawHtml root offsets stay in UTF-16 code units", () => {
+  const md = "# 👋 héllo\n\n<div>x</div>\n\nBye\n";
+  expect(markdownToHast(md, { features: { rawHtml: true } }).position?.end.offset).toBe(md.length);
+});
+
+test("rawHtml keeps component overrides visible to optimizeStatic", () => {
+  const mdx = 'export const components = { h1: "h2" };\n\n# Hello\n\nSome text.\n';
+  const optimizeStatic = { component: "Fragment", prop: "set:html" };
+  expect(mdxToJs(mdx, { optimizeStatic, features: { rawHtml: true } }).code).toBe(
+    mdxToJs(mdx, { optimizeStatic }).code,
+  );
 });
 
 test("rawHtml keeps namespaced SVG attributes through the round trip", () => {

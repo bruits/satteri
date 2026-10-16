@@ -6,14 +6,19 @@
 //! that is then emitted into the builder in document order.
 
 use std::cell::{Cell, Ref, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
+use html5ever::buffer_queue::BufferQueue;
 use html5ever::interface::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::{StrTendril, TendrilSink};
+use html5ever::tokenizer::{TagKind, Token, TokenSink, TokenSinkResult, Tokenizer};
+use html5ever::tree_builder::TreeBuilder;
 use html5ever::{
     Attribute, LocalName, Namespace, ParseOpts, QualName, parse_document, parse_fragment,
     tree_builder::TreeBuilderOpts,
 };
-use satteri_arena::{Arena, ArenaBuilder, Hast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, Hast, NodePosition, StringRef};
 use satteri_property_info::{PropKind, find_property};
 
 use crate::hast::codec::{
@@ -103,6 +108,11 @@ struct Node {
     parent: Option<usize>,
     children: Vec<usize>,
     data: NodeData,
+    /// Original opening token that created this handle, retained through parser moves.
+    origin: Option<u32>,
+    position_origin: Option<u32>,
+    /// Serialized bytes that produced this node, including any coalesced text.
+    span: Option<Range<usize>>,
 }
 
 enum NodeData {
@@ -130,6 +140,7 @@ struct HtmlSink {
     nodes: RefCell<Vec<Node>>,
     quirks_mode: Cell<QuirksMode>,
     stitch: Option<StitchRecognizer>,
+    token_span: Cell<Option<(usize, usize)>>,
 }
 
 impl HtmlSink {
@@ -139,9 +150,13 @@ impl HtmlSink {
                 parent: None,
                 children: Vec::new(),
                 data: NodeData::Document,
+                origin: None,
+                position_origin: None,
+                span: None,
             }]),
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
             stitch,
+            token_span: Cell::new(None),
         }
     }
 }
@@ -205,6 +220,9 @@ fn new_node(nodes: &mut Vec<Node>, data: NodeData) -> usize {
         parent: None,
         children: Vec::new(),
         data,
+        origin: None,
+        position_origin: None,
+        span: None,
     });
     id
 }
@@ -236,9 +254,13 @@ fn append_node(nodes: &mut [Node], parent: usize, child: usize) {
 }
 
 /// The tree builder expects adjacent text to coalesce into a single node.
-fn push_text(nodes: &mut [Node], target: usize, text: &str) -> bool {
+fn push_text(nodes: &mut [Node], target: usize, text: &str, span: Option<(usize, usize)>) -> bool {
     if let NodeData::Text { contents } = &mut nodes[target].data {
         contents.push_slice(text);
+        if let (Some(existing), Some((start, end))) = (&mut nodes[target].span, span) {
+            existing.start = existing.start.min(start);
+            existing.end = existing.end.max(end);
+        }
         true
     } else {
         false
@@ -304,7 +326,7 @@ impl TreeSink for HtmlSink {
         let parent = *parent;
         if let NodeOrText::AppendText(text) = &child
             && let Some(&last) = nodes[parent].children.last()
-            && push_text(&mut nodes, last, text)
+            && push_text(&mut nodes, last, text, self.token_span.get())
         {
             return;
         }
@@ -327,7 +349,7 @@ impl TreeSink for HtmlSink {
             }
             (NodeOrText::AppendText(text), index) => {
                 let prev = nodes[parent].children[index - 1];
-                if push_text(&mut nodes, prev, &text) {
+                if push_text(&mut nodes, prev, &text, self.token_span.get()) {
                     return;
                 }
                 new_node(&mut nodes, NodeData::Text { contents: text })
@@ -483,7 +505,12 @@ fn emit(
                 }
             }
             NodeData::Doctype => {
-                builder.add_leaf(HastNodeType::Doctype as u8);
+                let leaf = builder.add_leaf(HastNodeType::Doctype as u8);
+                copy_position(
+                    builder,
+                    leaf,
+                    nodes[id].position_origin.zip(stitching.map(|s| s.src)),
+                );
             }
             NodeData::Text { contents } => {
                 let text = scrub_markers(contents, leaked);
@@ -492,6 +519,11 @@ fn emit(
                 builder
                     .arena_mut()
                     .set_type_data(leaf, &text_ref.as_bytes());
+                copy_position(
+                    builder,
+                    leaf,
+                    nodes[id].position_origin.zip(stitching.map(|s| s.src)),
+                );
             }
             NodeData::Comment { contents } => {
                 let text = scrub_markers(contents, leaked);
@@ -500,6 +532,11 @@ fn emit(
                 builder
                     .arena_mut()
                     .set_type_data(leaf, &text_ref.as_bytes());
+                copy_position(
+                    builder,
+                    leaf,
+                    nodes[id].position_origin.zip(stitching.map(|s| s.src)),
+                );
             }
             NodeData::Stitch(index) => {
                 let stitches = stitching.expect("Stitch node without stitching").stitches;
@@ -526,6 +563,17 @@ fn emit(
                 let element = builder.open_node(HastNodeType::Element as u8);
                 let data = encode_element_data(tag_ref, &props);
                 builder.arena_mut().set_type_data(element, &data);
+                copy_position(
+                    builder,
+                    element,
+                    nodes[id].position_origin.zip(stitching.map(|s| s.src)),
+                );
+                if &*name.local == "code"
+                    && let Some(origin) = nodes[id].origin
+                    && let Some(data) = stitching.and_then(|s| s.src.get_node_data(origin))
+                {
+                    builder.arena_mut().set_node_data(element, data.to_vec());
+                }
 
                 stack.push(EmitTask::Close);
                 // `<template>` content lives in a detached document, not the
@@ -542,6 +590,18 @@ fn emit(
             }
         }
     }
+}
+
+/// Source offsets remain relative to the original document, not the serialized HTML.
+fn copy_position(
+    builder: &mut ArenaBuilder<Hast>,
+    node_id: u32,
+    origin: Option<(u32, &Arena<Hast>)>,
+) {
+    let Some((aid, src)) = origin else { return };
+    builder
+        .arena_mut()
+        .set_position(node_id, NodePosition::from_node(src.get_node(aid)));
 }
 
 /// Convert a parsed element's attributes into hast props under the schema of
@@ -617,7 +677,8 @@ fn emit_arena_node(
             }
         }
         Some(HastNodeType::Doctype) => {
-            builder.add_leaf(HastNodeType::Doctype as u8);
+            let leaf = builder.add_leaf(HastNodeType::Doctype as u8);
+            copy_position(builder, leaf, Some((aid, src)));
         }
         Some(HastNodeType::Text | HastNodeType::Comment | HastNodeType::Raw) if data.len() >= 8 => {
             let value_ref = builder.alloc_string(src.get_str(decode_text_data(data)));
@@ -625,6 +686,7 @@ fn emit_arena_node(
             builder
                 .arena_mut()
                 .set_type_data(leaf, &value_ref.as_bytes());
+            copy_position(builder, leaf, Some((aid, src)));
         }
         Some(HastNodeType::Element) if data.len() >= 16 => {
             let tag = src.get_str(decode_element_tag(data));
@@ -643,6 +705,10 @@ fn emit_arena_node(
             let element = builder.open_node(HastNodeType::Element as u8);
             let encoded = encode_element_data(tag_ref, &props);
             builder.arena_mut().set_type_data(element, &encoded);
+            copy_position(builder, element, Some((aid, src)));
+            if let Some(data) = src.get_node_data(aid) {
+                builder.arena_mut().set_node_data(element, data.to_vec());
+            }
             stack.push(EmitTask::Close);
             for &child in src.get_children(aid).iter().rev() {
                 stack.push(EmitTask::EmitArena(child, child_space));
@@ -667,6 +733,7 @@ fn emit_arena_node(
             let element = builder.open_node(node_type);
             let encoded = encode_mdx_jsx_element_data(name_ref, &attrs, explicit);
             builder.arena_mut().set_type_data(element, &encoded);
+            copy_position(builder, element, Some((aid, src)));
             // Reparse rather than copy, so raw HTML nested inside the MDX
             // element is resolved too.
             reparse_children_into(src, aid, builder, child_space);
@@ -683,6 +750,7 @@ fn emit_arena_node(
             builder
                 .arena_mut()
                 .set_type_data(leaf, &value_ref.as_bytes());
+            copy_position(builder, leaf, Some((aid, src)));
         }
         // Unknown or malformed node: emit its children so a bad wrapper never
         // silently swallows a whole subtree.
@@ -712,6 +780,7 @@ fn reparse_children_into(
     let prefix = stitch_prefix();
     let mut html = String::new();
     let mut stitches: Vec<u32> = Vec::new();
+    let mut origins = Vec::new();
     let context = RenderOptions::new(false, space.is_svg());
     {
         let mut on_mdx = |out: &mut String, node_id: u32| {
@@ -721,12 +790,32 @@ fn reparse_children_into(
             out.push_str("-->");
             stitches.push(node_id);
         };
+        let mut on_node = |id, opening: Range<usize>, whole| {
+            if !opening.is_empty() {
+                origins.push(SerializedNode {
+                    opening,
+                    whole,
+                    id,
+                    node_type: src.get_node(id).node_type,
+                });
+            }
+        };
         for &child in src.get_children(parent) {
-            render_node_inner(child, src, &mut html, context, Some(&mut on_mdx), 0);
+            render_node_inner(
+                child,
+                src,
+                &mut html,
+                context,
+                Some(&mut on_mdx),
+                Some(&mut on_node),
+                0,
+            );
         }
     }
     let recognizer = StitchRecognizer::new(prefix, stitches.len());
-    let (nodes, roots, leaked) = parse_fragment_nodes(&html, Some(recognizer), space);
+    origins.sort_unstable_by_key(|origin| origin.opening.end);
+    let (mut nodes, roots, leaked) = parse_fragment_nodes(&html, Some(recognizer), space, &origins);
+    retain_positions(&mut nodes, &origins, src);
     let stitching = Stitching {
         src,
         stitches: &stitches,
@@ -869,7 +958,7 @@ pub fn html_to_hast_arena(html: &str) -> Arena<Hast> {
 /// fragment's own top-level nodes, with no synthesised `<html>`/`<head>`/
 /// `<body>` wrapper. `space` picks the namespace that content parses in.
 pub fn html_fragment_to_hast_arena(html: &str, space: HtmlSpace) -> Arena<Hast> {
-    let (nodes, roots, _) = parse_fragment_nodes(html, None, space);
+    let (nodes, roots, _) = parse_fragment_nodes(html, None, space, &[]);
 
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
     builder.open_node(HastNodeType::Root as u8);
@@ -883,7 +972,7 @@ pub fn html_fragment_to_hast_arena(html: &str, space: HtmlSpace) -> Arena<Hast> 
 /// around it is ignored; anything else (no element, extra top-level nodes, a
 /// void element) errors with the reason.
 pub fn html_fragment_to_wrap_arena(html: &str) -> Result<Arena<Hast>, String> {
-    let (nodes, roots, _) = parse_fragment_nodes(html, None, HtmlSpace::Html);
+    let (nodes, roots, _) = parse_fragment_nodes(html, None, HtmlSpace::Html, &[]);
     let mut wrapper: Option<usize> = None;
     for &r in &roots {
         match &nodes[r].data {
@@ -916,14 +1005,281 @@ pub fn html_fragment_to_wrap_arena(html: &str) -> Result<Arena<Hast>, String> {
 /// no synthesised `<html>`/`<head>`/`<body>` wrapper.
 ///
 /// MDX nodes have no HTML form; they are carried through as placeholder
-/// comments and spliced back afterwards. Positions are not preserved: the
-/// tree is rebuilt from serialised HTML.
+/// comments and spliced back afterwards. Original code elements retain their
+/// node data when their opening tags survive tokenization. Unambiguously
+/// associated nodes retain their positions; arena ids are rebuilt.
 pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
-    let mut builder = ArenaBuilder::<Hast>::new(String::new());
-    builder.open_node(HastNodeType::Root as u8);
+    let mut builder = ArenaBuilder::<Hast>::new(arena.source().to_string());
+    let root = builder.open_node(HastNodeType::Root as u8);
+    copy_position(&mut builder, root, Some((0, arena)));
     reparse_children_into(arena, 0, &mut builder, HtmlSpace::Html);
     builder.close_node();
     builder.finish()
+}
+
+struct SerializedNode {
+    opening: Range<usize>,
+    whole: Range<usize>,
+    id: u32,
+    node_type: u8,
+}
+
+/// Keep a position only when all products of a serialized node remained in its
+/// parsed subtree and nothing from outside joined it. This rejects split nodes,
+/// swallowed tags, and formatting clones without confusing relocated elements.
+fn retain_positions(nodes: &mut [Node], origins: &[SerializedNode], src: &Arena<Hast>) {
+    #[derive(Clone, Copy)]
+    struct Products {
+        start: usize,
+        end: usize,
+        count: usize,
+    }
+    let mut products: Vec<Products> = nodes
+        .iter()
+        .map(|node| match &node.span {
+            Some(span) => Products {
+                start: span.start,
+                end: span.end,
+                count: 1,
+            },
+            None => Products {
+                start: usize::MAX,
+                end: 0,
+                count: 0,
+            },
+        })
+        .collect();
+    let mut order = Vec::with_capacity(nodes.len());
+    let mut stack = vec![0];
+    while let Some(id) = stack.pop() {
+        order.push(id);
+        stack.extend_from_slice(&nodes[id].children);
+        if let NodeData::Element {
+            template_contents: Some(contents),
+            ..
+        } = nodes[id].data
+        {
+            stack.push(contents);
+        }
+    }
+    for &id in order.iter().rev() {
+        let template = match nodes[id].data {
+            NodeData::Element {
+                template_contents, ..
+            } => template_contents,
+            _ => None,
+        };
+        for child in nodes[id].children.iter().copied().chain(template) {
+            products[id].start = products[id].start.min(products[child].start);
+            products[id].end = products[id].end.max(products[child].end);
+            products[id].count += products[child].count;
+        }
+    }
+    let mut starts: Vec<usize> = nodes
+        .iter()
+        .filter_map(|node| node.span.as_ref().map(|span| span.start))
+        .collect();
+    starts.sort_unstable();
+    let by_id: HashMap<u32, &SerializedNode> =
+        origins.iter().map(|origin| (origin.id, origin)).collect();
+    let mut leaves: Vec<&SerializedNode> = origins
+        .iter()
+        .filter(|origin| origin.node_type != HastNodeType::Element as u8)
+        .collect();
+    leaves.sort_unstable_by_key(|origin| origin.whole.start);
+    for &id in &order {
+        let node = &nodes[id];
+        let origin = node
+            .origin
+            .and_then(|aid| by_id.get(&aid).copied())
+            .or_else(|| {
+                let span = node.span.as_ref()?;
+                let index = leaves
+                    .partition_point(|origin| origin.whole.start <= span.start)
+                    .checked_sub(1)?;
+                let origin = leaves[index];
+                if origin.node_type == HastNodeType::Raw as u8 {
+                    let NodeData::Element { name, .. } = &node.data else {
+                        return None;
+                    };
+                    let raw = src.get_type_data(origin.id);
+                    (raw.len() >= 8
+                        && span.start == origin.whole.start
+                        && (!is_void_element(&name.local) || span.end == origin.whole.end)
+                        && is_lone_element_source(src.get_str(decode_text_data(raw)), &name.local))
+                    .then_some(origin)
+                } else {
+                    let node_type = match node.data {
+                        NodeData::Text { .. } => HastNodeType::Text,
+                        NodeData::Comment { .. } => HastNodeType::Comment,
+                        NodeData::Doctype => HastNodeType::Doctype,
+                        _ => return None,
+                    };
+                    (origin.node_type == node_type as u8 && *span == origin.whole).then_some(origin)
+                }
+            });
+        let Some(origin) = origin else { continue };
+        let all_products = starts.partition_point(|&start| start < origin.whole.end)
+            - starts.partition_point(|&start| start < origin.whole.start);
+        let product = products[id];
+        if product.start >= origin.whole.start
+            && product.end <= origin.whole.end
+            && product.count == all_products
+        {
+            nodes[id].position_origin = Some(origin.id);
+        }
+    }
+    // Swallowed or ignored markup creates no products. This can come from raw
+    // nodes or from text in a raw-text context; subtree counts alone cannot
+    // prove that an original wrapper survived it. Decline ancestor positions
+    // unless every serialized leaf inside it has a reliable source association.
+    let positioned: HashSet<u32> = nodes
+        .iter()
+        .filter_map(|node| node.position_origin)
+        .collect();
+    let mut uncertain_leaves: Vec<usize> = origins
+        .iter()
+        .filter(|origin| {
+            origin.node_type != HastNodeType::Element as u8 && !positioned.contains(&origin.id)
+        })
+        .map(|origin| origin.whole.start)
+        .collect();
+    uncertain_leaves.sort_unstable();
+    for node in nodes {
+        let Some(origin) = node.position_origin.and_then(|id| by_id.get(&id)) else {
+            continue;
+        };
+        if origin.node_type == HastNodeType::Element as u8
+            && uncertain_leaves.partition_point(|&start| start < origin.whole.end)
+                > uncertain_leaves.partition_point(|&start| start < origin.whole.start)
+        {
+            node.position_origin = None;
+        }
+    }
+}
+
+/// Raw-block spans describe a whole element only in unambiguous, self-contained
+/// cases. Literal lookalikes in comments or attributes can only force a decline.
+fn is_lone_element_source(html: &str, tag: &str) -> bool {
+    let body = html.trim();
+    if body
+        .strip_prefix('<')
+        .and_then(|rest| rest.strip_prefix(tag))
+        .is_none_or(|rest| rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-'))
+    {
+        return false;
+    }
+    let count = |closing| {
+        let needle = format!("<{}{tag}", if closing { "/" } else { "" });
+        html.match_indices(&needle)
+            .filter(|(at, _)| {
+                !html[at + needle.len()..]
+                    .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
+            })
+            .count()
+    };
+    if is_void_element(tag) {
+        count(false) == 1 && count(true) == 0 && body.ends_with('>')
+    } else {
+        count(false) == 1 && count(true) == 1 && body.ends_with(&format!("</{tag}>"))
+    }
+}
+
+/// Associate serialized opening tokens with the handles they actually create,
+/// never with output order, content, or attributes. Parser-created clones have
+/// no origin, whereas foster parenting preserves the original handle.
+struct OriginTokenSink<'a> {
+    tree: TreeBuilder<usize, HtmlSink>,
+    input: &'a BufferQueue,
+    input_len: usize,
+    origins: &'a [SerializedNode],
+    previous_end: Cell<usize>,
+}
+
+impl TokenSink for OriginTokenSink<'_> {
+    type Handle = usize;
+
+    fn process_token(&self, token: Token, line: u64) -> TokenSinkResult<usize> {
+        // Parse errors do not delimit source tokens. Counting one as a boundary
+        // could claim a tag that began in malformed user-supplied raw HTML.
+        if matches!(token, Token::ParseError(_)) {
+            return self.tree.process_token(token, line);
+        }
+        let remaining = self.input.clone();
+        let mut remaining_len = 0;
+        while let Some(buffer) = remaining.pop_front() {
+            remaining_len += buffer.len();
+        }
+        let end = self.input_len - remaining_len;
+        // Both boundaries must match: a tag partly consumed into user-supplied
+        // raw HTML is not the original opening token.
+        let start = self.previous_end.replace(end);
+        let tag_name = match &token {
+            Token::TagToken(tag) if tag.kind == TagKind::StartTag => Some(tag.name.clone()),
+            _ => None,
+        };
+        let origin = tag_name.as_ref().and_then(|_| {
+            self.origins
+                .binary_search_by_key(&end, |origin| origin.opening.end)
+                .ok()
+                .map(|index| &self.origins[index])
+                .filter(|origin| {
+                    origin.opening.start == start && origin.node_type == HastNodeType::Element as u8
+                })
+        });
+        let first_new = self.tree.sink.nodes.borrow().len();
+        self.tree.sink.token_span.set(Some((start, end)));
+        let result = self.tree.process_token(token, line);
+        let mut nodes = self.tree.sink.nodes.borrow_mut();
+        for node in &mut nodes[first_new..] {
+            if !matches!(node.data, NodeData::Document) {
+                node.span = Some(start..end);
+            }
+        }
+        if let (Some(origin), Some(tag)) = (origin, tag_name)
+            && let Some(node) = nodes[first_new..].iter_mut().rev().find(
+                |node| matches!(&node.data, NodeData::Element { name, .. } if name.local.eq_ignore_ascii_case(&tag)),
+            )
+        {
+            node.origin = Some(origin.id);
+        }
+        result
+    }
+
+    fn end(&self) {
+        self.tree.end();
+    }
+
+    fn adjusted_current_node_present_but_not_in_html_namespace(&self) -> bool {
+        self.tree
+            .adjusted_current_node_present_but_not_in_html_namespace()
+    }
+}
+
+fn parse_with_origins(
+    tree: TreeBuilder<usize, HtmlSink>,
+    html: &str,
+    origins: &[SerializedNode],
+) -> HtmlSink {
+    let opts = html5ever::tokenizer::TokenizerOpts {
+        initial_state: Some(tree.tokenizer_state_for_context_elem(false)),
+        ..parse_opts().tokenizer
+    };
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from(html));
+    let tokenizer = Tokenizer::new(
+        OriginTokenSink {
+            tree,
+            input: &input,
+            input_len: html.len(),
+            origins,
+            previous_end: Cell::new(0),
+        },
+        opts,
+    );
+    while !matches!(tokenizer.feed(&input), html5ever::TokenizerResult::Done) {}
+    tokenizer.end();
+    tokenizer.sink.tree.sink.finish()
 }
 
 /// Parse an HTML fragment in `space`'s context element, the insertion mode the
@@ -935,15 +1291,20 @@ fn parse_fragment_nodes(
     html: &str,
     stitch: Option<StitchRecognizer>,
     space: HtmlSpace,
+    origins: &[SerializedNode],
 ) -> (Vec<Node>, Vec<usize>, Vec<String>) {
-    let sink = parse_fragment(
+    let parser = parse_fragment(
         HtmlSink::new(stitch),
         parse_opts(),
         space.context_element(),
         Vec::new(),
         false,
-    )
-    .one(html);
+    );
+    let sink = if origins.is_empty() {
+        parser.one(html)
+    } else {
+        parse_with_origins(parser.tokenizer.sink, html, origins)
+    };
     let leaked = sink
         .stitch
         .map(StitchRecognizer::leaked_markers)
@@ -1504,7 +1865,7 @@ mod tests {
     }
 
     /// Open a hast element with `(name, kind, value)` props; the caller closes it.
-    fn open_element(b: &mut ArenaBuilder<Hast>, tag: &str, props: &[(&str, u8, &str)]) {
+    fn open_element(b: &mut ArenaBuilder<Hast>, tag: &str, props: &[(&str, u8, &str)]) -> u32 {
         let tag = b.alloc_string(tag);
         let props: Vec<(StringRef, u8, StringRef)> = props
             .iter()
@@ -1513,6 +1874,345 @@ mod tests {
         let el = b.open_node(HastNodeType::Element as u8);
         let data = encode_element_data(tag, &props);
         b.arena_mut().set_type_data(el, &data);
+        el
+    }
+
+    fn add_code_with_data(b: &mut ArenaBuilder<Hast>, meta: &str) {
+        let code = open_element(b, "code", &[("className", PROP_SPACE_SEP, "language-js")]);
+        let data = format!(r#"{{"lang":"js","meta":"{meta}"}}"#);
+        b.arena_mut().set_node_data(code, data.into_bytes());
+        let value = b.alloc_string("x\n");
+        let text = b.add_leaf(HastNodeType::Text as u8);
+        b.arena_mut().set_type_data(text, &value.as_bytes());
+        b.close_node();
+    }
+
+    fn add_fence(b: &mut ArenaBuilder<Hast>, meta: &str) {
+        open_element(b, "pre", &[]);
+        add_code_with_data(b, meta);
+        b.close_node();
+    }
+
+    fn code_metadata(arena: &Arena<Hast>) -> Vec<Option<serde_json::Value>> {
+        (0..arena.len() as u32)
+            .filter(|&id| {
+                arena.get_node(id).node_type == HastNodeType::Element as u8
+                    && arena.get_str(decode_element_tag(arena.get_type_data(id))) == "code"
+            })
+            .map(|id| {
+                arena
+                    .get_node_data(id)
+                    .map(|data| serde_json::from_slice(data).unwrap())
+            })
+            .collect()
+    }
+
+    fn fence_data(meta: &str) -> Option<serde_json::Value> {
+        Some(serde_json::json!({ "lang": "js", "meta": meta }))
+    }
+
+    #[test]
+    fn raw_reparse_keeps_metadata_on_relocated_and_repeated_fences_only() {
+        let mut b = ArenaBuilder::<Hast>::new("x".repeat(200));
+        b.open_node(HastNodeType::Root as u8);
+        add_raw_node(&mut b, "<table>");
+        add_fence(&mut b, "first");
+        add_raw_node(&mut b, "<tr><td>");
+        add_fence(&mut b, "second");
+        add_raw_node(
+            &mut b,
+            "</td></tr></table><pre><code class=language-js>x\n</code></pre>",
+        );
+        add_fence(&mut b, "third");
+        b.close_node();
+        let mut source = b.finish();
+        let source_codes: Vec<u32> = (0..source.len() as u32)
+            .filter(|&id| source.get_node_data(id).is_some())
+            .collect();
+        for (index, &id) in source_codes.iter().enumerate() {
+            source.set_position(
+                id,
+                NodePosition {
+                    start_offset: index as u32 * 10,
+                    end_offset: index as u32 * 10 + 5,
+                    start_line: 1,
+                    start_column: index as u32 * 10 + 1,
+                    end_line: 1,
+                    end_column: index as u32 * 10 + 6,
+                },
+            );
+        }
+        let reparsed = raw_to_hast_arena(&source);
+        assert_eq!(reparsed.source(), source.source());
+        let reparsed_codes: Vec<u32> = (0..reparsed.len() as u32)
+            .filter(|&id| reparsed.get_node_data(id).is_some())
+            .collect();
+        assert_ne!(
+            source_codes[0], reparsed_codes[0],
+            "reparsing rebuilds arena ids"
+        );
+        for (&original, &parsed) in source_codes.iter().zip(&reparsed_codes) {
+            assert_eq!(
+                NodePosition::from_node(source.get_node(original)),
+                NodePosition::from_node(reparsed.get_node(parsed))
+            );
+        }
+        assert_eq!(
+            code_metadata(&reparsed),
+            [
+                fence_data("first"),
+                fence_data("second"),
+                None,
+                fence_data("third")
+            ]
+        );
+        assert!(
+            hast_arena_to_html(&reparsed)
+                .starts_with("<pre><code class=\"language-js\">x\n</code></pre><table>")
+        );
+        assert_eq!(
+            code_metadata(&source),
+            [
+                fence_data("first"),
+                fence_data("second"),
+                fence_data("third")
+            ]
+        );
+    }
+
+    #[test]
+    fn raw_reparse_declines_positions_for_ambiguous_raw_children() {
+        for raw in ["</span>", "<!--", "<script>", "<em>x</em>"] {
+            let mut b = ArenaBuilder::<Hast>::new("source".to_string());
+            b.open_node(HastNodeType::Root as u8);
+            let span = open_element(&mut b, "span", &[]);
+            let position = NodePosition {
+                start_offset: 0,
+                end_offset: 6,
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 7,
+            };
+            b.arena_mut().set_position(span, position);
+            add_raw_node(&mut b, raw);
+            b.close_node();
+            b.close_node();
+            let reparsed = raw_to_hast_arena(&b.finish());
+            let span = reparsed.get_children(0)[0];
+            assert_eq!(
+                NodePosition::from_node(reparsed.get_node(span)),
+                if raw == "<em>x</em>" {
+                    position
+                } else {
+                    NodePosition::default()
+                },
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_reparse_declines_raw_text_positions_when_text_becomes_markup() {
+        for text in ["</script>", "a<b"] {
+            let mut b = ArenaBuilder::<Hast>::new(text.to_string());
+            b.open_node(HastNodeType::Root as u8);
+            let script = open_element(&mut b, "script", &[]);
+            let position = NodePosition {
+                start_offset: 0,
+                end_offset: text.len() as u32,
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: text.len() as u32 + 1,
+            };
+            b.arena_mut().set_position(script, position);
+            let value = b.alloc_string(text);
+            b.add_leaf_with_position(HastNodeType::Text as u8, position, &value.as_bytes());
+            b.close_node();
+            b.close_node();
+            let reparsed = raw_to_hast_arena(&b.finish());
+            let script = reparsed.get_children(0)[0];
+            assert_eq!(
+                NodePosition::from_node(reparsed.get_node(script)),
+                if text == "a<b" {
+                    position
+                } else {
+                    NodePosition::default()
+                },
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_reparse_does_not_overstate_raw_void_element_positions() {
+        for raw in ["<input checked>", "<input checked></div>"] {
+            let mut b = ArenaBuilder::<Hast>::new(raw.to_string());
+            b.open_node(HastNodeType::Root as u8);
+            let value = b.alloc_string(raw);
+            let position = NodePosition {
+                start_offset: 0,
+                end_offset: raw.len() as u32,
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: raw.len() as u32 + 1,
+            };
+            b.add_leaf_with_position(HastNodeType::Raw as u8, position, &value.as_bytes());
+            b.close_node();
+            let reparsed = raw_to_hast_arena(&b.finish());
+            let input = reparsed.get_children(0)[0];
+            assert_eq!(
+                NodePosition::from_node(reparsed.get_node(input)),
+                if raw == "<input checked>" {
+                    position
+                } else {
+                    NodePosition::default()
+                },
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_reparse_does_not_give_coalesced_text_a_partial_position() {
+        let mut b = ArenaBuilder::<Hast>::new("before".to_string());
+        b.open_node(HastNodeType::Root as u8);
+        let value = b.alloc_string("before");
+        let text = b.add_leaf_with_position(
+            HastNodeType::Text as u8,
+            NodePosition {
+                start_offset: 0,
+                end_offset: 6,
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 7,
+            },
+            &value.as_bytes(),
+        );
+        add_raw_node(&mut b, "after");
+        b.close_node();
+        let source = b.finish();
+        let reparsed = raw_to_hast_arena(&source);
+        let merged = reparsed.get_children(0)[0];
+        assert_eq!(crate::hast::text_content(&reparsed, merged), "beforeafter");
+        assert_eq!(
+            NodePosition::from_node(reparsed.get_node(merged)),
+            NodePosition::default()
+        );
+        assert_ne!(
+            NodePosition::from_node(source.get_node(text)),
+            NodePosition::default()
+        );
+    }
+
+    #[test]
+    fn raw_reparse_does_not_reassign_metadata_from_swallowed_fences() {
+        for (open, close) in [
+            ("<script>", "</script>"),
+            ("<!--", "-->"),
+            ("<textarea>", "</textarea>"),
+        ] {
+            let mut b = ArenaBuilder::<Hast>::new(String::new());
+            b.open_node(HastNodeType::Root as u8);
+            add_raw_node(&mut b, open);
+            add_fence(&mut b, "swallowed");
+            add_raw_node(&mut b, close);
+            add_raw_node(&mut b, "<pre><code class=language-js>x\n</code></pre>");
+            add_fence(&mut b, "survivor");
+            b.close_node();
+            let reparsed = raw_to_hast_arena(&b.finish());
+            assert_eq!(
+                code_metadata(&reparsed),
+                [None, fence_data("survivor")],
+                "{open}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_reparse_does_not_claim_tags_begun_in_raw_html() {
+        for prefix in [
+            "<code ",
+            "<code class=language-js ",
+            "<code title=\"",
+            "<code title=",
+            "<code /",
+            "<!--",
+            "<script>",
+        ] {
+            let mut b = ArenaBuilder::<Hast>::new(String::new());
+            b.open_node(HastNodeType::Root as u8);
+            add_raw_node(&mut b, prefix);
+            add_code_with_data(&mut b, "not-an-original-token");
+            b.close_node();
+            let reparsed = raw_to_hast_arena(&b.finish());
+            assert!(
+                code_metadata(&reparsed).iter().all(Option::is_none),
+                "{prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_reparse_does_not_give_metadata_to_formatting_clones() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(HastNodeType::Root as u8);
+        open_element(&mut b, "pre", &[]);
+        let code = open_element(&mut b, "code", &[]);
+        b.arena_mut()
+            .set_node_data(code, br#"{"lang":"js","meta":"original"}"#.to_vec());
+        b.arena_mut().set_position(
+            code,
+            NodePosition {
+                start_offset: 10,
+                end_offset: 20,
+                start_line: 1,
+                start_column: 11,
+                end_line: 1,
+                end_column: 21,
+            },
+        );
+        add_raw_node(&mut b, "a<p>b");
+        b.close_node();
+        b.close_node();
+        add_raw_node(&mut b, "</p><code><p>raw");
+        add_fence(&mut b, "next");
+        b.close_node();
+        let reparsed = raw_to_hast_arena(&b.finish());
+        let metadata = code_metadata(&reparsed);
+        assert!(metadata.len() > 3, "formatting reconstruction must occur");
+        assert_eq!(metadata[0], fence_data("original"));
+        assert_eq!(metadata.last(), Some(&fence_data("next")));
+        assert!(metadata[1..metadata.len() - 1].iter().all(Option::is_none));
+        for id in 0..reparsed.len() as u32 {
+            if reparsed.get_node(id).node_type == HastNodeType::Element as u8
+                && reparsed.get_str(decode_element_tag(reparsed.get_type_data(id))) == "code"
+            {
+                assert_eq!(
+                    NodePosition::from_node(reparsed.get_node(id)),
+                    NodePosition::default(),
+                    "split originals and parser clones have no reliable full-source span"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_keeps_fence_data_inside_nested_mdx_elements() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(HastNodeType::Root as u8);
+        open_mdx_element(&mut b, "Outer");
+        open_mdx_element(&mut b, "Inner");
+        add_fence(&mut b, "nested");
+        b.close_node();
+        b.close_node();
+        b.close_node();
+        let reparsed = raw_to_hast_arena(&b.finish());
+        assert_eq!(code_metadata(&reparsed), [fence_data("nested")]);
     }
 
     #[cfg(feature = "mdx")]
