@@ -3751,12 +3751,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
         i += 1;
         self.finish_list(start);
-        if let Some(node_ix) = self.tree.peek_up()
-            && let ItemBody::FootnoteDefinition(..) = self.tree[node_ix].item.body
-        {
-            // finish previous footnote if it's still open
-            self.pop(start);
-        }
         i += scan_space_or_tab(&bytes[i..]);
         self.allocs
             .footdefs
@@ -5481,9 +5475,11 @@ fn delim_run_flags(
     classify_delimiter_run(s, suffix, run_len, at - start, mode, options)
 }
 
-/// Only GFM strikethrough ever adds `~` to micromark's attention markers.
+/// An attention marker another construct registers, which lets a `*` run
+/// flank it without whitespace. `*` and `_` are plain punctuation here, as
+/// CommonMark's flanking rules say; GFM strikethrough's `~` is the only one.
 fn is_attention_marker(c: char, options: Options) -> bool {
-    c == '*' || c == '_' || (c == '~' && options.contains(Options::ENABLE_STRIKETHROUGH))
+    c == '~' && options.contains(Options::ENABLE_STRIKETHROUGH)
 }
 
 fn tilde_is_delimiter(options: Options) -> bool {

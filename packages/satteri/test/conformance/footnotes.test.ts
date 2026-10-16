@@ -208,6 +208,11 @@ describe("GFM footnote semantics conformance (vs remark-rehype)", () => {
     );
   });
 
+  test("a definition at the end leaves the backref in the paragraph before it", () => {
+    assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    [x]: /u\n");
+    assertFootnoteHastConformance("Text[^a] and[^b].\n\n[^a]: Body.\n    [^b]: Inner.\n");
+  });
+
   test("a paragraph after a list still takes the backref", () => {
     assertFootnoteHastConformance("Text[^a].\n\n[^a]: One.\n\n    - x\n\n    Two.\n");
   });
@@ -223,7 +228,7 @@ describe("GFM footnote semantics conformance (vs remark-rehype)", () => {
     assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    - one\n    - two\n");
   });
 
-  test.fails("a definition holding a nested definition positions its paragraph like remark", () => {
+  test("a definition holding a nested definition positions its paragraph like remark", () => {
     assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    [^b]: Inner.\n\nAlso[^b].\n");
   });
 

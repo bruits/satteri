@@ -430,7 +430,9 @@ impl<'a> LineStart<'a> {
         let save = self.save_cursor();
         self.scan_space_upto(3);
 
-        if !self.scan_ch(b'[') {
+        // Columns left over from a tab put the `[` four or more columns in,
+        // so the item opens with an indented code block, not a paragraph.
+        if self.spaces_remaining > 0 || !self.scan_ch(b'[') {
             self.restore_cursor(save);
             return None;
         }
@@ -461,7 +463,12 @@ impl<'a> LineStart<'a> {
             self.restore_cursor(save);
             return None;
         }
-        self.ix += 1;
+        // A CRLF is one line ending: take both bytes, as for a lone `\n`.
+        self.ix += if self.bytes[self.ix..].starts_with(b"\r\n") {
+            2
+        } else {
+            1
+        };
         Some(is_checked)
     }
 
