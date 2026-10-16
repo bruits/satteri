@@ -608,10 +608,7 @@ export function mdxToMdast<O extends MdastTreeOptions>(
   source: string,
   options?: O,
 ): ResultFor<O, Root>;
-export function mdxToMdast(
-  source: string,
-  options: MdastTreeOptions = {},
-): Root | Promise<Root> {
+export function mdxToMdast(source: string, options: MdastTreeOptions = {}): Root | Promise<Root> {
   return toMdastImpl(source, options, true);
 }
 

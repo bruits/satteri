@@ -58,6 +58,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      # Before codegen, which formats the tree as it runs.
+      - name: Format JS
+        run: pnpm oxfmt --check
+
       - name: Codegen up to date
         run: pnpm codegen:check
 
