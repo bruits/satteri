@@ -6979,6 +6979,30 @@ pub(crate) fn parse_inside_attribute_block(
     Some(attributes)
 }
 
+/// Length of a `{...}` attribute block at the start of `bytes`, braces included.
+/// It ends at the first `}` outside a quoted value (a quote opens only after
+/// `=`, as in [`parse_inside_attribute_block`]) and can't span lines or nest.
+pub(crate) fn scan_inline_attribute_block(bytes: &[u8]) -> Option<usize> {
+    if bytes.first() != Some(&b'{') {
+        return None;
+    }
+    let mut quote = None;
+    for (i, &b) in bytes.iter().enumerate().skip(1) {
+        match quote {
+            _ if b == b'\n' || b == b'\r' => return None,
+            Some(q) if b == q => quote = None,
+            Some(_) => {}
+            None => match b {
+                b'}' => return Some(i + 1),
+                b'{' => return None,
+                b'"' | b'\'' if bytes[i - 1] == b'=' => quote = Some(b),
+                _ => {}
+            },
+        }
+    }
+    None
+}
+
 /// Strips a matching pair of surrounding `"` or `'` from an attribute value.
 /// An unbalanced quote is kept verbatim so malformed input round-trips literally.
 fn unquote_attribute_value(value: &str) -> &str {

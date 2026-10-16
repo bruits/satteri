@@ -985,6 +985,28 @@ pub(crate) fn parse_document<'a>(
                     end_column: end_col,
                 };
 
+                // Attributes written right after an inline element go on the
+                // node the element opens, which is the next one built.
+                let inline_attributes = if options.contains(Options::ENABLE_ATTRIBUTES)
+                    && matches!(
+                        item.body,
+                        ItemBody::Emphasis
+                            | ItemBody::Strong
+                            | ItemBody::SourceStrong
+                            | ItemBody::Strikethrough
+                            | ItemBody::Code(_)
+                            | ItemBody::SourceCode(_)
+                            | ItemBody::Link(_)
+                            | ItemBody::LiteralLink { .. }
+                            | ItemBody::Image(_)
+                    ) {
+                    inner
+                        .take_attribute_block_after(cur_ix)
+                        .map(|attributes| (builder.arena_ref().len() as u32, attributes))
+                } else {
+                    None
+                };
+
                 // Map ItemBody to arena node.
                 match item.body {
                     ItemBody::Paragraph | ItemBody::TightParagraph => {
@@ -2120,6 +2142,12 @@ pub(crate) fn parse_document<'a>(
                     _ => {
                         inner.tree.next_sibling(cur_ix);
                     }
+                }
+
+                if let Some((node_id, attributes)) = inline_attributes
+                    && let Some(json) = encode_h_properties(&attributes)
+                {
+                    builder.arena_mut().set_node_data(node_id, json);
                 }
             }
         }

@@ -118,7 +118,8 @@ export interface Features {
   headingAttributes?: boolean;
   /**
    * Curly-brace attributes (`{#id .class key=value}`) on fenced code blocks
-   * (` ```js {.class} `), as well as on headings. Default: false.
+   * (` ```js {.class} `) and inline elements (`*em*{.class}`), as well as on
+   * headings. Default: false.
    */
   attributes?: boolean;
   /** Colon-delimited container directive blocks (`:::`). Default: false. */

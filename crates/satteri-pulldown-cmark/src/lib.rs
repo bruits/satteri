@@ -843,7 +843,8 @@ bitflags::bitflags! {
         /// MDX: enables JSX elements, expressions, and ESM import/export.
         const ENABLE_MDX = 1 << 17;
         /// Curly-brace attributes (`{#id .class key=value}`) on more elements
-        /// than headings: fenced code blocks (` ```js {.class} `). Implies
+        /// than headings: fenced code blocks (` ```js {.class} `) and inline
+        /// elements (`*em*{.class}`). Implies
         /// [`ENABLE_HEADING_ATTRIBUTES`](Self::ENABLE_HEADING_ATTRIBUTES).
         const ENABLE_ATTRIBUTES = 1 << 24;
     }

@@ -10,7 +10,7 @@ fn attributes_test_1() {
     let expected = r##"<h1 class="title" id="top">Heading</h1>
 "##;
 
-    test_markdown_html(original, expected, 16777216, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
 }
 
 #[test]
@@ -23,7 +23,7 @@ x
 </code></pre>
 "##;
 
-    test_markdown_html(original, expected, 16777216, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
 }
 
 #[test]
@@ -42,7 +42,7 @@ x
 </code></pre>
 "##;
 
-    test_markdown_html(original, expected, 16777216, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
 }
 
 #[test]
@@ -55,7 +55,7 @@ x
 </code></pre>
 "##;
 
-    test_markdown_html(original, expected, 16777216, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
 }
 
 #[test]
@@ -74,7 +74,7 @@ x
 </code></pre>
 "##;
 
-    test_markdown_html(original, expected, 16777216, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
 }
 
 #[test]
@@ -93,7 +93,7 @@ x
 </code></pre>
 "##;
 
-    test_markdown_html(original, expected, 16777216, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
 }
 
 #[test]
@@ -118,5 +118,70 @@ x
 </code></pre>
 "##;
 
-    test_markdown_html(original, expected, 16777216, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
+}
+
+#[test]
+fn attributes_test_8() {
+    let original = r##"*em*{.a} **strong**{#b} `code`{c=d}
+"##;
+    let expected = r##"<p><em class="a">em</em> <strong id="b">strong</strong> <code c="d">code</code></p>
+"##;
+
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
+}
+
+#[test]
+fn attributes_test_9() {
+    let original = r##"[link](/u){.a} ![alt](/i.png){.b} [ref][r]{#c}
+
+[r]: /r
+"##;
+    let expected = r##"<p><a href="/u" class="a">link</a> <img src="/i.png" alt="alt" class="b"> <a href="/r" id="c">ref</a></p>
+"##;
+
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
+}
+
+#[test]
+fn attributes_test_10() {
+    let original = r##"~~gone~~{.x}
+"##;
+    let expected = r##"<p><del class="x">gone</del></p>
+"##;
+
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
+}
+
+#[test]
+fn attributes_test_11() {
+    let original = r##"**a *b*{.in}**{.out}
+
+*em*{.a}{#i}{.b k=v}
+"##;
+    let expected = r##"<p><strong class="out">a <em class="in">b</em></strong></p>
+<p><em class="a b" id="i" k="v">em</em></p>
+"##;
+
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
+}
+
+#[test]
+fn attributes_test_12() {
+    let original = r##"*em*{.a_b}
+"##;
+    let expected = r##"<p><em class="a_b">em</em></p>
+"##;
+
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
+}
+
+#[test]
+fn attributes_test_13() {
+    let original = r##"*em* {.a} text{.b} *em*\{.c} *em*{} *em*{.d
+"##;
+    let expected = r##"<p><em>em</em> {.a} text{.b} <em>em</em>{.c} <em>em</em>{} <em>em</em>{.d</p>
+"##;
+
+    test_markdown_html(original, expected, 16777224, false, false, false, false, false, false);
 }

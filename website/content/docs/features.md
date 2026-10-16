@@ -221,6 +221,18 @@ console.log("hi");
 
 The language is written before the braces, so its class comes first, holding any attribute classes followed by `language-js`. Only a block that ends the info string counts; text before it stays in the code's `meta`.
 
+Attributes on an inline element follow it with no space between: emphasis, strong, code spans, links, images and strikethrough. Blocks that follow one another merge:
+
+```text
+**Note**{.warning} see [the guide](/guide){target=_blank} and `npm i`{.cmd}{#install}
+```
+
+```html
+<p><strong class="warning">Note</strong> see <a href="/guide" target="_blank">the guide</a> and <code class="cmd" id="install">npm i</code></p>
+```
+
+In MDX, a `{...}` after an inline element is still a JavaScript expression.
+
 ## Directives
 
 Default: `false`.

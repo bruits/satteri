@@ -34,7 +34,10 @@ use core::ops::{Index, Range};
 use rustc_hash::FxHashMap;
 use unicase::UniCase;
 
-use crate::firstpass::{delim_run_is_valid, run_first_pass, run_first_pass_mode};
+use crate::firstpass::{
+    delim_run_is_valid, parse_inside_attribute_block, run_first_pass, run_first_pass_mode,
+    scan_inline_attribute_block,
+};
 use crate::linklabel::{FootnoteLabel, LinkLabel, ReferenceLabel, scan_link_label_rest};
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
@@ -550,6 +553,59 @@ impl<'input> ParserInner<'input> {
             .saturating_sub(url.len() + title.len());
 
         Some((link_type, url, title))
+    }
+
+    /// Takes the `{...}` written right after the inline element `ix`, as
+    /// markdown-it-attrs reads it, out of the siblings that hold it, merging
+    /// blocks that follow one another (`{.a}{.b}`). Called as the element is
+    /// built, when its siblings may not be resolved yet.
+    pub(crate) fn take_attribute_block_after(
+        &mut self,
+        ix: TreeIndex,
+    ) -> Option<HeadingAttributes<'input>> {
+        let text = self.text;
+        let mut attributes: Option<HeadingAttributes<'input>> = None;
+        let mut block_end = self.tree[ix].item.end;
+        while let Some(len) = scan_inline_attribute_block(&text.as_bytes()[block_end..])
+            && let Some(block) =
+                parse_inside_attribute_block(&text[block_end + 1..block_end + len - 1])
+        {
+            match &mut attributes {
+                None => attributes = Some(block),
+                Some(merged) => merged.merge(block),
+            }
+            block_end += len;
+        }
+        let attributes = attributes?;
+
+        // Check before changing anything: escapes or syntax inside the braces
+        // mean they aren't an attribute block. An emphasis marker there is still
+        // text, as the block takes it before it could pair (`{.a_b}`).
+        let mut next = self.tree[ix].next;
+        while let Some(n) = next
+            && self.tree[n].item.start < block_end
+        {
+            if !matches!(
+                self.tree[n].item.body,
+                ItemBody::Text {
+                    backslash_escaped: false
+                } | ItemBody::MaybeEmphasis(..)
+            ) {
+                return None;
+            }
+            next = self.tree[n].next;
+        }
+
+        while let Some(n) = self.tree[ix].next
+            && self.tree[n].item.start < block_end
+        {
+            if self.tree[n].item.end <= block_end {
+                self.tree[ix].next = self.tree[n].next;
+            } else {
+                self.tree[n].item.start = block_end;
+            }
+        }
+        Some(attributes)
     }
 
     /// Handle inline markup.
@@ -3462,6 +3518,21 @@ impl<'a> HeadingAttributes<'a> {
             }
         }
         self.entries.push(HeadingAttribute::Other(key, value));
+    }
+
+    /// Adds a later block's attributes with the same rules as within one block.
+    pub fn merge(&mut self, later: HeadingAttributes<'a>) {
+        for entry in later.entries {
+            match entry {
+                HeadingAttribute::Id(id) => self.set_id(id),
+                HeadingAttribute::Classes(classes) => {
+                    for class in classes {
+                        self.add_class(class);
+                    }
+                }
+                HeadingAttribute::Other(key, value) => self.set_other(key, value),
+            }
+        }
     }
 
     fn id(&self) -> Option<CowStr<'a>> {
