@@ -4,3 +4,7 @@
 
 /_maudit/*
   Cache-Control: public, max-age=31536000, immutable
+
+/.well-known/graphgarden.json
+  access-control-allow-origin: *
+  cache-control: public, max-age=3600

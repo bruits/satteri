@@ -665,7 +665,7 @@ export async function assertMdxConformance(
 
 export interface MdxPluginConformanceOptions {
   reference: Pick<MdxCompileOptions, "remarkPlugins" | "rehypePlugins">;
-  satteri: Pick<MarkdownToJsOptions, "mdastPlugins" | "hastPlugins">;
+  satteri: Pick<MarkdownToJsOptions, "mdastPlugins" | "hastPlugins" | "features">;
   components?: Record<string, unknown>;
 }
 
