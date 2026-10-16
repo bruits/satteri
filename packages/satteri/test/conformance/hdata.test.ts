@@ -475,3 +475,24 @@ describe("data hints on freshly emitted mdast nodes (fresh-node path)", () => {
     });
   });
 });
+
+describe("data hints on a code block apply to its <code>, as in mdast-util-to-hast", () => {
+  const CASES: Array<[string, DataPatch]> = [
+    ["hProperties join the language class", { hProperties: { id: "c" } }],
+    [
+      "an hProperties className replaces the language class",
+      { hProperties: { className: ["hl"], id: "c" } },
+    ],
+    ["hName renames the <code>, not the <pre>", { hName: "samp" }],
+    ["hChildren replace the code text", { hChildren: [{ type: "text", value: "replaced" }] }],
+  ];
+
+  for (const [name, patch] of CASES) {
+    test(name, () =>
+      assertHtmlMatches("```js\nx\n```", {
+        remark: mutateOnRemark((n) => n.type === "code", patch),
+        satteri: mutateOnSatteri("code", (n) => n.type === "code", patch),
+      }),
+    );
+  }
+});
