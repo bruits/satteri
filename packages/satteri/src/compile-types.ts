@@ -111,6 +111,11 @@ export interface Features {
   math?: boolean | MathOptions;
   /** Heading attributes (`# text { #id .class }`). Default: false. */
   headingAttributes?: boolean;
+  /**
+   * Curly-brace attributes (`{#id .class key=value}`) on fenced code blocks
+   * (` ```js {.class} `), as well as on headings. Default: false.
+   */
+  attributes?: boolean;
   /** Colon-delimited container directive blocks (`:::`). Default: false. */
   directive?: boolean;
   /** Superscript (`^super^`). Default: false. */

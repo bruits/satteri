@@ -3631,7 +3631,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let header_start = ix;
         let header_node_idx = self.tree.push(); // so that we can set the endpoint later
 
-        let attr_block = if self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES) {
+        let attr_block = if self.options.has_heading_attributes() {
             let header_end = header_start + scan_nextline(&bytes[header_start..]);
             self.extract_and_parse_heading_attribute_block(header_start, header_end)
                 .map(|block| (block, header_end))
@@ -4137,7 +4137,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         header_start: usize,
         header_end: usize,
     ) -> Option<HeadingAttrBlock<'a>> {
-        if !self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES) {
+        if !self.options.has_heading_attributes() {
             return None;
         }
 
@@ -6915,7 +6915,9 @@ fn extract_attribute_block_content_from_header_text(
 /// See also: [`Options::ENABLE_HEADING_ATTRIBUTES`].
 ///
 /// [`Options::ENABLE_HEADING_ATTRIBUTES`]: `crate::Options::ENABLE_HEADING_ATTRIBUTES`
-fn parse_inside_attribute_block(inside_attr_block: &str) -> Option<HeadingAttributes<'_>> {
+pub(crate) fn parse_inside_attribute_block(
+    inside_attr_block: &str,
+) -> Option<HeadingAttributes<'_>> {
     let mut attributes = HeadingAttributes {
         entries: Vec::new(),
     };

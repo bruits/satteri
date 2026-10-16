@@ -839,10 +839,19 @@ bitflags::bitflags! {
         const ENABLE_DIRECTIVE = 1 << 16;
         /// MDX: enables JSX elements, expressions, and ESM import/export.
         const ENABLE_MDX = 1 << 17;
+        /// Curly-brace attributes (`{#id .class key=value}`) on more elements
+        /// than headings: fenced code blocks (` ```js {.class} `). Implies
+        /// [`ENABLE_HEADING_ATTRIBUTES`](Self::ENABLE_HEADING_ATTRIBUTES).
+        const ENABLE_ATTRIBUTES = 1 << 24;
     }
 }
 
 impl Options {
+    pub(crate) fn has_heading_attributes(&self) -> bool {
+        self.contains(Options::ENABLE_HEADING_ATTRIBUTES)
+            || self.contains(Options::ENABLE_ATTRIBUTES)
+    }
+
     pub(crate) fn has_smart_quotes(&self) -> bool {
         self.contains(Options::ENABLE_SMART_PUNCTUATION)
             || self.contains(Options::ENABLE_SMART_QUOTES)
