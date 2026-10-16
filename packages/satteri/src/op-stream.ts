@@ -132,12 +132,26 @@ export class OpWriter extends ByteWriter {
   /** Write a node's `position` so the node keeps it. Only lines and columns are
    *  sent: Rust derives the byte offsets the arena stores from them. */
   position(value: unknown): void {
-    const { start, end } = (value ?? {}) as { start?: Point; end?: Point };
-    const words = [start?.line, start?.column, end?.line, end?.column];
-    if (!words.every(isLineOrColumn)) return;
+    // Most re-encoded nodes are built by plugins and have no position: return before any work.
+    if (value == null) return;
+    const { start, end } = value as { start?: Point; end?: Point };
+    if (start == null || end == null) return;
+    const { line: startLine, column: startColumn } = start;
+    const { line: endLine, column: endColumn } = end;
+    if (
+      !isLineOrColumn(startLine) ||
+      !isLineOrColumn(startColumn) ||
+      !isLineOrColumn(endLine) ||
+      !isLineOrColumn(endColumn)
+    ) {
+      return;
+    }
     this.ensure(17);
     this.buf[this.n++] = OP_POSITION;
-    for (const word of words) this.writeU32(word);
+    this.writeU32(startLine);
+    this.writeU32(startColumn);
+    this.writeU32(endLine);
+    this.writeU32(endColumn);
   }
 }
 
