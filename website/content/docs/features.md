@@ -180,14 +180,14 @@ Wrap a value in `"` or `'` quotes when it needs to contain spaces:
 <h1 data-label="hello world">Title</h1>
 ```
 
-Explicit `id=` and `class=` merge with the `#`/`.` shorthands instead of producing duplicate attributes. The last id wins whereas classes accumulate in source order:
+Attributes keep the order they are written in, as in `remark-directive`. Explicit `id=` and `class=` merge with the `#`/`.` shorthands instead of producing duplicate attributes: each keeps the place it first appeared, the last id wins, and classes accumulate in source order:
 
 ```markdown
 ## Heading {.intro #x class=lead id=main}
 ```
 
 ```html
-<h2 id="main" class="intro lead">Heading</h2>
+<h2 class="intro lead" id="main">Heading</h2>
 ```
 
 ### In MDX
