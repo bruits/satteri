@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { describe, test, expect } from "vitest";
 
-const entry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+// A file URL rather than a path: Node cannot import a Windows path (`C:\…`).
+const entry = new URL("../dist/index.js", import.meta.url).href;
 
 // A stack overflow kills the whole process, so the compile has to run out of band.
 function compileNestedBlockquotes(depth: number) {
