@@ -165,3 +165,155 @@ unclosed block stay text:
 .
 <p><em>em</em> {.a} text{.b} <em>em</em>{.c} <em>em</em>{} <em>em</em>{.d</p>
 ````````````````````````````````
+
+## Blocks
+
+A block ending a paragraph goes on the paragraph, whether it ends the last line
+or is a line of its own:
+
+```````````````````````````````` example
+A paragraph. {.intro}
+
+Another
+{#second}
+.
+<p class="intro">A paragraph.</p>
+<p id="second">Another</p>
+````````````````````````````````
+
+A line of its own after a hard break keeps the break:
+
+```````````````````````````````` example
+line\
+{.x}
+.
+<p class="x">line<br />
+</p>
+````````````````````````````````
+
+On a list item's first line, it goes on the item:
+
+```````````````````````````````` example
+- item {.red}
+- item
+.
+<ul>
+<li class="red">item</li>
+<li>item</li>
+</ul>
+````````````````````````````````
+
+As a line of its own in a list item, it goes on the list, as it does in a
+blockquote:
+
+```````````````````````````````` example
+- a
+- b
+{.my-list}
+.
+<ul class="my-list">
+<li>a</li>
+<li>b</li>
+</ul>
+````````````````````````````````
+
+```````````````````````````````` example
+- parent
+  - child
+  {.inner}
+.
+<ul>
+<li>parent
+<ul class="inner">
+<li>child</li>
+</ul>
+</li>
+</ul>
+````````````````````````````````
+
+```````````````````````````````` example
+> quoted
+> {.note}
+.
+<blockquote class="note">
+<p>quoted</p>
+</blockquote>
+````````````````````````````````
+
+A paragraph holding only a block goes on the list, table or thematic break
+before it:
+
+```````````````````````````````` example
+- a
+- b
+
+{.my-list}
+.
+<ul class="my-list">
+<li>a</li>
+<li>b</li>
+</ul>
+````````````````````````````````
+
+```````````````````````````````` example
+---
+{.divider}
+.
+<hr class="divider">
+````````````````````````````````
+
+A block ending a table cell goes on the cell:
+
+```````````````````````````````` example
+| Head {.h} |
+| --- |
+| cell {.c} |
+
+{.my-table}
+.
+<table class="my-table">
+<thead>
+<tr>
+<th class="h">Head</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="c">cell</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+Anywhere else, a paragraph holding only a block stays, empty:
+
+```````````````````````````````` example
+{.alone}
+.
+<p class="alone"></p>
+````````````````````````````````
+
+A block in the middle of a paragraph, and braces inside image alt text, are
+not attributes:
+
+```````````````````````````````` example
+para
+{.x}
+more
+
+![{.cls}](x.png)
+.
+<p>para
+{.x}
+more</p>
+<p><img src="x.png" alt="{.cls}" /></p>
+````````````````````````````````
+
+Of several blocks ending a paragraph, only the last goes on it; the rest stay
+text:
+
+```````````````````````````````` example
+text{.a}{.b}
+.
+<p class="b">text{.a}</p>
+````````````````````````````````

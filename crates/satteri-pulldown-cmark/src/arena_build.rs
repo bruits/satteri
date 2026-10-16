@@ -149,6 +149,9 @@ pub(crate) fn parse_document<'a>(
     let mut cursor = line_index.cursor();
 
     let mut inner = ParserInner::new_for_arena(source, options);
+    if options.contains(Options::ENABLE_ATTRIBUTES) {
+        inner.collect_block_attributes();
+    }
     let mut callbacks = DefaultParserCallbacks;
     let mut document = storage.map_or_else(
         || SourceDocument::borrowed(source, inner.tree.semantic_capacity_hint()),
@@ -807,6 +810,30 @@ pub(crate) fn parse_document<'a>(
                     inner.handle_inline(&mut callbacks);
                     item = inner.tree[cur_ix].item;
                 }
+                // A `{...}` that `collect_block_attributes` deferred goes on its
+                // paragraph or cell (or the list item) if no inline element took it.
+                if !inner.trailing_attributes.is_empty()
+                    && matches!(item.body, ItemBody::Text { .. })
+                    && let Some(block) = inner.tree.peek_up()
+                    && inner
+                        .trailing_attributes
+                        .get(&block)
+                        .is_some_and(|&(open, ..)| item.start <= open && open < item.end)
+                    && let Some((open, attributes, on_item)) =
+                        inner.trailing_attributes.remove(&block)
+                {
+                    inner.cut_children(block, open);
+                    item = inner.tree[cur_ix].item;
+                    let block_id = builder.current_node_id();
+                    let target_id = if on_item {
+                        builder.arena_ref().get_node(block_id).parent
+                    } else {
+                        block_id
+                    };
+                    if let Some(json) = encode_h_properties(&attributes) {
+                        builder.arena_mut().set_node_data(target_id, json);
+                    }
+                }
                 let start = item.start as u32;
                 let end = item.end as u32;
 
@@ -985,8 +1012,8 @@ pub(crate) fn parse_document<'a>(
                     end_column: end_col,
                 };
 
-                // Attributes written right after an inline element go on the
-                // node the element opens, which is the next one built.
+                // Attributes written right after an inline element, or given to a
+                // block, go on the node the item opens, which is the next one built.
                 let inline_attributes = if options.contains(Options::ENABLE_ATTRIBUTES)
                     && matches!(
                         item.body,
@@ -1004,7 +1031,10 @@ pub(crate) fn parse_document<'a>(
                         .take_attribute_block_after(cur_ix)
                         .map(|attributes| (builder.arena_ref().len() as u32, attributes))
                 } else {
-                    None
+                    inner
+                        .block_attributes
+                        .remove(&cur_ix)
+                        .map(|attributes| (builder.arena_ref().len() as u32, attributes))
                 };
 
                 // Map ItemBody to arena node.

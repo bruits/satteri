@@ -168,7 +168,7 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
         // alongside footnotes, so the expected HTML assumes both.
         "footnotes" => FOOTNOTES | GFM,
         "heading_attrs" => HEADING_ATTRIBUTES,
-        "attributes" => ATTRIBUTES | STRIKETHROUGH,
+        "attributes" => ATTRIBUTES | STRIKETHROUGH | TABLES,
         "math" => MATH,
         // Multi-dollar math only: `$$...$$` and `$$` fences parse, but a lone
         // `$` stays literal (remark-math `singleDollarTextMath: false`).

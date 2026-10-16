@@ -86,6 +86,7 @@ use serde::{Deserialize, Serialize};
 pub mod utils;
 
 pub mod arena_build;
+mod block_attributes;
 mod entities;
 mod firstpass;
 mod linklabel;
@@ -843,8 +844,9 @@ bitflags::bitflags! {
         /// MDX: enables JSX elements, expressions, and ESM import/export.
         const ENABLE_MDX = 1 << 17;
         /// Curly-brace attributes (`{#id .class key=value}`) on more elements
-        /// than headings: fenced code blocks (` ```js {.class} `) and inline
-        /// elements (`*em*{.class}`). Implies
+        /// than headings: fenced code blocks (` ```js {.class} `), inline
+        /// elements (`*em*{.class}`), and paragraphs, list items, lists,
+        /// blockquotes, tables, table cells and thematic breaks. Implies
         /// [`ENABLE_HEADING_ATTRIBUTES`](Self::ENABLE_HEADING_ATTRIBUTES).
         const ENABLE_ATTRIBUTES = 1 << 24;
     }

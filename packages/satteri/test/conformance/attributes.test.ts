@@ -6,19 +6,20 @@ import { markdownToHtml } from "../../src/index.js";
 // markdown-it-attrs is the reference: remark has no maintained attributes plugin.
 const reference = new MarkdownIt().use(markdownItAttrs);
 
-// markdown-it renders strikethrough as `<s>` where remark and Sätteri use `<del>`,
-// whatever the attributes.
+// Line breaks between block tags differ between the renderers, whatever the attributes.
+function collapseTagWhitespace(html: string): string {
+  return html.trim().replace(/>\s+</g, "><");
+}
+
+// markdown-it renders strikethrough as `<s>` where remark and Sätteri use `<del>`.
 function referenceHtml(md: string): string {
-  return reference
-    .render(md)
-    .trim()
-    .replace(/<(\/?)s([ >])/g, "<$1del$2");
+  return collapseTagWhitespace(reference.render(md)).replace(/<(\/?)s([ >])/g, "<$1del$2");
 }
 
 function satteriHtml(md: string): string {
   const result = markdownToHtml(md, { features: { attributes: true } });
   if (result instanceof Promise) throw new Error("expected sync");
-  return result.html.trim();
+  return collapseTagWhitespace(result.html);
 }
 
 describe("attributes: conformance vs markdown-it-attrs", () => {
@@ -46,6 +47,23 @@ describe("attributes: conformance vs markdown-it-attrs", () => {
     ["inline: markup characters inside a block", "*em*{.a_b}"],
     ["inline: a block after a space or plain text stays text", "*em* {.a} text{.b} more"],
     ["inline: an escaped, empty or unclosed block stays text", "*em*\\{.c} *em*{} *em*{.d"],
+    ["block: ending a paragraph's last line", "A paragraph. {.intro}"],
+    ["block: a paragraph's last line of its own", "Another\n{#second}"],
+    ["block: a line of its own after a hard break", "line\\\n{.x}"],
+    ["block: a list item's first line", "- item {.red}\n- item"],
+    ["block: a line of its own in a list item goes on the list", "- a\n- b\n{.my-list}"],
+    ["block: in a nested list item, the nested list", "- parent\n  - child\n  {.inner}"],
+    ["block: a line of its own in a blockquote", "> quoted\n> {.note}"],
+    ["block: a paragraph of its own after a list", "- a\n- b\n\n{.my-list}"],
+    [
+      "block: table cells and a paragraph of its own after the table",
+      "| Head {.h} |\n| --- |\n| cell {.c} |\n\n{.my-table}",
+    ],
+    ["block: a paragraph of its own anywhere else stays, empty", "# H\n\n{.alone}"],
+    ["block: only the last of several blocks ending a paragraph", "text{.a}{.b}"],
+    ["block: a block mid-paragraph stays text", "para\n{.x}\nmore"],
+    ["block: braces in image alt text", "![{.cls}](x.png)"],
+    ["block: an inline element before the block takes it", "![alt](img.png){.img-class}"],
   ];
 
   for (const [name, md] of CASES) {
@@ -64,5 +82,21 @@ describe("attributes: conformance vs markdown-it-attrs", () => {
     expect(referenceHtml(md)).toBe(
       '<pre><code id="code-block" class="language-python">x\n</code></pre>',
     );
+  });
+
+  // A paragraph of attributes alone goes on a thematic break before it, as on a
+  // list or table; markdown-it-attrs keeps it as an empty paragraph there.
+  test("block: a paragraph of its own after a thematic break, unlike the reference", () => {
+    const md = "---\n{.divider}";
+    expect(satteriHtml(md)).toBe('<hr class="divider">');
+    expect(referenceHtml(md)).toBe('<hr><p class="divider"></p>');
+  });
+
+  // `--- {.x}` isn't a thematic break in CommonMark, so it's a paragraph with
+  // attributes; markdown-it-attrs reads it as a thematic break.
+  test("block: `--- {.x}` is a paragraph, unlike the reference", () => {
+    const md = "--- {.divider}";
+    expect(satteriHtml(md)).toBe('<p class="divider">---</p>');
+    expect(referenceHtml(md)).toBe('<hr class="divider">');
   });
 });

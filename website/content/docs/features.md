@@ -231,7 +231,40 @@ Attributes on an inline element follow it with no space between: emphasis, stron
 <p><strong class="warning">Note</strong> see <a href="/guide" target="_blank">the guide</a> and <code class="cmd" id="install">npm i</code></p>
 ```
 
-In MDX, a `{...}` after an inline element is still a JavaScript expression.
+A block ending a paragraph goes on the paragraph, whether it ends the last line or is a line of its own. On a list item's first line it goes on the item; as a line of its own in a list item or blockquote, it goes on the list or blockquote. A paragraph holding only a block goes on the list, table or thematic break before it, and a block ending a table cell goes on the cell:
+
+```text
+- Milk {.fresh}
+- Eggs
+{.groceries}
+
+| Item {.name} |
+| --- |
+| Milk |
+
+{.inventory}
+```
+
+```html
+<ul class="groceries">
+<li class="fresh">Milk</li>
+<li>Eggs</li>
+</ul>
+<table class="inventory">
+<thead>
+<tr>
+<th class="name">Item</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Milk</td>
+</tr>
+</tbody>
+</table>
+```
+
+In MDX, a `{...}` after an inline element or ending a paragraph is still a JavaScript expression.
 
 ## Directives
 

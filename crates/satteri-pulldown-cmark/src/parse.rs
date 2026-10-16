@@ -323,6 +323,15 @@ pub(crate) struct ParserInner<'input> {
     /// MDX validation errors collected during inline parsing.
     pub(crate) mdx_errors: Vec<(usize, String)>,
 
+    /// Attributes a `{...}` ending a paragraph or table cell gives a block, by
+    /// the block's tree index; taken when the block is built.
+    pub(crate) block_attributes: FxHashMap<TreeIndex, HeadingAttributes<'input>>,
+
+    /// A `{...}` ending a paragraph or cell right after a character that may
+    /// close an inline element: its offset, attributes and whether it goes on
+    /// the list item. Applied as the paragraph is built if still there.
+    pub(crate) trailing_attributes: FxHashMap<TreeIndex, (usize, HeadingAttributes<'input>, bool)>,
+
     // used by inline passes. store them here for reuse
     inline_stack: InlineStack,
     link_stack: LinkStack,
@@ -416,6 +425,8 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
                 link_ref_expansion_limit: text.len().max(100_000),
                 unclosed_paren_title_floor: Cell::new(usize::MAX),
                 mdx_errors: Vec::new(),
+                block_attributes: Default::default(),
+                trailing_attributes: Default::default(),
                 code_delims: CodeDelims::new(),
                 math_delims: MathDelims::new(),
             },
@@ -484,6 +495,8 @@ impl<'input> ParserInner<'input> {
             link_ref_expansion_limit: text.len().max(100_000),
             unclosed_paren_title_floor: Cell::new(usize::MAX),
             mdx_errors: firstpass_mdx_errors,
+            block_attributes: Default::default(),
+            trailing_attributes: Default::default(),
             code_delims: CodeDelims::new(),
             math_delims: MathDelims::new(),
         }
@@ -566,7 +579,23 @@ impl<'input> ParserInner<'input> {
         let text = self.text;
         let mut attributes: Option<HeadingAttributes<'input>> = None;
         let mut block_end = self.tree[ix].item.end;
-        while let Some(len) = scan_inline_attribute_block(&text.as_bytes()[block_end..])
+        // Blocks are read only from the text that still follows the element, as
+        // the block pass may have taken a trailing one for the paragraph.
+        let mut text_end = block_end;
+        let mut next = self.tree[ix].next;
+        while let Some(n) = next
+            && self.tree[n].item.start == text_end
+            && matches!(
+                self.tree[n].item.body,
+                ItemBody::Text {
+                    backslash_escaped: false
+                } | ItemBody::MaybeEmphasis(..)
+            )
+        {
+            text_end = self.tree[n].item.end;
+            next = self.tree[n].next;
+        }
+        while let Some(len) = scan_inline_attribute_block(&text.as_bytes()[block_end..text_end])
             && let Some(block) =
                 parse_inside_attribute_block(&text[block_end + 1..block_end + len - 1])
         {
