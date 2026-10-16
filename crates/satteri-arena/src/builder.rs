@@ -1,3 +1,4 @@
+use crate::line_index::push_line_starts;
 use crate::{ArenaKind, ArenaNode, Document, NodePosition, StringRef, TypeDataWriter};
 
 /// Builder for an owned arena. Borrowed documents use the same builder and node layout.
@@ -8,6 +9,9 @@ pub struct DocumentBuilder<'a, K: ArenaKind> {
     arena: Document<'a, K>,
     stack: Vec<OpenNode>,
     pending_children: Vec<u32>,
+    /// Byte offset where each source line starts, built on first use by
+    /// [`Self::source_offset_at`]; empty until then.
+    line_starts: Vec<u32>,
 }
 // Each open node owns a suffix of pending_children. Closing it moves that
 // suffix into the arena and appends its ID to its parent's pending children.
@@ -38,6 +42,7 @@ impl<'a, K: ArenaKind> DocumentBuilder<'a, K> {
             pending_children: Vec::with_capacity(arena.children.capacity()),
             arena,
             stack: Vec::with_capacity(16),
+            line_starts: Vec::new(),
         }
     }
 
@@ -153,6 +158,31 @@ impl<'a, K: ArenaKind> DocumentBuilder<'a, K> {
         self.arena.nodes[parent as usize].children_start = start;
         self.arena.nodes[parent as usize].children_count = 1;
         id
+    }
+
+    /// Byte offset of a 1-based `(line, column)` in the source, the inverse of
+    /// [`crate::LineIndex::utf16_offset_at`]: columns count UTF-16 code units.
+    /// `None` when the pair is outside the source or splits a character.
+    pub fn source_offset_at(&mut self, line: u32, column: u32) -> Option<u32> {
+        if self.line_starts.is_empty() {
+            self.line_starts.push(0);
+            push_line_starts(self.arena.source().as_bytes(), &mut self.line_starts);
+        }
+        let source = self.arena.source();
+        let start = *self.line_starts.get(line.checked_sub(1)? as usize)? as usize;
+        let end = self
+            .line_starts
+            .get(line as usize)
+            .map_or(source.len(), |&next| next as usize);
+        let target = column.checked_sub(1)?;
+        let mut units = 0;
+        for (index, ch) in source[start..end].char_indices() {
+            if units == target {
+                return Some((start + index) as u32);
+            }
+            units += ch.len_utf16() as u32;
+        }
+        (units == target).then_some(end as u32)
     }
 
     #[inline(always)]
@@ -294,5 +324,28 @@ mod tests {
         assert_eq!(node.start_offset, 0);
         assert_eq!(node.end_offset, 5);
         assert_eq!(node.data_len, 1);
+    }
+
+    #[test]
+    fn source_offset_at_counts_columns_in_utf16_units() {
+        // "é" is 2 bytes and 1 unit; "😀" is 4 bytes and 2 units.
+        let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::new("# T😀tle\r\n\né😀 b".to_string());
+        assert_eq!(builder.source_offset_at(1, 1), Some(0));
+        assert_eq!(builder.source_offset_at(1, 4), Some(3)); // the 😀
+        assert_eq!(builder.source_offset_at(1, 6), Some(7)); // the `t` after it
+        assert_eq!(builder.source_offset_at(1, 9), Some(10)); // end of the line's text
+        assert_eq!(builder.source_offset_at(3, 1), Some(13)); // after the CRLF and the LF
+        assert_eq!(builder.source_offset_at(3, 4), Some(19)); // the space after é😀
+        assert_eq!(builder.source_offset_at(3, 6), Some(21)); // end of the source
+    }
+
+    #[test]
+    fn source_offset_at_rejects_positions_outside_the_source() {
+        let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::new("a😀\nb".to_string());
+        assert_eq!(builder.source_offset_at(0, 1), None);
+        assert_eq!(builder.source_offset_at(1, 0), None);
+        assert_eq!(builder.source_offset_at(1, 3), None); // inside the surrogate pair
+        assert_eq!(builder.source_offset_at(2, 3), None); // past the end of the line
+        assert_eq!(builder.source_offset_at(3, 1), None); // past the last line
     }
 }

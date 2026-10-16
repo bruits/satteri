@@ -738,6 +738,7 @@ function emitMdastOp(
     isCustom = true;
   }
   w.open(type);
+  w.position(n.position);
   if (isCustom) w.str(OF_NAME, n.type as string);
   if (typeof n.value === "string") w.str(OF_VALUE, n.value);
   if (typeof n.url === "string") w.str(OF_URL, n.url);

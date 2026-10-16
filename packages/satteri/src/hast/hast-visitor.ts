@@ -344,6 +344,7 @@ function emitHastOp(
   // Standalone HTML serialization does not need MDX support or JSON-serializable metadata.
   if (document && (n.type as string).startsWith("mdx")) return true;
   w.open(type);
+  w.position(n.position);
   if (type === HAST_ELEMENT) {
     w.str(OF_TAGNAME, typeof n.tagName === "string" ? n.tagName : "div");
     const props = n.properties;

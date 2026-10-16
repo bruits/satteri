@@ -11,6 +11,7 @@ export const OP_BOOL = 0x08;
 export const OP_DATA = 0x09;
 export const OP_PROP = 0x0a;
 export const OP_ALIGN = 0x0b;
+export const OP_POSITION = 0x0c;
 
 export const OF_VALUE = 0;
 export const OF_URL = 1;
