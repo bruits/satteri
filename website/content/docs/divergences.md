@@ -98,6 +98,20 @@ URLs are unchanged: `[www.example.com/&amp;b` links to `http://www.example.com/&
 
 For `- [ ] plain text` remark reports offsets 6–16, agreeing with Sätteri — so on its side the reported start depends on what follows the checkbox. Sätteri uses one rule for every first child. The same difference appears with `` `c` ``, `<b>i</b>` and `![a](/b)`, and for the `*`, `-` and `1.` markers alike.
 
+### Tilde definition markers
+
+With `definitionList` on, a definition can begin with a tilde as well as a colon, as the [Pandoc manual](https://pandoc.org/MANUAL.html#definition-lists) describes and as `markdown-it-deflist` and `@mdit/plugin-dl` accept. `remark-definition-list` only accepts the colon, so a tilde line stays paragraph text.
+
+```text
+Apple
+~   Red.
+```
+
+| Parser                                    | Output                                                   |
+| ----------------------------------------- | -------------------------------------------------------- |
+| `remark-parse` + `remark-definition-list` | paragraph holding both lines; `<p>Apple\n~   Red.</p>`   |
+| Sätteri                                   | description list; `<dl><dt>Apple</dt><dd>Red.</dd></dl>` |
+
 ## Rendering
 
 ### Code block `data.lang`
