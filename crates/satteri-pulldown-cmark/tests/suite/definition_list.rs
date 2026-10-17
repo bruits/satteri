@@ -421,7 +421,7 @@ fn definition_list_test_24() {
 }
 
 #[test]
-fn definition_list_test_23() {
+fn definition_list_test_25() {
     let original = r##"Apple
 ~   Red.
 "##;
@@ -435,7 +435,7 @@ fn definition_list_test_23() {
 }
 
 #[test]
-fn definition_list_test_24() {
+fn definition_list_test_26() {
     let original = r##"Apple
 :   Red.
 ~   Green.
@@ -451,7 +451,7 @@ fn definition_list_test_24() {
 }
 
 #[test]
-fn definition_list_test_25() {
+fn definition_list_test_27() {
     let original = r##"Apple
 ~~~
 Red.
@@ -466,7 +466,7 @@ Red.
 }
 
 #[test]
-fn definition_list_test_26() {
+fn definition_list_test_28() {
     let original = r##"Apple
 ~Red.
 "##;
