@@ -1231,6 +1231,11 @@ pub const OP_CODES: WireTable = WireTable {
             0x0b,
             "[len: u32 LE][ColumnAlign bytes] — table column alignment",
         ),
+        wc(
+            "OP_POSITION",
+            0x0c,
+            "[start line, start column, end line, end column: u32 LE each] — source position, columns in UTF-16 units",
+        ),
     ],
 };
 
