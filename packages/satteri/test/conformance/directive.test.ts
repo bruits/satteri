@@ -1,6 +1,9 @@
 import { describe, test, expect } from "vitest";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkDirective from "remark-directive";
 import { assertExtMdastConformance } from "./helpers.js";
-import { mdxToMdast } from "../../src/index.js";
+import { markdownToMdast, mdxToMdast } from "../../src/index.js";
 
 const DIR: ["directive"] = ["directive"];
 
@@ -346,4 +349,30 @@ describe("Directive MDAST conformance", () => {
       expect(jsx.data?._mdxExplicitJsx).toBe(true);
     });
   });
+});
+
+function attributeKeys(tree: unknown): string[] {
+  type Tree = { children: { children: { attributes?: Record<string, unknown> }[] }[] };
+  return Object.keys((tree as Tree).children[0]?.children[0]?.attributes ?? {});
+}
+
+describe("Directive attributes (match mdast-util-directive)", () => {
+  const reference = unified().use(remarkParse).use(remarkDirective);
+
+  const CASES: Array<[string, string]> = [
+    ["shortcuts and key-values keep source order", ":span[x]{#deep data-level=3 .active .b}"],
+    ["an explicit class joins the shortcut classes", ":span[x]{.a class=b .c}"],
+    ["an explicit class before a shortcut class", ":span[x]{class=b .a}"],
+    ["a later id replaces an earlier one", ":span[x]{#x id=y}"],
+    ["a repeated key keeps its first place", ":span[x]{k=1 #i k=2}"],
+  ];
+
+  for (const [name, md] of CASES) {
+    test(name, () => {
+      // Values and structure; `toEqual` does not compare key order, so check it too.
+      assertExtMdastConformance(md, DIR);
+      const satteri = markdownToMdast(md, { features: { directive: true } });
+      expect(attributeKeys(satteri)).toEqual(attributeKeys(reference.parse(md)));
+    });
+  }
 });

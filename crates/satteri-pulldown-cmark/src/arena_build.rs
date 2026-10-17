@@ -21,12 +21,12 @@ use satteri_ast::shared::{
 use crate::firstpass::{
     extend_indented_code_block, extend_inner_blockquote_through_outer_markers,
     extend_list_in_blockquote_through_marker_lines, extend_list_item_to_next_sibling_content,
-    mdast_position_end,
+    mdast_position_end, parse_inside_attribute_block,
 };
 use crate::linklabel::LinkLabel;
 #[cfg(feature = "mdx")]
 use crate::parse::JsxAttr;
-use crate::parse::{HeadingAttributes, Item, ItemBody, LinkDef, ParserInner};
+use crate::parse::{HeadingAttribute, HeadingAttributes, Item, ItemBody, LinkDef, ParserInner};
 #[cfg(feature = "mdx")]
 use crate::post_passes::MDX_EXPLICIT_JSX_DATA;
 #[cfg(feature = "mdx")]
@@ -985,6 +985,28 @@ pub(crate) fn parse_document<'a>(
                     end_column: end_col,
                 };
 
+                // Attributes written right after an inline element go on the
+                // node the element opens, which is the next one built.
+                let inline_attributes = if options.contains(Options::ENABLE_ATTRIBUTES)
+                    && matches!(
+                        item.body,
+                        ItemBody::Emphasis
+                            | ItemBody::Strong
+                            | ItemBody::SourceStrong
+                            | ItemBody::Strikethrough
+                            | ItemBody::Code(_)
+                            | ItemBody::SourceCode(_)
+                            | ItemBody::Link(_)
+                            | ItemBody::LiteralLink { .. }
+                            | ItemBody::Image(_)
+                    ) {
+                    inner
+                        .take_attribute_block_after(cur_ix)
+                        .map(|attributes| (builder.arena_ref().len() as u32, attributes))
+                } else {
+                    None
+                };
+
                 // Map ItemBody to arena node.
                 match item.body {
                     ItemBody::Paragraph | ItemBody::TightParagraph => {
@@ -1047,8 +1069,7 @@ pub(crate) fn parse_document<'a>(
                         // Conveyed as `data.hProperties`, which the mdast->hast
                         // pass emits as `id`/`class`/custom attributes.
                         if let Some(heading_ix) = heading_ix
-                            && let Some(json) =
-                                encode_heading_h_properties(&inner.allocs[heading_ix])
+                            && let Some(json) = encode_h_properties(&inner.allocs[heading_ix])
                         {
                             let heading_id = builder.current_node_id();
                             builder.arena_mut().set_node_data(heading_id, json);
@@ -1092,7 +1113,17 @@ pub(crate) fn parse_document<'a>(
                     }
                     ItemBody::FencedCodeBlock(info_ix) => {
                         let (info_cow, lang_len) = inner.allocs.take_fenced_info(info_ix);
-                        let info_str = info_cow.as_ref();
+                        let mut info_str = info_cow.as_ref();
+                        // A trailing `{...}` holds the block's attributes, as in
+                        // markdown-it-attrs; the language and meta are what precedes it.
+                        let attributes = if options.contains(Options::ENABLE_ATTRIBUTES) {
+                            split_fence_attributes(info_str).map(|(before, attributes)| {
+                                info_str = before;
+                                attributes
+                            })
+                        } else {
+                            None
+                        };
                         // The boundary was taken on raw source; whitespace a
                         // character reference decodes to stays in the language.
                         let split = (lang_len as usize).min(info_str.len());
@@ -1128,6 +1159,13 @@ pub(crate) fn parse_document<'a>(
                             _pad: [0; 3],
                         };
                         builder.set_data_current(&cd.to_bytes());
+                        if let Some(attributes) = attributes
+                            && let Some(json) =
+                                encode_h_properties(&code_attributes(attributes, lang_str))
+                        {
+                            let code_id = builder.current_node_id();
+                            builder.arena_mut().set_node_data(code_id, json);
+                        }
                         code_block_buf = Some(String::with_capacity(256));
                         inner.tree.push();
                     }
@@ -2105,6 +2143,12 @@ pub(crate) fn parse_document<'a>(
                         inner.tree.next_sibling(cur_ix);
                     }
                 }
+
+                if let Some((node_id, attributes)) = inline_attributes
+                    && let Some(json) = encode_h_properties(&attributes)
+                {
+                    builder.arena_mut().set_node_data(node_id, json);
+                }
             }
         }
     }
@@ -2686,11 +2730,52 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
     }
 }
 
+/// Splits a fenced code block's trailing attribute block off its info string,
+/// returning what precedes it. Only a block that ends the info string counts, and
+/// with several, only the last, as in markdown-it-attrs.
+fn split_fence_attributes(info: &str) -> Option<(&str, HeadingAttributes<'_>)> {
+    let info = info.trim_end();
+    let body = info.strip_suffix('}')?;
+    let open = body.rfind('{')?;
+    let inside = &body[open + 1..];
+    if inside.contains('}') {
+        return None;
+    }
+    let attributes = parse_inside_attribute_block(inside)?;
+    Some((info[..open].trim_end(), attributes))
+}
+
+/// A code block's attributes as its `<code>` gets them. The language is written
+/// before the braces, so with one the class comes first, holding the attribute
+/// classes and then `language-<lang>`, joined in markdown-it-attrs' order.
+fn code_attributes<'a>(attributes: HeadingAttributes<'a>, lang: &str) -> HeadingAttributes<'a> {
+    // A character reference can decode to whitespace, so only the first word
+    // names the language, as when the language class is rendered.
+    let Some(language) = lang
+        .split(char::is_whitespace)
+        .next()
+        .filter(|word| !word.is_empty())
+    else {
+        return attributes;
+    };
+    let mut classes = Vec::new();
+    let mut entries = Vec::with_capacity(attributes.entries.len() + 1);
+    for entry in attributes.entries {
+        match entry {
+            HeadingAttribute::Classes(attribute_classes) => classes = attribute_classes,
+            other => entries.push(other),
+        }
+    }
+    classes.push(format!("language-{language}").into());
+    entries.insert(0, HeadingAttribute::Classes(classes));
+    HeadingAttributes { entries }
+}
+
 /// JSON is hand-built to keep serde_json out of this crate's runtime deps
 /// (mirroring satteri-ast's code node_data encoder); values are source-derived,
 /// so quotes, backslashes and control chars are escaped.
-fn encode_heading_h_properties(attrs: &HeadingAttributes<'_>) -> Option<Vec<u8>> {
-    if attrs.id.is_none() && attrs.classes.is_empty() && attrs.attrs.is_empty() {
+fn encode_h_properties(attrs: &HeadingAttributes<'_>) -> Option<Vec<u8>> {
+    if attrs.entries.is_empty() {
         return None;
     }
 
@@ -2726,29 +2811,33 @@ fn encode_heading_h_properties(attrs: &HeadingAttributes<'_>) -> Option<Vec<u8>>
     buf.extend_from_slice(b"{\"hProperties\":{");
     let mut first = true;
 
-    if let Some(id) = &attrs.id {
+    // Entries are in source order, which JSON object key order carries through
+    // to the rendered attributes.
+    for entry in &attrs.entries {
         separator(&mut buf, &mut first);
-        buf.extend_from_slice(b"\"id\":");
-        json_string(id, &mut buf);
-    }
-    if !attrs.classes.is_empty() {
-        separator(&mut buf, &mut first);
-        buf.extend_from_slice(b"\"className\":[");
-        for (i, class) in attrs.classes.iter().enumerate() {
-            if i > 0 {
-                buf.push(b',');
+        match entry {
+            HeadingAttribute::Id(id) => {
+                buf.extend_from_slice(b"\"id\":");
+                json_string(id, &mut buf);
             }
-            json_string(class, &mut buf);
+            HeadingAttribute::Classes(classes) => {
+                buf.extend_from_slice(b"\"className\":[");
+                for (i, class) in classes.iter().enumerate() {
+                    if i > 0 {
+                        buf.push(b',');
+                    }
+                    json_string(class, &mut buf);
+                }
+                buf.push(b']');
+            }
+            HeadingAttribute::Other(key, value) => {
+                json_string(key, &mut buf);
+                buf.push(b':');
+                // Value-less (`{myattr}`) renders as `myattr=""`; a JSON `true` would
+                // surface as `myattr="true"` through a real rehype pipeline.
+                json_string(value.as_deref().unwrap_or(""), &mut buf);
+            }
         }
-        buf.push(b']');
-    }
-    for (key, value) in &attrs.attrs {
-        separator(&mut buf, &mut first);
-        json_string(key, &mut buf);
-        buf.push(b':');
-        // Value-less (`{myattr}`) renders as `myattr=""`; a JSON `true` would
-        // surface as `myattr="true"` through a real rehype pipeline.
-        json_string(value.as_deref().unwrap_or(""), &mut buf);
     }
 
     buf.extend_from_slice(b"}}");

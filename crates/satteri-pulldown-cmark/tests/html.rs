@@ -323,7 +323,7 @@ fn heading_attributes_emit_custom_attributes() {
 #[test]
 fn heading_attributes_merge_shorthand_and_explicit() {
     let original = "## Heading {.c1 #x class=c2 id=y}";
-    let expected = "<h2 id=\"y\" class=\"c1 c2\">Heading</h2>\n";
+    let expected = "<h2 class=\"c1 c2\" id=\"y\">Heading</h2>\n";
     assert_eq!(expected, parse_to_html_with_heading_attrs(original));
 }
 
