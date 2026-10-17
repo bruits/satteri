@@ -409,12 +409,11 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
 
         Some(MdastNodeType::Code) => {
             let code_data = decode_code_data(view.get_type_data(node_id));
-            sink.open_source_element("pre", node_id);
-            if sink.finish_source_attrs() == Children::Replaced {
-                sink.close_element("pre");
-                return;
-            }
-            sink.open_element("code", Pos::Node(node_id));
+            // As in mdast-util-to-hast, the node's data applies to the `<code>`,
+            // overlaying its language class, and the `<pre>` stays bare.
+            sink.open_element("pre", Pos::Node(node_id));
+            sink.finish_attrs();
+            sink.open_source_element("code", node_id);
             if code_data.lang.len > 0 {
                 let lang = view.get_str(code_data.lang);
                 // A character reference can decode to whitespace, so only the first word names the language.
@@ -424,7 +423,11 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
                     AttrValue::Prefixed(PROP_SPACE_SEP, "language-", first),
                 );
             }
-            sink.finish_attrs();
+            if sink.finish_source_attrs() == Children::Replaced {
+                sink.close_element("code");
+                sink.close_element("pre");
+                return;
+            }
             sink.code_info(code_data.lang, code_data.meta);
             sink.code_block_text(view.get_str(code_data.value), Pos::None);
             sink.close_element("code");
@@ -880,7 +883,11 @@ fn emit_table_row<S: ConvertSink>(
     depth: u32,
 ) {
     let view = ctx.view;
-    open_plain(sink, "tr", Pos::Node(row_id));
+    sink.open_source_element("tr", row_id);
+    if sink.finish_source_attrs() == Children::Replaced {
+        sink.close_element("tr");
+        return;
+    }
     sink.newline();
     let all_cells = view.get_children(row_id);
     // mdast-util-to-hast truncates source cells past the header column count and pads underflow.
@@ -893,31 +900,38 @@ fn emit_table_row<S: ConvertSink>(
     let cell_ids = &all_cells[..max_cells];
     let cell_tag = if is_header { "th" } else { "td" };
     for (col_idx, &cell_id) in cell_ids.iter().enumerate() {
-        open_cell(
+        let children = open_cell(
             sink,
             cell_tag,
             alignments.get(col_idx).copied(),
-            Pos::Node(cell_id),
+            Some(cell_id),
         );
-        emit_children(cell_id, ctx, sink, depth);
+        if children == Children::Recurse {
+            emit_children(cell_id, ctx, sink, depth);
+        }
         sink.close_element(cell_tag);
         sink.newline();
     }
     for col_idx in cell_ids.len()..column_count {
-        open_cell(sink, cell_tag, alignments.get(col_idx).copied(), Pos::None);
+        open_cell(sink, cell_tag, alignments.get(col_idx).copied(), None);
         sink.close_element(cell_tag);
         sink.newline();
     }
     sink.close_element("tr");
 }
 
+/// Opens a cell; a source cell's data applies to it, as in mdast-util-to-hast,
+/// while a padding cell has none.
 fn open_cell<S: ConvertSink>(
     sink: &mut S,
     cell_tag: &'static str,
     align: Option<ColumnAlign>,
-    pos: Pos,
-) {
-    sink.open_element(cell_tag, pos);
+    cell_id: Option<u32>,
+) -> Children {
+    match cell_id {
+        Some(cell_id) => sink.open_source_element(cell_tag, cell_id),
+        None => sink.open_element(cell_tag, Pos::None),
+    }
     let style = match align.unwrap_or(ColumnAlign::None) {
         ColumnAlign::None => None,
         ColumnAlign::Left => Some("text-align: left"),
@@ -927,7 +941,12 @@ fn open_cell<S: ConvertSink>(
     if let Some(style) = style {
         sink.attr(STYLE, AttrValue::text(style));
     }
-    sink.finish_attrs();
+    if cell_id.is_some() {
+        sink.finish_source_attrs()
+    } else {
+        sink.finish_attrs();
+        Children::Recurse
+    }
 }
 
 fn emit_footnote_reference<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S) {

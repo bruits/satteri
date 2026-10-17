@@ -86,6 +86,7 @@ use serde::{Deserialize, Serialize};
 pub mod utils;
 
 pub mod arena_build;
+mod block_attributes;
 mod entities;
 mod firstpass;
 mod linklabel;
@@ -798,6 +799,9 @@ bitflags::bitflags! {
         /// custom attributes `myattr` (without value) and
         /// `other_attr` with value `myvalue`.
         /// Note that ID, classes, and custom attributes should be space-separated.
+        ///
+        /// Prefer [`ENABLE_ATTRIBUTES`](Self::ENABLE_ATTRIBUTES), which implies
+        /// this and reads attributes on other elements too.
         const ENABLE_HEADING_ATTRIBUTES = 1 << 6;
         /// Metadata blocks in YAML style, i.e.:
         /// - starting with a `---` line
@@ -839,10 +843,21 @@ bitflags::bitflags! {
         const ENABLE_DIRECTIVE = 1 << 16;
         /// MDX: enables JSX elements, expressions, and ESM import/export.
         const ENABLE_MDX = 1 << 17;
+        /// Curly-brace attributes (`{#id .class key=value}`) on more elements
+        /// than headings: fenced code blocks (` ```js {.class} `), inline
+        /// elements (`*em*{.class}`), and paragraphs, list items, lists,
+        /// blockquotes, tables, table cells and thematic breaks. Implies
+        /// [`ENABLE_HEADING_ATTRIBUTES`](Self::ENABLE_HEADING_ATTRIBUTES).
+        const ENABLE_ATTRIBUTES = 1 << 24;
     }
 }
 
 impl Options {
+    pub(crate) fn has_heading_attributes(&self) -> bool {
+        self.contains(Options::ENABLE_HEADING_ATTRIBUTES)
+            || self.contains(Options::ENABLE_ATTRIBUTES)
+    }
+
     pub(crate) fn has_smart_quotes(&self) -> bool {
         self.contains(Options::ENABLE_SMART_PUNCTUATION)
             || self.contains(Options::ENABLE_SMART_QUOTES)

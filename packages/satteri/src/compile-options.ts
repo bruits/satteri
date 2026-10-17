@@ -1,6 +1,7 @@
 import type { markdownToHtmlFast } from "#binding";
 import type { Features, MdxOnlyOptions } from "./compile-types.js";
 import {
+  ENABLE_ATTRIBUTES,
   ENABLE_DEFINITION_LIST,
   ENABLE_DIRECTIVE,
   ENABLE_FOOTNOTES,
@@ -57,6 +58,7 @@ function featuresToParseOptions(features: Features): number {
   }
 
   if (features.headingAttributes) options |= ENABLE_HEADING_ATTRIBUTES;
+  if (features.attributes) options |= ENABLE_ATTRIBUTES;
   if (features.directive) options |= ENABLE_DIRECTIVE;
   if (features.superscript) options |= ENABLE_SUPERSCRIPT;
   if (features.subscript) options |= ENABLE_SUBSCRIPT;
