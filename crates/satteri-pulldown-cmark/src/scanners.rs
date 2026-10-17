@@ -288,9 +288,10 @@ impl<'a> LineStart<'a> {
 
     /// Scan a definition marker.
     ///
-    /// Definition markers are single colons, preceded by at most three spaces
-    /// and followed by at most three spaces. The indentation of following
-    /// lines is equal to the whole size of the marker, including the colon.
+    /// Definition markers are a single colon or tilde, preceded by at most
+    /// three spaces and followed by at most three spaces. The indentation of
+    /// following lines is equal to the whole size of the marker, including the
+    /// colon or tilde.
     ///
     /// If one is found, it will make the preceding paragraph into a definition
     /// list title.
@@ -302,11 +303,11 @@ impl<'a> LineStart<'a> {
         indent: usize,
     ) -> Option<usize> {
         let save = self.save_cursor();
-        if self.scan_ch(b':') {
-            // A marker is a lone colon followed by whitespace or end-of-line
-            // (matching pandoc / mdast-util-definition-list). This rejects a
-            // colon run (`::`), so directive fences survive when both extensions
-            // are on, and a colon glued to content (`:tada:`).
+        if self.scan_ch(b':') || self.scan_ch(b'~') {
+            // A marker is a lone colon or tilde followed by whitespace or
+            // end-of-line (matching pandoc). This rejects a run (`::`, `~~~`),
+            // so directive and code fences survive when both extensions are on,
+            // and a marker glued to content (`:tada:`, `~sub~`).
             match self.bytes.get(self.ix) {
                 None | Some(&(b' ' | b'\t' | b'\r' | b'\n')) => {}
                 _ => {
@@ -505,12 +506,12 @@ pub(crate) fn is_ascii_whitespace(c: u8) -> bool {
 }
 
 /// Whether `bytes` (positioned at the marker, indentation already consumed)
-/// begins with a definition-list marker: a lone colon then whitespace or
-/// end-of-line. Must stay in sync with the marker scanner
+/// begins with a definition-list marker: a lone colon or tilde then
+/// whitespace or end-of-line. Must stay in sync with the marker scanner
 /// [`LineStart::scan_definition_list_definition_marker_with_indent`] so the
 /// paragraph-interrupt check accepts exactly what the scanner will consume.
 pub(crate) fn is_definition_list_marker(bytes: &[u8]) -> bool {
-    bytes.first() == Some(&b':')
+    matches!(bytes.first(), Some(&(b':' | b'~')))
         && matches!(bytes.get(1), None | Some(&(b' ' | b'\t' | b'\r' | b'\n')))
 }
 
