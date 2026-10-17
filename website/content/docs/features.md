@@ -15,7 +15,6 @@ markdownToHtml(source, {
     gfm: true,
     frontmatter: true,
     math: false,
-    headingAttributes: false,
     attributes: false,
     directive: false,
     superscript: false,
@@ -143,11 +142,7 @@ Sätteri does not currently parse the TOML or YAML.
 
 ## Heading attributes
 
-Default: `false`.
-
-```ts
-headingAttributes?: boolean
-```
+Enabled by [`attributes`](#attributes). The older `headingAttributes` flag still enables heading attributes on their own, but it is deprecated.
 
 Recognizes curly-brace attribute syntax on headings:
 

@@ -798,6 +798,9 @@ bitflags::bitflags! {
         /// custom attributes `myattr` (without value) and
         /// `other_attr` with value `myvalue`.
         /// Note that ID, classes, and custom attributes should be space-separated.
+        ///
+        /// Prefer [`ENABLE_ATTRIBUTES`](Self::ENABLE_ATTRIBUTES), which implies
+        /// this and reads attributes on other elements too.
         const ENABLE_HEADING_ATTRIBUTES = 1 << 6;
         /// Metadata blocks in YAML style, i.e.:
         /// - starting with a `---` line
