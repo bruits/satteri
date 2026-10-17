@@ -75,6 +75,7 @@ interface PluginFactoryContext {
   readonly sourceFormat: "markdown" | "mdx";
   readonly source: string;
   readonly data: Data;
+  readonly features: Features;
 }
 ```
 
@@ -84,7 +85,7 @@ const onlyChangelogs = (ctx) => (ctx.fileURL?.pathname.endsWith("/CHANGELOG.md")
 markdownToHtml(source, { mdastPlugins: [onlyChangelogs, myPlugin] });
 ```
 
-Only what is known before parsing is available: there is no tree and no frontmatter yet. `source` is the unparsed document, meant for cheap checks such as "does this contain a code fence at all", not for parsing Markdown by hand. `data` is the same bag the visitors later read and write through `ctx.data`, so a factory can seed it for the plugins that run after it.
+Only what is known before parsing is available: there is no tree and no frontmatter yet. `source` is the unparsed document, meant for cheap checks such as "does this contain a code fence at all", not for parsing Markdown by hand. `data` is the same bag the visitors later read and write through `ctx.data`, so a factory can seed it for the plugins that run after it. `features` is the `features` option as given (or `{}`, the defaults), so a plugin that compiles a fragment of its own can parse it with the same syntax as the document: `markdownToMdast(fragment, { features: ctx.features })`.
 
 Skipping here rather than returning early inside a visitor is what makes it worth doing: a plugin that is never added registers no visitors, and the pipeline picks its parsing and rendering strategy from the plugins that remain. A document that skips every plugin is compiled by the same fast path as one that was passed no plugins, and position tracking is skipped unless a plugin that actually runs asks for it. A factory returning a skip value drops the whole bundle it would otherwise have returned, so a preset can enable or disable itself as a unit. Factories still run once per compile even when they skip, so keep them cheap.
 

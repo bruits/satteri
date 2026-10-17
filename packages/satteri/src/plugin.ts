@@ -1,5 +1,6 @@
 import type { MdastPluginInstance } from "./mdast/mdast-visitor.js";
 import type { HastVisitorInstance } from "./hast/hast-visitor.js";
+import type { Features } from "./compile-types.js";
 import type { Data, SourceFormat } from "./types.js";
 
 /**
@@ -18,6 +19,10 @@ export interface PluginFactoryContext {
   readonly source: string;
   /** The document-level data bag, before any plugin has run. */
   readonly data: Data;
+  /** The `features` compile option, or `{}` (the defaults) when none was
+   *  given. Pass it on to compile a fragment with the same syntax as the
+   *  document. */
+  readonly features: Features;
 }
 
 type RequireAtLeastOne<T, K extends keyof T> = Omit<T, K> &
@@ -72,6 +77,7 @@ export function normalizePlugins<D>(
   fileURL: URL | undefined,
   sourceFormat: SourceFormat,
   data: Data,
+  features?: Features,
 ): D[] {
   const out: D[] = [];
   // Built lazily so a list with no factories allocates no context.
@@ -96,6 +102,7 @@ export function normalizePlugins<D>(
         // The parser drops a leading BOM, so `ctx.source` in a visitor lacks it too.
         source: source.startsWith("\uFEFF") ? source.slice(1) : source,
         data,
+        features: features ?? {},
       });
       walk((entry as (ctx: PluginFactoryContext) => PluginEntry<D>)(ctx), factoryDepth - 1);
       return;
