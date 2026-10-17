@@ -1405,6 +1405,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
     fn parse_paragraph(&mut self, start_ix: usize, tasklist_marker: Option<Item>) -> usize {
         self.list_interrupted_paragraph = false;
+        // An empty definition ends at the blank line after it (an item begins with
+        // at most one blank line), but its list goes on: close the definition here
+        // so the paragraph can be the next term, as after a definition with content.
+        if self.last_line_blank
+            && self.begin_list_item.is_some()
+            && let Some(ItemBody::DefinitionListDefinition(..)) =
+                self.tree.peek_up().map(|ix| self.tree[ix].item.body)
+        {
+            self.finish_empty_list_item();
+        }
         let body = if let Some(ItemBody::DefinitionList(_)) =
             self.tree.peek_up().map(|idx| self.tree[idx].item.body)
         {

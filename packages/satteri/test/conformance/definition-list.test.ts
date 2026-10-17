@@ -522,6 +522,9 @@ describe("definition list: conformance vs remark-definition-list", () => {
     ["inline markup in term and definition", "*Apple*\n:   A **fruit**.\n"],
     ["definition containing a nested list", "Term\n:   intro\n\n    - a\n    - b\n"],
     ["definition list between paragraphs", "before\n\nTerm\n:   def\n\nafter\n"],
+    ["empty definition, then another term", "Apple\n:\n\nOrange\n:\n"],
+    ["empty definition, then a term with a definition", "Apple\n:\n\nOrange\n:   Orange.\n"],
+    ["empty definition, then a paragraph", "Apple\n:\n\nJust text.\n"],
   ];
 
   describe("mdast structure matches the reference", () => {
@@ -539,6 +542,9 @@ describe("definition list: conformance vs remark-definition-list", () => {
       ["one term with two definitions", "Apple\n:   Red.\n:   Green.\n"],
       ["two terms sharing a definition", "T1\nT2\n:   d\n"],
       ["inline markup in term and definition", "*Apple*\n:   A **fruit**.\n"],
+      ["empty definition, then another term", "Apple\n:\n\nOrange\n:\n"],
+      ["empty definition, then a term with a definition", "Apple\n:\n\nOrange\n:   Orange.\n"],
+      ["empty definition, then a paragraph", "Apple\n:\n\nJust text.\n"],
     ];
     for (const [name, md] of HTML_CASES) {
       test(name, () => {

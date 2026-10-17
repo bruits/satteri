@@ -258,6 +258,39 @@ Apple
 </dl>
 ````````````````````````````````
 
+An empty definition does not end the list; the next term continues it, as it
+does after a definition with content:
+
+```````````````````````````````` example_deflists
+Apple
+:
+
+Orange
+:
+.
+<dl>
+<dt>Apple</dt>
+<dd></dd>
+<dt>Orange</dt>
+<dd></dd>
+</dl>
+````````````````````````````````
+
+A paragraph after an empty definition that no definition follows ends the list:
+
+```````````````````````````````` example_deflists
+Apple
+:
+
+Just text.
+.
+<dl>
+<dt>Apple</dt>
+<dd></dd>
+</dl>
+<p>Just text.</p>
+````````````````````````````````
+
 A definition list nests inside a block quote:
 
 ```````````````````````````````` example_deflists
