@@ -35,7 +35,7 @@ multiple! {.myclass1 myattr #myh3 otherattr=value .myclass2}
 <h1 id="myh1">with the ID</h1>
 <h2 class="myclass">with a class</h2>
 <h1 myattr="myvalue">with a custom attribute</h1>
-<h2 id="myh3" class="myclass1 myclass2" myattr="" otherattr="value">multiple!</h2>
+<h2 class="myclass1 myclass2" myattr="" id="myh3" otherattr="value">multiple!</h2>
 ````````````````````````````````
 
 Basic usage with ATX headings:
@@ -49,7 +49,7 @@ Basic usage with ATX headings:
 <h1 id="myh1">with the ID</h1>
 <h2 class="myclass">with a class</h2>
 <h4 myattr="myvalue">with a custom attribute</h4>
-<h3 id="myh3" class="myclass1 myclass2" myattr="" otherattr="value">multiple!</h3>
+<h3 class="myclass1 myclass2" myattr="" id="myh3" otherattr="value">multiple!</h3>
 ````````````````````````````````
 
 If an ATX heading has closing `#`s, the attribute block should be placed after them.
@@ -179,7 +179,7 @@ in the same way as a single whitespace.
 ### H3 {     .myclass}
 .
 <h1 id="id1">H1</h1>
-<h2 id="id2" class="myclass">H2</h2>
+<h2 class="myclass" id="id2">H2</h2>
 <h3 class="myclass">H3</h3>
 ````````````````````````````````
 
@@ -288,8 +288,8 @@ When both an ID and classes are specified, ID attribute is always emitted first.
 # H1 {.myclass #myid}
 ## H2 {.z #m .a}
 .
-<h1 id="myid" class="myclass">H1</h1>
-<h2 id="m" class="z a">H2</h2>
+<h1 class="myclass" id="myid">H1</h1>
+<h2 class="z a" id="m">H2</h2>
 ````````````````````````````````
 
 ## Explicit `id` and `class`
@@ -304,7 +304,7 @@ separate attributes. The last id wins; classes accumulate in source order.
 .
 <h1 id="bar">H1</h1>
 <h2 class="c1 c2 c3">H2</h2>
-<h3 id="y" class="c1 c2">H3</h3>
+<h3 class="c1 c2" id="y">H3</h3>
 ````````````````````````````````
 
 # Custom attributes
@@ -320,7 +320,7 @@ that characters are their value.
 ## H2 {#myid unknown this#is.ignored attr=value .myclass}
 .
 <h1 foo="">H1</h1>
-<h2 id="myid" class="myclass" unknown="" this#is.ignored="" attr="value">H2</h2>
+<h2 id="myid" unknown="" this#is.ignored="" attr="value" class="myclass">H2</h2>
 ````````````````````````````````
 
 ```````````````````````````````` example
@@ -332,7 +332,7 @@ that characters are their value.
 ```````````````````````````````` example
 #### Header {#id myattr= .class1 other_attr=false}
 .
-<h4 id="id" class="class1" myattr="" other_attr="false">Header</h4>
+<h4 id="id" myattr="" class="class1" other_attr="false">Header</h4>
 ````````````````````````````````
 
 A value may be wrapped in matching `"` or `'` quotes, letting it contain spaces.
@@ -345,8 +345,8 @@ The quotes are stripped; the other quote character is kept literally.
 #### H4 {note="it's fine" data-eq="a=b=c"}
 .
 <h1 data-x="quoted value">H1</h1>
-<h2 id="id" title="it can have spaces">H2</h2>
-<h3 class="cls" a="x" b="y z">H3</h3>
+<h2 title="it can have spaces" id="id">H2</h2>
+<h3 a="x" b="y z" class="cls">H3</h3>
 <h4 note="it&#x27;s fine" data-eq="a=b=c">H4</h4>
 ````````````````````````````````
 
@@ -701,4 +701,16 @@ Non-ASCII whitespaces don't work as separators.
 .
 <h1 id="en-space .myclass">EN SPACE (U+2002)</h1>
 <h2 id="ideographic-space　.myclass">IDEOGRAPHIC SPACE (U+3000)</h2>
+````````````````````````````````
+
+Attributes keep the order they are written in, as in mdast-util-directive: a key
+keeps the place it first appeared, a later value replaces it, and classes join
+the first class:
+
+```````````````````````````````` example
+# Heading {.a #b data-x=1 .c}
+## Heading {k=1 #i k=2 id=j}
+.
+<h1 class="a c" id="b" data-x="1">Heading</h1>
+<h2 k="2" id="j">Heading</h2>
 ````````````````````````````````

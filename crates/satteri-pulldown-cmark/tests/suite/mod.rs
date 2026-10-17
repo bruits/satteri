@@ -3,6 +3,7 @@
 
 pub use super::test_markdown_html;
 
+mod attributes;
 mod container_extensions;
 mod definition_list;
 mod footnotes;

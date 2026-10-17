@@ -1,0 +1,113 @@
+# Attributes
+
+`Options::ENABLE_ATTRIBUTES` reads curly-brace attributes (`{#id .class key=value}`)
+on more elements than headings, with the same syntax and merge rules as heading
+attributes. It also enables heading attributes:
+
+```````````````````````````````` example
+# Heading {.title #top}
+.
+<h1 class="title" id="top">Heading</h1>
+````````````````````````````````
+
+## Fenced code
+
+A fenced code block's info string can end with an attribute block. The
+attributes go on the `<code>`, as in markdown-it-attrs:
+
+```````````````````````````````` example
+```js {#snippet data-lang=javascript}
+x
+```
+.
+<pre><code class="language-js" id="snippet" data-lang="javascript">x
+</code></pre>
+````````````````````````````````
+
+The language is written before the braces, so its class comes first, holding
+any attribute classes followed by the language class:
+
+```````````````````````````````` example
+```js {.highlight}
+x
+```
+
+```ts {.foo #bar data-lang=typescript}
+x
+```
+.
+<pre><code class="highlight language-js">x
+</code></pre>
+<pre><code class="foo language-ts" id="bar" data-lang="typescript">x
+</code></pre>
+````````````````````````````````
+
+Without a language, the attributes keep the order they are written in:
+
+```````````````````````````````` example
+``` {#plain .text}
+x
+```
+.
+<pre><code id="plain" class="text">x
+</code></pre>
+````````````````````````````````
+
+The block needs no space before it, and tilde fences take attributes too:
+
+```````````````````````````````` example
+```js{.a}
+x
+```
+
+~~~js {.a}
+x
+~~~
+.
+<pre><code class="a language-js">x
+</code></pre>
+<pre><code class="a language-js">x
+</code></pre>
+````````````````````````````````
+
+Text before the block stays in the info string's meta, and only the last of
+several blocks is read:
+
+```````````````````````````````` example
+```js title="x" {.a}
+x
+```
+
+```js {.a} {.b}
+x
+```
+.
+<pre><code class="a language-js">x
+</code></pre>
+<pre><code class="b language-js">x
+</code></pre>
+````````````````````````````````
+
+A block that doesn't end the info string, an empty block, and an unclosed one
+are not attributes:
+
+```````````````````````````````` example
+```js {.a} extra
+x
+```
+
+```js {}
+x
+```
+
+```js {.a
+x
+```
+.
+<pre><code class="language-js">x
+</code></pre>
+<pre><code class="language-js">x
+</code></pre>
+<pre><code class="language-js">x
+</code></pre>
+````````````````````````````````
