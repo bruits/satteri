@@ -21,7 +21,9 @@ const __sharedMemory = new WebAssembly.Memory({
   shared: true,
 })
 
-const __wasmFile = await fetch(__wasmUrl).then((res) => res.arrayBuffer())
+const __wasmFile =
+  globalThis.__SATTERI_WASM_MODULE__ ??
+  (await fetch(__wasmUrl).then((res) => res.arrayBuffer()))
 
 const {
   instance: __napiInstance,
