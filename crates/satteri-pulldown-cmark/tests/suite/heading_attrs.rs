@@ -17,7 +17,7 @@ multiple! {.myclass1 myattr #myh3 otherattr=value .myclass2}
     let expected = r##"<h1 id="myh1">with the ID</h1>
 <h2 class="myclass">with a class</h2>
 <h1 myattr="myvalue">with a custom attribute</h1>
-<h2 id="myh3" class="myclass1 myclass2" myattr="" otherattr="value">multiple!</h2>
+<h2 class="myclass1 myclass2" myattr="" id="myh3" otherattr="value">multiple!</h2>
 "##;
 
     test_markdown_html(original, expected, 64, false, false, false, false, false, false);
@@ -33,7 +33,7 @@ fn heading_attrs_test_2() {
     let expected = r##"<h1 id="myh1">with the ID</h1>
 <h2 class="myclass">with a class</h2>
 <h4 myattr="myvalue">with a custom attribute</h4>
-<h3 id="myh3" class="myclass1 myclass2" myattr="" otherattr="value">multiple!</h3>
+<h3 class="myclass1 myclass2" myattr="" id="myh3" otherattr="value">multiple!</h3>
 "##;
 
     test_markdown_html(original, expected, 64, false, false, false, false, false, false);
@@ -155,7 +155,7 @@ fn heading_attrs_test_10() {
 ### H3 {     .myclass}
 "##;
     let expected = r##"<h1 id="id1">H1</h1>
-<h2 id="id2" class="myclass">H2</h2>
+<h2 class="myclass" id="id2">H2</h2>
 <h3 class="myclass">H3</h3>
 "##;
 
@@ -263,8 +263,8 @@ fn heading_attrs_test_19() {
     let original = r##"# H1 {.myclass #myid}
 ## H2 {.z #m .a}
 "##;
-    let expected = r##"<h1 id="myid" class="myclass">H1</h1>
-<h2 id="m" class="z a">H2</h2>
+    let expected = r##"<h1 class="myclass" id="myid">H1</h1>
+<h2 class="z a" id="m">H2</h2>
 "##;
 
     test_markdown_html(original, expected, 64, false, false, false, false, false, false);
@@ -278,7 +278,7 @@ fn heading_attrs_test_20() {
 "##;
     let expected = r##"<h1 id="bar">H1</h1>
 <h2 class="c1 c2 c3">H2</h2>
-<h3 id="y" class="c1 c2">H3</h3>
+<h3 class="c1 c2" id="y">H3</h3>
 "##;
 
     test_markdown_html(original, expected, 64, false, false, false, false, false, false);
@@ -287,10 +287,10 @@ fn heading_attrs_test_20() {
 #[test]
 fn heading_attrs_test_21() {
     let original = r##"# H1 {foo}
-## H2 {#myid unknown this#is.ignored attr=value .myclass}
+## H2 {#myid unknown attr=value .myclass}
 "##;
     let expected = r##"<h1 foo="">H1</h1>
-<h2 id="myid" class="myclass" unknown="" this#is.ignored="" attr="value">H2</h2>
+<h2 id="myid" unknown="" attr="value" class="myclass">H2</h2>
 "##;
 
     test_markdown_html(original, expected, 64, false, false, false, false, false, false);
@@ -310,7 +310,7 @@ fn heading_attrs_test_22() {
 fn heading_attrs_test_23() {
     let original = r##"#### Header {#id myattr= .class1 other_attr=false}
 "##;
-    let expected = r##"<h4 id="id" class="class1" myattr="" other_attr="false">Header</h4>
+    let expected = r##"<h4 id="id" myattr="" class="class1" other_attr="false">Header</h4>
 "##;
 
     test_markdown_html(original, expected, 64, false, false, false, false, false, false);
@@ -324,8 +324,8 @@ fn heading_attrs_test_24() {
 #### H4 {note="it's fine" data-eq="a=b=c"}
 "##;
     let expected = r##"<h1 data-x="quoted value">H1</h1>
-<h2 id="id" title="it can have spaces">H2</h2>
-<h3 class="cls" a="x" b="y z">H3</h3>
+<h2 title="it can have spaces" id="id">H2</h2>
+<h3 a="x" b="y z" class="cls">H3</h3>
 <h4 note="it&#x27;s fine" data-eq="a=b=c">H4</h4>
 "##;
 
@@ -648,6 +648,32 @@ fn heading_attrs_test_46() {
 "##;
     let expected = r##"<h1 id="en-space .myclass">EN SPACE (U+2002)</h1>
 <h2 id="ideographic-space　.myclass">IDEOGRAPHIC SPACE (U+3000)</h2>
+"##;
+
+    test_markdown_html(original, expected, 64, false, false, false, false, false, false);
+}
+
+#[test]
+fn heading_attrs_test_47() {
+    let original = r##"# Heading {.a #b data-x=1 .c}
+## Heading {k=1 #i k=2 id=j}
+"##;
+    let expected = r##"<h1 class="a c" id="b" data-x="1">Heading</h1>
+<h2 k="2" id="j">Heading</h2>
+"##;
+
+    test_markdown_html(original, expected, 64, false, false, false, false, false, false);
+}
+
+#[test]
+fn heading_attrs_test_48() {
+    let original = r##"# Ruby {base|reading}
+## H2 {#id this#is.text}
+### H3 {data-x=1 k|y=2}
+"##;
+    let expected = r##"<h1>Ruby {base|reading}</h1>
+<h2>H2 {#id this#is.text}</h2>
+<h3>H3 {data-x=1 k|y=2}</h3>
 "##;
 
     test_markdown_html(original, expected, 64, false, false, false, false, false, false);
