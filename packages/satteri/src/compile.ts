@@ -94,6 +94,7 @@ export function markdownToHtml(
     fileURL,
     "markdown",
     data,
+    features,
   );
   const hastPlugins = normalizePlugins(
     options.hastPlugins ?? [],
@@ -102,6 +103,7 @@ export function markdownToHtml(
     fileURL,
     "markdown",
     data,
+    features,
   );
   const hastMayHaveStubs = hastPlugins.length > 0;
   const { parseOptions, convertOptions: nativeConvertOptions } = featuresToNative(features);
@@ -274,6 +276,7 @@ function toJsImpl(
     fileURL,
     sourceFormat,
     data,
+    features,
   );
   const hastPlugins = normalizePlugins(
     hastInput,
@@ -282,6 +285,7 @@ function toJsImpl(
     fileURL,
     sourceFormat,
     data,
+    features,
   );
   const hastMayHaveStubs = hastPlugins.length > 0;
   const mdxOptions = mdxOptionsToNative(mdxFields);
@@ -480,6 +484,7 @@ function toMdastImpl(
     fileURL,
     sourceFormat,
     data,
+    features,
   );
   const { parseOptions } = featuresToNative(features);
 
@@ -526,6 +531,7 @@ function toHastImpl(
     fileURL,
     sourceFormat,
     data,
+    features,
   );
   const hastPlugins = normalizePlugins(
     options.hastPlugins ?? [],
@@ -534,6 +540,7 @@ function toHastImpl(
     fileURL,
     sourceFormat,
     data,
+    features,
   );
   const { parseOptions, convertOptions } = featuresToNative(features);
 
