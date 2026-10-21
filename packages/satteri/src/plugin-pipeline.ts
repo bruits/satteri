@@ -32,13 +32,14 @@ import {
 } from "./mdast/mdast-visitor.js";
 import type { HastPluginDefinition, MdastPluginDefinition } from "./plugin.js";
 import type { Data, SourceFormat } from "./types.js";
+import type { PluginOptions } from "./visitor-shared.js";
 
 export type MdastPipelineResult = {
   handle: MdastHandle;
   // Deferring the final apply lets the caller fuse it with rendering or compilation.
   pendingCommands?: Uint8Array;
   // Attribute dropped-transform warnings to the plugin whose apply was deferred.
-  lastPlugin?: { name?: string };
+  lastPlugin?: { name?: string; options?: PluginOptions };
 };
 
 // Invalidate retained child stubs before their arena is freed.
@@ -49,10 +50,10 @@ export function releaseHandle(handle: AnyHandle, invalidateStubs: boolean): void
 
 export function warnIfDroppedTransforms(
   dropped: number | undefined,
-  plugin: { name?: string } | null | undefined,
+  plugin: { name?: string; options?: PluginOptions } | null | undefined,
   kind: "mdast" | "hast",
 ): void {
-  if (!dropped || !plugin) return;
+  if (!dropped || !plugin || (plugin.options && !plugin.options.warnings)) return;
   const name = plugin.name ?? "<anonymous>";
   const noun = dropped === 1 ? "transform" : "transforms";
   console.warn(
@@ -153,7 +154,7 @@ export const EMPTY_COMMAND_BUFFER = new Uint8Array(0);
 export type CollectedHastCommands = {
   commands: Uint8Array;
   // Attribute dropped-transform warnings to the plugin whose apply was deferred.
-  lastPlugin: { name?: string } | null;
+  lastPlugin: { name?: string; options?: PluginOptions } | null;
 };
 
 const NO_HAST_COMMANDS: CollectedHastCommands = {
