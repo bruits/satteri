@@ -3641,7 +3641,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let header_start = ix;
         let header_node_idx = self.tree.push(); // so that we can set the endpoint later
 
-        let attr_block = if self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES) {
+        let attr_block = if self.options.has_heading_attributes() {
             let header_end = header_start + scan_nextline(&bytes[header_start..]);
             self.extract_and_parse_heading_attribute_block(header_start, header_end)
                 .map(|block| (block, header_end))
@@ -4147,7 +4147,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         header_start: usize,
         header_end: usize,
     ) -> Option<HeadingAttrBlock<'a>> {
-        if !self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES) {
+        if !self.options.has_heading_attributes() {
             return None;
         }
 
@@ -5907,8 +5907,6 @@ fn scan_directive_attributes(bytes: &[u8]) -> Option<(Vec<(CowStr<'_>, CowStr<'_
 
 fn parse_directive_attrs_inner(bytes: &[u8]) -> Vec<(CowStr<'_>, CowStr<'_>)> {
     let mut attrs: Vec<(CowStr<'_>, CowStr<'_>)> = Vec::new();
-    let mut classes: Vec<&str> = Vec::new();
-    let mut id: Option<&str> = None;
     let text = core::str::from_utf8(bytes).unwrap_or("");
     let mut i = 0;
 
@@ -5924,7 +5922,7 @@ fn parse_directive_attrs_inner(bytes: &[u8]) -> Vec<(CowStr<'_>, CowStr<'_>)> {
                     i += 1;
                 }
                 if i > start {
-                    id = Some(&text[start..i]);
+                    set_directive_attr(&mut attrs, "id", &text[start..i]);
                 }
             }
             b'.' => {
@@ -5934,7 +5932,7 @@ fn parse_directive_attrs_inner(bytes: &[u8]) -> Vec<(CowStr<'_>, CowStr<'_>)> {
                     i += 1;
                 }
                 if i > start {
-                    classes.push(&text[start..i]);
+                    set_directive_attr(&mut attrs, "class", &text[start..i]);
                 }
             }
             _ => {
@@ -5969,7 +5967,7 @@ fn parse_directive_attrs_inner(bytes: &[u8]) -> Vec<(CowStr<'_>, CowStr<'_>)> {
                         if i < bytes.len() {
                             i += 1; // skip closing quote
                         }
-                        attrs.push((name.into(), val.into()));
+                        set_directive_attr(&mut attrs, name, val);
                     } else {
                         let val_start = i;
                         while i < bytes.len()
@@ -5979,22 +5977,31 @@ fn parse_directive_attrs_inner(bytes: &[u8]) -> Vec<(CowStr<'_>, CowStr<'_>)> {
                         {
                             i += 1;
                         }
-                        attrs.push((name.into(), text[val_start..i].into()));
+                        set_directive_attr(&mut attrs, name, &text[val_start..i]);
                     }
                 } else {
-                    attrs.push((name.into(), "".into()));
+                    set_directive_attr(&mut attrs, name, "");
                 }
             }
         }
     }
 
-    if let Some(id_val) = id {
-        attrs.push(("id".into(), id_val.into()));
-    }
-    if !classes.is_empty() {
-        attrs.push(("class".into(), classes.join(" ").into()));
-    }
     attrs
+}
+
+/// Sets an attribute as mdast-util-directive does: a key keeps the place it
+/// first appeared and a later value replaces it, except that classes join.
+fn set_directive_attr<'a>(attrs: &mut Vec<(CowStr<'a>, CowStr<'a>)>, key: &'a str, value: &'a str) {
+    match attrs
+        .iter_mut()
+        .find(|(existing, _)| existing.as_ref() == key)
+    {
+        Some((_, existing)) if key == "class" => {
+            *existing = format!("{} {value}", existing.as_ref()).into();
+        }
+        Some((_, existing)) => *existing = value.into(),
+        None => attrs.push((key.into(), value.into())),
+    }
 }
 
 fn is_attr_shortcut_terminator(c: u8) -> bool {
@@ -6918,10 +6925,12 @@ fn extract_attribute_block_content_from_header_text(
 /// See also: [`Options::ENABLE_HEADING_ATTRIBUTES`].
 ///
 /// [`Options::ENABLE_HEADING_ATTRIBUTES`]: `crate::Options::ENABLE_HEADING_ATTRIBUTES`
-fn parse_inside_attribute_block(inside_attr_block: &str) -> Option<HeadingAttributes<'_>> {
-    let mut id = None;
-    let mut classes = Vec::new();
-    let mut attrs = Vec::new();
+pub(crate) fn parse_inside_attribute_block(
+    inside_attr_block: &str,
+) -> Option<HeadingAttributes<'_>> {
+    let mut attributes = HeadingAttributes {
+        entries: Vec::new(),
+    };
 
     let bytes = inside_attr_block.as_bytes();
     let len = bytes.len();
@@ -6955,29 +6964,53 @@ fn parse_inside_attribute_block(inside_attr_block: &str) -> Option<HeadingAttrib
         if attr.len() > 1 {
             let first_byte = attr.as_bytes()[0];
             if first_byte == b'#' {
-                id = Some(attr[1..].into());
+                attributes.set_id(attr[1..].into());
             } else if first_byte == b'.' {
-                classes.push(attr[1..].into());
+                attributes.add_class(attr[1..].into());
             } else if let Some((key, value)) = attr.split_once('=') {
                 // `id=`/`class=` fold into the `#`/`.` channels so a heading
                 // mixing shorthand and explicit forms emits a single id and
                 // one merged class list instead of duplicate attributes.
                 let value = unquote_attribute_value(value);
                 match key {
-                    "id" => id = Some(value.into()),
-                    "class" => classes.push(value.into()),
-                    _ => attrs.push((key.into(), Some(value.into()))),
+                    "id" => attributes.set_id(value.into()),
+                    "class" => attributes.add_class(value.into()),
+                    _ => attributes.set_other(key.into(), Some(value.into())),
                 }
             } else {
-                attrs.push((attr.into(), None));
+                attributes.set_other(attr.into(), None);
             }
         }
     }
 
-    if id.is_none() && classes.is_empty() && attrs.is_empty() {
+    if attributes.entries.is_empty() {
         return None;
     }
-    Some(HeadingAttributes { id, classes, attrs })
+    Some(attributes)
+}
+
+/// Length of a `{...}` attribute block at the start of `bytes`, braces included.
+/// It ends at the first `}` outside a quoted value (a quote opens only after
+/// `=`, as in [`parse_inside_attribute_block`]) and can't span lines or nest.
+pub(crate) fn scan_inline_attribute_block(bytes: &[u8]) -> Option<usize> {
+    if bytes.first() != Some(&b'{') {
+        return None;
+    }
+    let mut quote = None;
+    for (i, &b) in bytes.iter().enumerate().skip(1) {
+        match quote {
+            _ if b == b'\n' || b == b'\r' => return None,
+            Some(q) if b == q => quote = None,
+            Some(_) => {}
+            None => match b {
+                b'}' => return Some(i + 1),
+                b'{' => return None,
+                b'"' | b'\'' if bytes[i - 1] == b'=' => quote = Some(b),
+                _ => {}
+            },
+        }
+    }
+    None
 }
 
 /// Strips a matching pair of surrounding `"` or `'` from an attribute value.

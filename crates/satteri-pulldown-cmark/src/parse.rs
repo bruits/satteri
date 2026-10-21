@@ -34,7 +34,10 @@ use core::ops::{Index, Range};
 use rustc_hash::FxHashMap;
 use unicase::UniCase;
 
-use crate::firstpass::{delim_run_is_valid, run_first_pass, run_first_pass_mode};
+use crate::firstpass::{
+    delim_run_is_valid, parse_inside_attribute_block, run_first_pass, run_first_pass_mode,
+    scan_inline_attribute_block,
+};
 use crate::linklabel::{FootnoteLabel, LinkLabel, ReferenceLabel, scan_link_label_rest};
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
@@ -550,6 +553,59 @@ impl<'input> ParserInner<'input> {
             .saturating_sub(url.len() + title.len());
 
         Some((link_type, url, title))
+    }
+
+    /// Takes the `{...}` written right after the inline element `ix`, as
+    /// markdown-it-attrs reads it, out of the siblings that hold it, merging
+    /// blocks that follow one another (`{.a}{.b}`). Called as the element is
+    /// built, when its siblings may not be resolved yet.
+    pub(crate) fn take_attribute_block_after(
+        &mut self,
+        ix: TreeIndex,
+    ) -> Option<HeadingAttributes<'input>> {
+        let text = self.text;
+        let mut attributes: Option<HeadingAttributes<'input>> = None;
+        let mut block_end = self.tree[ix].item.end;
+        while let Some(len) = scan_inline_attribute_block(&text.as_bytes()[block_end..])
+            && let Some(block) =
+                parse_inside_attribute_block(&text[block_end + 1..block_end + len - 1])
+        {
+            match &mut attributes {
+                None => attributes = Some(block),
+                Some(merged) => merged.merge(block),
+            }
+            block_end += len;
+        }
+        let attributes = attributes?;
+
+        // Check before changing anything: escapes or syntax inside the braces
+        // mean they aren't an attribute block. An emphasis marker there is still
+        // text, as the block takes it before it could pair (`{.a_b}`).
+        let mut next = self.tree[ix].next;
+        while let Some(n) = next
+            && self.tree[n].item.start < block_end
+        {
+            if !matches!(
+                self.tree[n].item.body,
+                ItemBody::Text {
+                    backslash_escaped: false
+                } | ItemBody::MaybeEmphasis(..)
+            ) {
+                return None;
+            }
+            next = self.tree[n].next;
+        }
+
+        while let Some(n) = self.tree[ix].next
+            && self.tree[n].item.start < block_end
+        {
+            if self.tree[n].item.end <= block_end {
+                self.tree[ix].next = self.tree[n].next;
+            } else {
+                self.tree[n].item.start = block_end;
+            }
+        }
+        Some(attributes)
     }
 
     /// Handle inline markup.
@@ -3415,12 +3471,96 @@ pub(crate) struct Allocations<'a> {
     fenced_infos: Vec<(CowStr<'a>, u32)>,
 }
 
-/// Used by the heading attributes extension.
+/// Used by the heading attributes extension. Entries are in source order, as in
+/// mdast-util-directive: a key keeps the place it first appeared, a later `id`
+/// or other key replaces its value, and later classes join the first `class`.
 #[derive(Clone)]
 pub(crate) struct HeadingAttributes<'a> {
-    pub id: Option<CowStr<'a>>,
-    pub classes: Vec<CowStr<'a>>,
-    pub attrs: Vec<(CowStr<'a>, Option<CowStr<'a>>)>,
+    pub entries: Vec<HeadingAttribute<'a>>,
+}
+
+#[derive(Clone)]
+pub(crate) enum HeadingAttribute<'a> {
+    Id(CowStr<'a>),
+    Classes(Vec<CowStr<'a>>),
+    /// A valueless key (`{hidden}`) has no value.
+    Other(CowStr<'a>, Option<CowStr<'a>>),
+}
+
+impl<'a> HeadingAttributes<'a> {
+    pub fn set_id(&mut self, value: CowStr<'a>) {
+        for entry in &mut self.entries {
+            if let HeadingAttribute::Id(id) = entry {
+                *id = value;
+                return;
+            }
+        }
+        self.entries.push(HeadingAttribute::Id(value));
+    }
+
+    pub fn add_class(&mut self, value: CowStr<'a>) {
+        for entry in &mut self.entries {
+            if let HeadingAttribute::Classes(classes) = entry {
+                classes.push(value);
+                return;
+            }
+        }
+        self.entries.push(HeadingAttribute::Classes(vec![value]));
+    }
+
+    pub fn set_other(&mut self, key: CowStr<'a>, value: Option<CowStr<'a>>) {
+        for entry in &mut self.entries {
+            if let HeadingAttribute::Other(existing, existing_value) = entry
+                && *existing == key
+            {
+                *existing_value = value;
+                return;
+            }
+        }
+        self.entries.push(HeadingAttribute::Other(key, value));
+    }
+
+    /// Adds a later block's attributes with the same rules as within one block.
+    pub fn merge(&mut self, later: HeadingAttributes<'a>) {
+        for entry in later.entries {
+            match entry {
+                HeadingAttribute::Id(id) => self.set_id(id),
+                HeadingAttribute::Classes(classes) => {
+                    for class in classes {
+                        self.add_class(class);
+                    }
+                }
+                HeadingAttribute::Other(key, value) => self.set_other(key, value),
+            }
+        }
+    }
+
+    fn id(&self) -> Option<CowStr<'a>> {
+        self.entries.iter().find_map(|entry| match entry {
+            HeadingAttribute::Id(id) => Some(id.clone()),
+            _ => None,
+        })
+    }
+
+    fn classes(&self) -> Vec<CowStr<'a>> {
+        self.entries
+            .iter()
+            .find_map(|entry| match entry {
+                HeadingAttribute::Classes(classes) => Some(classes.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    fn others(&self) -> Vec<(CowStr<'a>, Option<CowStr<'a>>)> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match entry {
+                HeadingAttribute::Other(key, value) => Some((key.clone(), value.clone())),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// Keeps track of the reference definitions defined in the document.
@@ -3936,12 +4076,12 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
             }
         }
         ItemBody::Heading(level, Some(heading_ix)) => {
-            let HeadingAttributes { id, classes, attrs } = allocs.index(heading_ix);
+            let attributes = allocs.index(heading_ix);
             Tag::Heading {
                 level,
-                id: id.clone(),
-                classes: classes.clone(),
-                attrs: attrs.clone(),
+                id: attributes.id(),
+                classes: attributes.classes(),
+                attrs: attributes.others(),
             }
         }
         ItemBody::Heading(level, None) => Tag::Heading {

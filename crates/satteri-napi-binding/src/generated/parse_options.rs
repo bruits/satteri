@@ -26,4 +26,5 @@ const _: () = {
     assert!(Options::ENABLE_SMART_DASHES.bits() == 1 << 19);
     assert!(Options::ENABLE_SMART_ELLIPSES.bits() == 1 << 20);
     assert!(Options::ENABLE_MATH_MULTI_DOLLAR.bits() == 1 << 23);
+    assert!(Options::ENABLE_ATTRIBUTES.bits() == 1 << 24);
 };

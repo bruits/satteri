@@ -19,3 +19,4 @@ export const ENABLE_SMART_QUOTES = 1 << 18;
 export const ENABLE_SMART_DASHES = 1 << 19;
 export const ENABLE_SMART_ELLIPSES = 1 << 20;
 export const ENABLE_MATH_MULTI_DOLLAR = 1 << 23;
+export const ENABLE_ATTRIBUTES = 1 << 24;
