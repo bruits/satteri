@@ -942,7 +942,7 @@ describe("MDAST conformance: `~` beside a `*` run without GFM", () => {
     assertCommonMarkMdastConformance("~~a*~~*");
   });
 
-  test("`*` and `_` keep forcing runs open and closed", () => {
+  test("`*` and `_` beside a `*` run follow the flanking rules", () => {
     assertCommonMarkMdastConformance("a*_x_*");
     assertCommonMarkMdastConformance("a*__x__*");
   });
@@ -952,5 +952,21 @@ describe("MDAST conformance: `~` beside a `*` run without GFM", () => {
     assertMdastConformance("a*~x~*");
     assertMdastConformance("a**~**");
     assertMdastConformance("a*~~x~~*");
+  });
+});
+
+describe("MDAST conformance: nested footnote definitions", () => {
+  test("a definition on another definition's line nests inside it", () => {
+    assertMdastConformance("[^1]:[^1]:");
+    assertMdastConformance("[^1]: [^2]: b");
+    assertMdastConformance("[^a]: [^b]: [^c]: x\n\nuse [^a] [^b] [^c]");
+    assertMdastConformance("> [^1]: [^2]: b");
+    assertMdastConformance("- [^1]: [^2]: b");
+  });
+
+  test("an indented definition nests inside the one above it", () => {
+    assertMdastConformance("[^1]: a\n    [^2]: b");
+    assertMdastConformance("[^1]: a\n\n    [^2]: b");
+    assertMdastConformance("[^1]: [^2]: b\n\n        c");
   });
 });

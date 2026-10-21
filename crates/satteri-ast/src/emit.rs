@@ -1015,10 +1015,13 @@ fn emit_footnotes_section<S: ConvertSink>(ctx: &EmitCtx<'_, '_>, sink: &mut S, d
         sink.finish_attrs();
         sink.newline();
 
+        // Like remark, place the backrefs by what renders: a definition or a nested footnote
+        // definition at the end leaves the paragraph before it last.
         let children = view.get_children(def_id);
-        let ends_in_paragraph = children
-            .last()
-            .is_some_and(|&cid| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8);
+        let last_rendered = children.iter().rposition(|&cid| sink.produces_output(cid));
+        let ends_in_paragraph = last_rendered.is_some_and(|i| {
+            view.get_node(children[i]).node_type == MdastNodeType::Paragraph as u8
+        });
         let total_refs = ctx
             .refs
             .footnote_ref_totals
@@ -1027,14 +1030,17 @@ fn emit_footnotes_section<S: ConvertSink>(ctx: &EmitCtx<'_, '_>, sink: &mut S, d
             .unwrap_or(1)
             .max(1);
 
-        if children.is_empty() {
-            emit_footnote_backrefs(&safe_id, number, total_refs, true, ctx, sink);
-        } else {
+        if let Some(last_rendered) = last_rendered {
+            let mut has_output = false;
             for (i, &child_id) in children.iter().enumerate() {
-                if i > 0 {
+                if !sink.produces_output(child_id) {
+                    continue;
+                }
+                if has_output {
                     sink.newline();
                 }
-                if ends_in_paragraph && i + 1 == children.len() {
+                has_output = true;
+                if ends_in_paragraph && i == last_rendered {
                     emit_paragraph_with_backrefs(
                         child_id,
                         &safe_id,
@@ -1052,6 +1058,8 @@ fn emit_footnotes_section<S: ConvertSink>(ctx: &EmitCtx<'_, '_>, sink: &mut S, d
                 sink.newline();
                 emit_footnote_backrefs(&safe_id, number, total_refs, true, ctx, sink);
             }
+        } else {
+            emit_footnote_backrefs(&safe_id, number, total_refs, true, ctx, sink);
         }
 
         sink.newline();
