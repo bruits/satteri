@@ -140,35 +140,13 @@ describe("definition list: block content, nesting & positions", () => {
     expect(types).toEqual(["paragraph", "list"]);
   });
 
-  test("several term lines become separate <dt> / descriptionTerm nodes", () => {
+  test("a term fits on one line, so a longer paragraph keeps the marker line", () => {
     const out = html("Term 1\nTerm 2\n:   Shared.\n");
-    expect(out).toContain("<dt>Term 1</dt>");
-    expect(out).toContain("<dt>Term 2</dt>");
-    expect(out).not.toContain("<dt>Term 1\nTerm 2</dt>");
-
-    const childTypes: string[] = [];
-    const termText: string[] = [];
-    run(
-      "Term 1\nTerm 2\n:   Shared.\n",
-      defineMdastPlugin({
-        name: "multi-term",
-        descriptionList(n) {
-          childTypes.push(...n.children.map((c) => c.type));
-        },
-        descriptionTerm(n) {
-          const t = n.children[0];
-          if (t?.type === "text") termText.push(t.value);
-        },
-      }),
+    expect(out).toContain("<p>Term 1\nTerm 2\n:   Shared.</p>");
+    expect(out).not.toContain("<dl>");
+    expect(html("Term 1\nTerm 2\n\n:   Shared.\n")).toContain(
+      "<p>Term 1\nTerm 2</p>\n<p>:   Shared.</p>",
     );
-    expect(childTypes).toEqual(["descriptionTerm", "descriptionTerm", "descriptionDetails"]);
-    expect(termText).toEqual(["Term 1", "Term 2"]);
-  });
-
-  test("inline markup resolves independently within each split term", () => {
-    const out = html("*A*\nB\n:   Def.\n");
-    expect(out).toContain("<dt><em>A</em></dt>");
-    expect(out).toContain("<dt>B</dt>");
   });
 
   test("a definition list nested inside a <dd> is visited", () => {
@@ -518,7 +496,6 @@ describe("definition list: conformance vs remark-definition-list", () => {
     ["tight definition with a blank-line continuation", "Apple\n:   Red.\n\n    More red.\n"],
     ["loose multi-block definition", "Apple\n\n:   Red.\n\n    More red.\n"],
     ["one term with two definitions", "Apple\n:   Red.\n:   Green.\n"],
-    ["two terms sharing a definition", "T1\nT2\n:   d\n"],
     ["inline markup in term and definition", "*Apple*\n:   A **fruit**.\n"],
     ["definition containing a nested list", "Term\n:   intro\n\n    - a\n    - b\n"],
     ["definition list between paragraphs", "before\n\nTerm\n:   def\n\nafter\n"],
@@ -540,7 +517,6 @@ describe("definition list: conformance vs remark-definition-list", () => {
       ["tight single-block definition", "Apple\n:   Red.\n"],
       ["loose multi-block definition", "Apple\n\n:   Red.\n\n    More red.\n"],
       ["one term with two definitions", "Apple\n:   Red.\n:   Green.\n"],
-      ["two terms sharing a definition", "T1\nT2\n:   d\n"],
       ["inline markup in term and definition", "*Apple*\n:   A **fruit**.\n"],
       ["empty definition, then another term", "Apple\n:\n\nOrange\n:\n"],
       ["empty definition, then a term with a definition", "Apple\n:\n\nOrange\n:   Orange.\n"],
@@ -552,6 +528,16 @@ describe("definition list: conformance vs remark-definition-list", () => {
         expect(collapseTagWhitespace(html(md))).toBe(reference);
       });
     }
+  });
+
+  // A term fits on one line, as the Pandoc manual has it; remark-definition-list
+  // makes each line a term.
+  test("two term lines before a definition stay a paragraph, unlike the reference", () => {
+    const md = "T1\nT2\n:   d\n";
+    expect(collapseTagWhitespace(html(md))).toBe("<p>T1\nT2\n:   d</p>");
+    expect(collapseTagWhitespace(String(referenceHtmlProcessor.processSync(md)))).toBe(
+      "<dl><dt>T1</dt><dt>T2</dt><dd>d</dd></dl>",
+    );
   });
 
   // Multi-block definitions are deliberately loose, following Pandoc.

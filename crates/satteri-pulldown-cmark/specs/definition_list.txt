@@ -46,19 +46,64 @@ Apple
 </dl>
 ````````````````````````````````
 
-Several term lines share one definition — each line is its own `<dt>`, matching
-mdast-util-definition-list:
+A term fits on one line (pandoc). After a paragraph of more lines, a marker line
+continues the paragraph, and after a blank line it starts a paragraph of its own:
 
 ```````````````````````````````` example_deflists
-Term 1
-Term 2
-:   Shared definition.
+HTTP
+HTTPS
+: Protocols.
+
+Intro text
+Term
+: Definition
+.
+<p>HTTP
+HTTPS
+: Protocols.</p>
+<p>Intro text
+Term
+: Definition</p>
+````````````````````````````````
+
+```````````````````````````````` example_deflists
+HTTP
+HTTPS
+
+: Protocols.
+.
+<p>HTTP
+HTTPS</p>
+<p>: Protocols.</p>
+````````````````````````````````
+
+The same goes for a term after a definition, which ends the list, and for one in
+a blockquote:
+
+```````````````````````````````` example_deflists
+Term
+: Definition
+
+Next
+term
+: Second definition
+
+> HTTP
+> HTTPS
+> : Protocols.
 .
 <dl>
-<dt>Term 1</dt>
-<dt>Term 2</dt>
-<dd>Shared definition.</dd>
+<dt>Term</dt>
+<dd>Definition</dd>
 </dl>
+<p>Next
+term
+: Second definition</p>
+<blockquote>
+<p>HTTP
+HTTPS
+: Protocols.</p>
+</blockquote>
 ````````````````````````````````
 
 Inline markup is parsed in both the term and the definition:

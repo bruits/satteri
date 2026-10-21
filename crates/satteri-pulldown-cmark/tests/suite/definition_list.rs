@@ -52,15 +52,20 @@ fn definition_list_test_3() {
 
 #[test]
 fn definition_list_test_4() {
-    let original = r##"Term 1
-Term 2
-:   Shared definition.
+    let original = r##"HTTP
+HTTPS
+: Protocols.
+
+Intro text
+Term
+: Definition
 "##;
-    let expected = r##"<dl>
-<dt>Term 1</dt>
-<dt>Term 2</dt>
-<dd>Shared definition.</dd>
-</dl>
+    let expected = r##"<p>HTTP
+HTTPS
+: Protocols.</p>
+<p>Intro text
+Term
+: Definition</p>
 "##;
 
     test_markdown_html(original, expected, 0, false, false, false, false, true, false);
@@ -68,6 +73,51 @@ Term 2
 
 #[test]
 fn definition_list_test_5() {
+    let original = r##"HTTP
+HTTPS
+
+: Protocols.
+"##;
+    let expected = r##"<p>HTTP
+HTTPS</p>
+<p>: Protocols.</p>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_6() {
+    let original = r##"Term
+: Definition
+
+Next
+term
+: Second definition
+
+> HTTP
+> HTTPS
+> : Protocols.
+"##;
+    let expected = r##"<dl>
+<dt>Term</dt>
+<dd>Definition</dd>
+</dl>
+<p>Next
+term
+: Second definition</p>
+<blockquote>
+<p>HTTP
+HTTPS
+: Protocols.</p>
+</blockquote>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_7() {
     let original = r##"*Apple*
 :   A **fruit**.
 "##;
@@ -81,7 +131,7 @@ fn definition_list_test_5() {
 }
 
 #[test]
-fn definition_list_test_6() {
+fn definition_list_test_8() {
     let original = r##"Apple
 :   Red.
 
@@ -100,7 +150,7 @@ Orange
 }
 
 #[test]
-fn definition_list_test_7() {
+fn definition_list_test_9() {
     let original = r##"Apple
 :   Red.
 
@@ -119,7 +169,7 @@ fn definition_list_test_7() {
 }
 
 #[test]
-fn definition_list_test_8() {
+fn definition_list_test_10() {
     let original = r##"Apple
 
 :   Red.
@@ -138,7 +188,7 @@ fn definition_list_test_8() {
 }
 
 #[test]
-fn definition_list_test_9() {
+fn definition_list_test_11() {
     let original = r##"Apple
 :   Red.
 :   Green.
@@ -159,46 +209,46 @@ fn definition_list_test_9() {
 }
 
 #[test]
-fn definition_list_test_10() {
-    let original = r##"Apple
-
-:   Red.
-
-    More red.
-"##;
-    let expected = r##"<dl>
-<dt>Apple</dt>
-<dd>
-<p>Red.</p>
-<p>More red.</p>
-</dd>
-</dl>
-"##;
-
-    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
-}
-
-#[test]
-fn definition_list_test_11() {
-    let original = r##"Apple
-:   Red.
-
-    More red.
-"##;
-    let expected = r##"<dl>
-<dt>Apple</dt>
-<dd>
-<p>Red.</p>
-<p>More red.</p>
-</dd>
-</dl>
-"##;
-
-    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
-}
-
-#[test]
 fn definition_list_test_12() {
+    let original = r##"Apple
+
+:   Red.
+
+    More red.
+"##;
+    let expected = r##"<dl>
+<dt>Apple</dt>
+<dd>
+<p>Red.</p>
+<p>More red.</p>
+</dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_13() {
+    let original = r##"Apple
+:   Red.
+
+    More red.
+"##;
+    let expected = r##"<dl>
+<dt>Apple</dt>
+<dd>
+<p>Red.</p>
+<p>More red.</p>
+</dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_14() {
     let original = r##"Apple
 :   Red.
 
@@ -219,7 +269,7 @@ fn definition_list_test_12() {
 }
 
 #[test]
-fn definition_list_test_13() {
+fn definition_list_test_15() {
     let original = r##"Apple
 
 :   text
@@ -240,7 +290,7 @@ fn definition_list_test_13() {
 }
 
 #[test]
-fn definition_list_test_14() {
+fn definition_list_test_16() {
     let original = r##"Apple
 
 :   item:
@@ -264,7 +314,7 @@ fn definition_list_test_14() {
 }
 
 #[test]
-fn definition_list_test_15() {
+fn definition_list_test_17() {
     let original = r##"Apple
 :
 "##;
@@ -278,7 +328,7 @@ fn definition_list_test_15() {
 }
 
 #[test]
-fn definition_list_test_16() {
+fn definition_list_test_18() {
     let original = r##"Apple
 :
 
@@ -297,7 +347,7 @@ Orange
 }
 
 #[test]
-fn definition_list_test_17() {
+fn definition_list_test_19() {
     let original = r##"Apple
 :
 
@@ -314,7 +364,7 @@ Just text.
 }
 
 #[test]
-fn definition_list_test_18() {
+fn definition_list_test_20() {
     let original = r##"> Apple
 > :   Red.
 "##;
@@ -330,7 +380,7 @@ fn definition_list_test_18() {
 }
 
 #[test]
-fn definition_list_test_19() {
+fn definition_list_test_21() {
     let original = r##"- Apple
   :   Red.
 "##;
@@ -348,7 +398,7 @@ fn definition_list_test_19() {
 }
 
 #[test]
-fn definition_list_test_20() {
+fn definition_list_test_22() {
     let original = r##"Outer
 
 :   Inner
@@ -369,7 +419,7 @@ fn definition_list_test_20() {
 }
 
 #[test]
-fn definition_list_test_21() {
+fn definition_list_test_23() {
     let original = r##"Apple
 ::tada:
 "##;
@@ -381,7 +431,7 @@ fn definition_list_test_21() {
 }
 
 #[test]
-fn definition_list_test_22() {
+fn definition_list_test_24() {
     let original = r##"Apple
 :tada:
 "##;
@@ -393,7 +443,7 @@ fn definition_list_test_22() {
 }
 
 #[test]
-fn definition_list_test_23() {
+fn definition_list_test_25() {
     let original = r##"Apple
 : :tada:
 "##;
@@ -407,7 +457,7 @@ fn definition_list_test_23() {
 }
 
 #[test]
-fn definition_list_test_24() {
+fn definition_list_test_26() {
     let original = r##"Apple
 
 
