@@ -13,6 +13,7 @@ import {
   OP_DATA,
   OP_PROP,
   OP_ALIGN,
+  OP_POSITION,
   MDX_ATTR_BOOLEAN_PROP,
   MDX_ATTR_LITERAL_PROP,
   MDX_ATTR_EXPRESSION_PROP,
@@ -127,6 +128,37 @@ export class OpWriter extends ByteWriter {
     this.ensure(1);
     this.buf[this.n++] = OP_KEEP_CHILDREN;
   }
+
+  /** Write a node's `position` so the node keeps it. Only lines and columns are
+   *  sent: Rust derives the byte offsets the arena stores from them. */
+  position(value: unknown): void {
+    // Most re-encoded nodes are built by plugins and have no position: return before any work.
+    if (value == null) return;
+    const { start, end } = value as { start?: Point; end?: Point };
+    if (start == null || end == null) return;
+    const { line: startLine, column: startColumn } = start;
+    const { line: endLine, column: endColumn } = end;
+    if (
+      !isLineOrColumn(startLine) ||
+      !isLineOrColumn(startColumn) ||
+      !isLineOrColumn(endLine) ||
+      !isLineOrColumn(endColumn)
+    ) {
+      return;
+    }
+    this.ensure(17);
+    this.buf[this.n++] = OP_POSITION;
+    this.writeU32(startLine);
+    this.writeU32(startColumn);
+    this.writeU32(endLine);
+    this.writeU32(endColumn);
+  }
+}
+
+type Point = { line?: unknown; column?: unknown };
+
+function isLineOrColumn(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 4294967295;
 }
 
 export function emitMdxAttr(w: OpWriter, a: Record<string, unknown>): void {

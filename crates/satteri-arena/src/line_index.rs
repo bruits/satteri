@@ -257,7 +257,7 @@ fn eq_mask(w: u64, b: u8) -> u64 {
 }
 
 /// Must agree with `line_ending_iter` on which bytes end a line (CRLF counts once).
-fn push_line_starts(bytes: &[u8], offsets: &mut Vec<u32>) {
+pub(crate) fn push_line_starts(bytes: &[u8], offsets: &mut Vec<u32>) {
     // Word-at-a-time beats memchr2 here: markdown's line density makes memchr re-pay its SIMD setup per line.
     if memchr::memchr(b'\r', bytes).is_none() {
         push_newline_starts(bytes, offsets);

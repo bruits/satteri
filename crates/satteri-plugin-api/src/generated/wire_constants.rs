@@ -16,6 +16,7 @@ pub const OP_BOOL: u8 = 0x08; // [field: u8][0|1]
 pub const OP_DATA: u8 = 0x09; // [len: u32 LE][json utf8]
 pub const OP_PROP: u8 = 0x0a; // [name str][kind: u8][value str] — HAST element property
 pub const OP_ALIGN: u8 = 0x0b; // [len: u32 LE][ColumnAlign bytes] — table column alignment
+pub const OP_POSITION: u8 = 0x0c; // [start line, start column, end line, end column: u32 LE each] — source position, columns in UTF-16 units
 
 // Op-stream field ids (single namespace across OP_STR/OP_U8/OP_U32/OP_BOOL).
 pub const OF_VALUE: u8 = 0;
