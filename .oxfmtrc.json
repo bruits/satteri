@@ -2,6 +2,7 @@
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "ignorePatterns": [
     "target",
+    "CHANGELOG.md",
     "dist",
     "crates/**/*",
     "!crates/*/README.md",
