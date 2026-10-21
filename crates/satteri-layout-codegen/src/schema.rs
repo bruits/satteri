@@ -1410,6 +1410,7 @@ pub const PARSE_OPTION_BITS: &[(&str, u32)] = &[
     ("ENABLE_SMART_DASHES", 19),
     ("ENABLE_SMART_ELLIPSES", 20),
     ("ENABLE_MATH_MULTI_DOLLAR", 23),
+    ("ENABLE_ATTRIBUTES", 24),
 ];
 
 /// `ArenaNode` `#[repr(C)]` size; pinned to the real struct by the generated
