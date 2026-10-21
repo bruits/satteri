@@ -109,8 +109,20 @@ export interface Features {
    * ```
    */
   math?: boolean | MathOptions;
-  /** Heading attributes (`# text { #id .class }`). Default: false. */
+  /**
+   * Heading attributes (`# text { #id .class }`). Default: false.
+   *
+   * @deprecated Use {@link Features.attributes}, which reads heading attributes
+   * as well as attributes on other elements.
+   */
   headingAttributes?: boolean;
+  /**
+   * Curly-brace attributes (`{#id .class key=value}`) on fenced code blocks
+   * (` ```js {.class} `), inline elements (`*em*{.class}`), and paragraphs,
+   * list items, lists, blockquotes, tables, table cells and thematic breaks,
+   * as well as on headings. Default: false.
+   */
+  attributes?: boolean;
   /** Colon-delimited container directive blocks (`:::`). Default: false. */
   directive?: boolean;
   /** Superscript (`^super^`). Default: false. */

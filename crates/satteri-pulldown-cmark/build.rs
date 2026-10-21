@@ -151,6 +151,7 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
     const GFM: u32 = 1 << 11;
     const SUPERSCRIPT: u32 = 1 << 13;
     const MATH_MULTI_DOLLAR: u32 = 1 << 23;
+    const ATTRIBUTES: u32 = 1 << 24;
 
     match spec_name {
         // CommonMark spec: no extensions
@@ -167,6 +168,7 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
         // alongside footnotes, so the expected HTML assumes both.
         "footnotes" => FOOTNOTES | GFM,
         "heading_attrs" => HEADING_ATTRIBUTES,
+        "attributes" => ATTRIBUTES | STRIKETHROUGH | TABLES,
         "math" => MATH,
         // Multi-dollar math only: `$$...$$` and `$$` fences parse, but a lone
         // `$` stays literal (remark-math `singleDollarTextMath: false`).

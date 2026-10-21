@@ -475,3 +475,63 @@ describe("data hints on freshly emitted mdast nodes (fresh-node path)", () => {
     });
   });
 });
+
+describe("data hints on a code block apply to its <code>, as in mdast-util-to-hast", () => {
+  const CASES: Array<[string, DataPatch]> = [
+    ["hProperties join the language class", { hProperties: { id: "c" } }],
+    [
+      "an hProperties className replaces the language class",
+      { hProperties: { className: ["hl"], id: "c" } },
+    ],
+    ["hName renames the <code>, not the <pre>", { hName: "samp" }],
+    ["hChildren replace the code text", { hChildren: [{ type: "text", value: "replaced" }] }],
+  ];
+
+  for (const [name, patch] of CASES) {
+    test(name, () =>
+      assertHtmlMatches("```js\nx\n```", {
+        remark: mutateOnRemark((n) => n.type === "code", patch),
+        satteri: mutateOnSatteri("code", (n) => n.type === "code", patch),
+      }),
+    );
+  }
+});
+
+describe("data hints on table rows and cells, as in mdast-util-to-hast", () => {
+  const TABLE = "| A | B |\n| - | - |\n| c | d |";
+  const CASES: Array<[string, "tableRow" | "tableCell", (n: MdastNodes) => boolean, DataPatch]> = [
+    [
+      "hProperties on a body cell",
+      "tableCell",
+      (n) => n.type === "tableCell" && JSON.stringify(n).includes('"c"'),
+      { hProperties: { className: ["x"] } },
+    ],
+    [
+      "hProperties on a header cell",
+      "tableCell",
+      (n) => n.type === "tableCell" && JSON.stringify(n).includes('"A"'),
+      { hProperties: { id: "h" } },
+    ],
+    [
+      "hChildren replace a cell's content",
+      "tableCell",
+      (n) => n.type === "tableCell" && JSON.stringify(n).includes('"d"'),
+      { hChildren: [{ type: "text", value: "replaced" }] },
+    ],
+    [
+      "hProperties on a row",
+      "tableRow",
+      (n) => n.type === "tableRow",
+      { hProperties: { className: ["r"] } },
+    ],
+  ];
+
+  for (const [name, type, predicate, patch] of CASES) {
+    test(name, () =>
+      assertHtmlMatches(TABLE, {
+        remark: mutateOnRemark(predicate, patch),
+        satteri: mutateOnSatteri(type, (n) => predicate(n as MdastNodes), patch),
+      }),
+    );
+  }
+});

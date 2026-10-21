@@ -1,0 +1,386 @@
+# Attributes
+
+`Options::ENABLE_ATTRIBUTES` reads curly-brace attributes (`{#id .class key=value}`)
+on more elements than headings, with the same syntax and merge rules as heading
+attributes. It also enables heading attributes:
+
+```````````````````````````````` example
+# Heading {.title #top}
+.
+<h1 class="title" id="top">Heading</h1>
+````````````````````````````````
+
+## Fenced code
+
+A fenced code block's info string can end with an attribute block. The
+attributes go on the `<code>`, as in markdown-it-attrs:
+
+```````````````````````````````` example
+```js {#snippet data-lang=javascript}
+x
+```
+.
+<pre><code class="language-js" id="snippet" data-lang="javascript">x
+</code></pre>
+````````````````````````````````
+
+The language is written before the braces, so its class comes first, holding
+any attribute classes followed by the language class:
+
+```````````````````````````````` example
+```js {.highlight}
+x
+```
+
+```ts {.foo #bar data-lang=typescript}
+x
+```
+.
+<pre><code class="highlight language-js">x
+</code></pre>
+<pre><code class="foo language-ts" id="bar" data-lang="typescript">x
+</code></pre>
+````````````````````````````````
+
+Without a language, the attributes keep the order they are written in:
+
+```````````````````````````````` example
+``` {#plain .text}
+x
+```
+.
+<pre><code id="plain" class="text">x
+</code></pre>
+````````````````````````````````
+
+The block needs no space before it, and tilde fences take attributes too:
+
+```````````````````````````````` example
+```js{.a}
+x
+```
+
+~~~js {.a}
+x
+~~~
+.
+<pre><code class="a language-js">x
+</code></pre>
+<pre><code class="a language-js">x
+</code></pre>
+````````````````````````````````
+
+Text before the block stays in the info string's meta, and only the last of
+several blocks is read:
+
+```````````````````````````````` example
+```js title="x" {.a}
+x
+```
+
+```js {.a} {.b}
+x
+```
+.
+<pre><code class="a language-js">x
+</code></pre>
+<pre><code class="b language-js">x
+</code></pre>
+````````````````````````````````
+
+A block that doesn't end the info string, an empty block, and an unclosed one
+are not attributes:
+
+```````````````````````````````` example
+```js {.a} extra
+x
+```
+
+```js {}
+x
+```
+
+```js {.a
+x
+```
+.
+<pre><code class="language-js">x
+</code></pre>
+<pre><code class="language-js">x
+</code></pre>
+<pre><code class="language-js">x
+</code></pre>
+````````````````````````````````
+
+## Inline elements
+
+A block written right after an inline element, with no space between, goes on
+that element: emphasis, strong, code spans, links, images and strikethrough:
+
+```````````````````````````````` example
+*em*{.a} **strong**{#b} `code`{c=d}
+.
+<p><em class="a">em</em> <strong id="b">strong</strong> <code c="d">code</code></p>
+````````````````````````````````
+
+```````````````````````````````` example
+[link](/u){.a} ![alt](/i.png){.b} [ref][r]{#c}
+
+[r]: /r
+.
+<p><a href="/u" class="a">link</a> <img src="/i.png" alt="alt" class="b"> <a href="/r" id="c">ref</a></p>
+````````````````````````````````
+
+```````````````````````````````` example
+~~gone~~{.x}
+.
+<p><del class="x">gone</del></p>
+````````````````````````````````
+
+Nested elements each take their own block, and blocks that follow one another
+merge:
+
+```````````````````````````````` example
+**a *b*{.in}**{.out}
+
+*em*{.a}{#i}{.b k=v}
+.
+<p><strong class="out">a <em class="in">b</em></strong></p>
+<p><em class="a b" id="i" k="v">em</em></p>
+````````````````````````````````
+
+An element ending a heading, list item or table cell takes the block too, as
+its rule reads it before theirs:
+
+```````````````````````````````` example
+# Title **b**{.x}
+
+See [the guide](/g){.y}
+===
+
+- item *em*{.z}
+
+| a `c`{.w} |
+| - |
+.
+<h1>Title <strong class="x">b</strong></h1>
+<h1>See <a href="/g" class="y">the guide</a></h1>
+<ul>
+<li>item <em class="z">em</em></li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>a <code class="w">c</code></th>
+</tr>
+</thead>
+</table>
+````````````````````````````````
+
+Characters that are markup elsewhere are plain text inside a block:
+
+```````````````````````````````` example
+*em*{.a_b}
+.
+<p><em class="a_b">em</em></p>
+````````````````````````````````
+
+A block after a space or after plain text, an escaped brace, and an empty or
+unclosed block stay text:
+
+```````````````````````````````` example
+*em* {.a} text{.b} *em*\{.c} *em*{} *em*{.d
+.
+<p><em>em</em> {.a} text{.b} <em>em</em>{.c} <em>em</em>{} <em>em</em>{.d</p>
+````````````````````````````````
+
+## Blocks
+
+A block ending a paragraph goes on the paragraph, whether it ends the last line
+or is a line of its own:
+
+```````````````````````````````` example
+A paragraph. {.intro}
+
+Another
+{#second}
+.
+<p class="intro">A paragraph.</p>
+<p id="second">Another</p>
+````````````````````````````````
+
+A line of its own after a hard break keeps the break:
+
+```````````````````````````````` example
+line\
+{.x}
+.
+<p class="x">line<br />
+</p>
+````````````````````````````````
+
+On a list item's first line, it goes on the item:
+
+```````````````````````````````` example
+- item {.red}
+- item
+.
+<ul>
+<li class="red">item</li>
+<li>item</li>
+</ul>
+````````````````````````````````
+
+A line of its own goes on the block it's written after, at the level its `>`
+markers and indentation put it, as kramdown places a block IAL. Written inside
+the blockquotes and list items around the paragraph, it goes on the paragraph,
+or on its list item in a tight list:
+
+```````````````````````````````` example
+> quoted
+> {.note}
+
+- a
+  {.x}
+.
+<blockquote>
+<p class="note">quoted</p>
+</blockquote>
+<ul>
+<li class="x">a</li>
+</ul>
+````````````````````````````````
+
+Written lazily, outside some of them, it goes on the outermost it leaves, or for
+a list item, on its list:
+
+```````````````````````````````` example
+> quoted
+{.note}
+
+> > nested
+> {.inner}
+.
+<blockquote class="note">
+<p>quoted</p>
+</blockquote>
+<blockquote>
+<blockquote class="inner">
+<p>nested</p>
+</blockquote>
+</blockquote>
+````````````````````````````````
+
+```````````````````````````````` example
+- a
+- b
+{.my-list}
+.
+<ul class="my-list">
+<li>a</li>
+<li>b</li>
+</ul>
+````````````````````````````````
+
+```````````````````````````````` example
+- parent
+  - child
+  {.inner}
+.
+<ul>
+<li>parent
+<ul class="inner">
+<li>child</li>
+</ul>
+</li>
+</ul>
+````````````````````````````````
+
+A block ending the line before still goes where it would without the line:
+
+```````````````````````````````` example
+- item {.first}
+{.list}
+.
+<ul class="list">
+<li class="first">item</li>
+</ul>
+````````````````````````````````
+
+A paragraph holding only a block goes on the list, table or thematic break
+before it:
+
+```````````````````````````````` example
+- a
+- b
+
+{.my-list}
+.
+<ul class="my-list">
+<li>a</li>
+<li>b</li>
+</ul>
+````````````````````````````````
+
+```````````````````````````````` example
+---
+{.divider}
+.
+<hr class="divider">
+````````````````````````````````
+
+A block ending a table cell goes on the cell:
+
+```````````````````````````````` example
+| Head {.h} |
+| --- |
+| cell {.c} |
+
+{.my-table}
+.
+<table class="my-table">
+<thead>
+<tr>
+<th class="h">Head</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="c">cell</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+Anywhere else, a paragraph holding only a block stays, empty:
+
+```````````````````````````````` example
+{.alone}
+.
+<p class="alone"></p>
+````````````````````````````````
+
+A block in the middle of a paragraph, and braces inside image alt text, are
+not attributes:
+
+```````````````````````````````` example
+para
+{.x}
+more
+
+![{.cls}](x.png)
+.
+<p>para
+{.x}
+more</p>
+<p><img src="x.png" alt="{.cls}" /></p>
+````````````````````````````````
+
+Of several blocks ending a paragraph, only the last goes on it; the rest stay
+text:
+
+```````````````````````````````` example
+text{.a}{.b}
+.
+<p class="b">text{.a}</p>
+````````````````````````````````

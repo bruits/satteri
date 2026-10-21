@@ -183,7 +183,7 @@ describe("features.headingAttributes", () => {
       features: { headingAttributes: true },
     });
     if (result instanceof Promise) throw new Error("expected sync");
-    expect(result.html).toContain('<h2 id="y" class="c1 c2">Heading</h2>');
+    expect(result.html).toContain('<h2 class="c1 c2" id="y">Heading</h2>');
   });
 
   test("quoted values keep their spaces", () => {

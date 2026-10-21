@@ -14,7 +14,7 @@ use core::{
 
 use crate::parse::{Item, ItemBody};
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone, PartialOrd)]
+#[derive(Debug, Eq, PartialEq, Hash, Copy, Clone, PartialOrd)]
 pub(crate) struct TreeIndex(NonZeroU32);
 
 impl TreeIndex {
