@@ -564,4 +564,13 @@ describe("definition list: conformance vs remark-definition-list", () => {
       "<dl><dt>Apple</dt><dd>Red.\nMore red.</dd></dl>",
     );
   });
+
+  // A tilde marker is deliberately accepted, following Pandoc; the reference only knows the colon.
+  test("tilde marker starts a definition, unlike the reference", () => {
+    const md = "Apple\n~   Red.\n";
+    expect(collapseTagWhitespace(html(md))).toBe("<dl><dt>Apple</dt><dd>Red.</dd></dl>");
+    expect(collapseTagWhitespace(String(referenceHtmlProcessor.processSync(md)))).toBe(
+      "<p>Apple\n~   Red.</p>",
+    );
+  });
 });
