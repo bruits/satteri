@@ -26,7 +26,7 @@ use crate::firstpass::{
 use crate::linklabel::LinkLabel;
 #[cfg(feature = "mdx")]
 use crate::parse::JsxAttr;
-use crate::parse::{HeadingAttributes, Item, ItemBody, LinkDef, ParserInner};
+use crate::parse::{HeadingAttribute, HeadingAttributes, Item, ItemBody, LinkDef, ParserInner};
 #[cfg(feature = "mdx")]
 use crate::post_passes::MDX_EXPLICIT_JSX_DATA;
 #[cfg(feature = "mdx")]
@@ -2690,7 +2690,7 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 /// (mirroring satteri-ast's code node_data encoder); values are source-derived,
 /// so quotes, backslashes and control chars are escaped.
 fn encode_heading_h_properties(attrs: &HeadingAttributes<'_>) -> Option<Vec<u8>> {
-    if attrs.id.is_none() && attrs.classes.is_empty() && attrs.attrs.is_empty() {
+    if attrs.entries.is_empty() {
         return None;
     }
 
@@ -2726,29 +2726,33 @@ fn encode_heading_h_properties(attrs: &HeadingAttributes<'_>) -> Option<Vec<u8>>
     buf.extend_from_slice(b"{\"hProperties\":{");
     let mut first = true;
 
-    if let Some(id) = &attrs.id {
+    // Entries are in source order, which JSON object key order carries through
+    // to the rendered attributes.
+    for entry in &attrs.entries {
         separator(&mut buf, &mut first);
-        buf.extend_from_slice(b"\"id\":");
-        json_string(id, &mut buf);
-    }
-    if !attrs.classes.is_empty() {
-        separator(&mut buf, &mut first);
-        buf.extend_from_slice(b"\"className\":[");
-        for (i, class) in attrs.classes.iter().enumerate() {
-            if i > 0 {
-                buf.push(b',');
+        match entry {
+            HeadingAttribute::Id(id) => {
+                buf.extend_from_slice(b"\"id\":");
+                json_string(id, &mut buf);
             }
-            json_string(class, &mut buf);
+            HeadingAttribute::Classes(classes) => {
+                buf.extend_from_slice(b"\"className\":[");
+                for (i, class) in classes.iter().enumerate() {
+                    if i > 0 {
+                        buf.push(b',');
+                    }
+                    json_string(class, &mut buf);
+                }
+                buf.push(b']');
+            }
+            HeadingAttribute::Other(key, value) => {
+                json_string(key, &mut buf);
+                buf.push(b':');
+                // Value-less (`{myattr}`) renders as `myattr=""`; a JSON `true` would
+                // surface as `myattr="true"` through a real rehype pipeline.
+                json_string(value.as_deref().unwrap_or(""), &mut buf);
+            }
         }
-        buf.push(b']');
-    }
-    for (key, value) in &attrs.attrs {
-        separator(&mut buf, &mut first);
-        json_string(key, &mut buf);
-        buf.push(b':');
-        // Value-less (`{myattr}`) renders as `myattr=""`; a JSON `true` would
-        // surface as `myattr="true"` through a real rehype pipeline.
-        json_string(value.as_deref().unwrap_or(""), &mut buf);
     }
 
     buf.extend_from_slice(b"}}");

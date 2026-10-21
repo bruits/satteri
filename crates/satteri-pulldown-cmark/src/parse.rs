@@ -3415,12 +3415,81 @@ pub(crate) struct Allocations<'a> {
     fenced_infos: Vec<(CowStr<'a>, u32)>,
 }
 
-/// Used by the heading attributes extension.
+/// Used by the heading attributes extension. Entries are in source order, as in
+/// mdast-util-directive: a key keeps the place it first appeared, a later `id`
+/// or other key replaces its value, and later classes join the first `class`.
 #[derive(Clone)]
 pub(crate) struct HeadingAttributes<'a> {
-    pub id: Option<CowStr<'a>>,
-    pub classes: Vec<CowStr<'a>>,
-    pub attrs: Vec<(CowStr<'a>, Option<CowStr<'a>>)>,
+    pub entries: Vec<HeadingAttribute<'a>>,
+}
+
+#[derive(Clone)]
+pub(crate) enum HeadingAttribute<'a> {
+    Id(CowStr<'a>),
+    Classes(Vec<CowStr<'a>>),
+    /// A valueless key (`{hidden}`) has no value.
+    Other(CowStr<'a>, Option<CowStr<'a>>),
+}
+
+impl<'a> HeadingAttributes<'a> {
+    pub fn set_id(&mut self, value: CowStr<'a>) {
+        for entry in &mut self.entries {
+            if let HeadingAttribute::Id(id) = entry {
+                *id = value;
+                return;
+            }
+        }
+        self.entries.push(HeadingAttribute::Id(value));
+    }
+
+    pub fn add_class(&mut self, value: CowStr<'a>) {
+        for entry in &mut self.entries {
+            if let HeadingAttribute::Classes(classes) = entry {
+                classes.push(value);
+                return;
+            }
+        }
+        self.entries.push(HeadingAttribute::Classes(vec![value]));
+    }
+
+    pub fn set_other(&mut self, key: CowStr<'a>, value: Option<CowStr<'a>>) {
+        for entry in &mut self.entries {
+            if let HeadingAttribute::Other(existing, existing_value) = entry
+                && *existing == key
+            {
+                *existing_value = value;
+                return;
+            }
+        }
+        self.entries.push(HeadingAttribute::Other(key, value));
+    }
+
+    fn id(&self) -> Option<CowStr<'a>> {
+        self.entries.iter().find_map(|entry| match entry {
+            HeadingAttribute::Id(id) => Some(id.clone()),
+            _ => None,
+        })
+    }
+
+    fn classes(&self) -> Vec<CowStr<'a>> {
+        self.entries
+            .iter()
+            .find_map(|entry| match entry {
+                HeadingAttribute::Classes(classes) => Some(classes.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    fn others(&self) -> Vec<(CowStr<'a>, Option<CowStr<'a>>)> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match entry {
+                HeadingAttribute::Other(key, value) => Some((key.clone(), value.clone())),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// Keeps track of the reference definitions defined in the document.
@@ -3936,12 +4005,12 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
             }
         }
         ItemBody::Heading(level, Some(heading_ix)) => {
-            let HeadingAttributes { id, classes, attrs } = allocs.index(heading_ix);
+            let attributes = allocs.index(heading_ix);
             Tag::Heading {
                 level,
-                id: id.clone(),
-                classes: classes.clone(),
-                attrs: attrs.clone(),
+                id: attributes.id(),
+                classes: attributes.classes(),
+                attrs: attributes.others(),
             }
         }
         ItemBody::Heading(level, None) => Tag::Heading {
