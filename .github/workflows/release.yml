@@ -56,6 +56,11 @@ jobs:
             target: aarch64-unknown-linux-musl
             build: pnpm run build:binary:native:cross --target aarch64-unknown-linux-musl
 
+          # -- FreeBSD --
+          - host: ubuntu-latest
+            target: x86_64-unknown-freebsd
+            build: pnpm run build:binary:native:cross --target x86_64-unknown-freebsd
+
           # -- WASM --
           - host: ubuntu-latest
             target: wasm32-wasip1-threads
@@ -96,15 +101,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # musl is cross-compiled with cargo-zigbuild, which needs zig as its C toolchain
+      # musl and FreeBSD are cross-compiled with cargo-zigbuild, which needs zig as its C toolchain
       - name: Setup Zig
-        if: contains(matrix.settings.target, 'musl')
+        if: contains(matrix.settings.target, 'musl') || contains(matrix.settings.target, 'freebsd')
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.15.2
 
       - name: Install cargo-zigbuild
-        if: contains(matrix.settings.target, 'musl')
+        if: contains(matrix.settings.target, 'musl') || contains(matrix.settings.target, 'freebsd')
         uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
         with:
           tool: cargo-zigbuild
