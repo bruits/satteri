@@ -657,7 +657,7 @@ export interface HastFilteredVisitor<N extends HastNode = HastNode> {
   visit(node: Readonly<N>, ctx: HastVisitorContext): HastNode | void | Promise<HastNode | void>;
 }
 
-type HastVisitorFn<N extends HastNode = HastNode> = (
+export type HastVisitorFn<N extends HastNode = HastNode> = (
   node: Readonly<N>,
   ctx: HastVisitorContext,
 ) => HastNode | void | Promise<HastNode | void>;
