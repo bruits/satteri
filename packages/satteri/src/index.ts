@@ -46,6 +46,7 @@ export type {
   HastVisitorInstance,
   HastVisitorContext,
   HastFilteredVisitor,
+  HastVisitorFn,
   HastContent,
   HastParentContent,
   RawHastContent,
@@ -100,6 +101,7 @@ export {
 export type {
   MdastPluginInstance,
   MdastVisitorContext,
+  MdastVisitorFn,
   MdastContent,
   MdastTarget,
   MdastParentContent,

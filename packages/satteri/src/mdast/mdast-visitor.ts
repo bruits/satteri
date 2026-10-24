@@ -517,7 +517,7 @@ type MdastVisitorResult =
   | null
   | void;
 
-type MdastVisitorFn<N extends MdastNode | Custom = MdastNode> = (
+export type MdastVisitorFn<N extends MdastNode | Custom = MdastNode> = (
   node: Readonly<N>,
   context: MdastVisitorContext,
 ) => MdastVisitorResult | Promise<MdastVisitorResult>;

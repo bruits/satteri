@@ -109,7 +109,7 @@ A single opted-in plugin enables positions for the whole pipeline, so a later pl
 An MDAST plugin maps node types to visitor functions. Each visitor receives the node (as `Readonly`) and a `ctx` object.
 
 ```ts
-type MdastVisitor<N> = (node: Readonly<N>, ctx: MdastVisitorContext) => MdastVisitorResult | Promise<MdastVisitorResult>;
+type MdastVisitorFn<N> = (node: Readonly<N>, ctx: MdastVisitorContext) => MdastVisitorResult | Promise<MdastVisitorResult>;
 
 type MdastVisitorResult =
   | MdastNode // replace with this node
@@ -121,6 +121,24 @@ type MdastVisitorResult =
 ```
 
 To inject HTML, return `{ raw: "<span>…</span>", mdxExpressions: false }` rather than an mdast `html` node (`{ type: "html", value }`) — the latter renders under `markdownToHtml` but throws under `mdxToJs`. Under `markdownToJs` neither form survives: HTML has no JSX representation there, so it is dropped along with any HTML the document itself contains. Enable [`features: { rawHtml: true }`](/docs/entry-points/#reparsing-raw-html-rawhtml) to have injected HTML parsed into real elements. See [Return value semantics](#return-value-semantics).
+
+`MdastVisitorFn` is exported from `satteri`, so a visitor shared by several node types can be typed once for all of them:
+
+```ts
+import type { Blockquote, ListItem, Paragraph } from "mdast";
+import { defineMdastPlugin, type MdastVisitorFn } from "satteri";
+
+const visitParent: MdastVisitorFn<Paragraph | Blockquote | ListItem> = (node, ctx) => {
+  /* ... */
+};
+
+const plugin = defineMdastPlugin({
+  name: "my-plugin",
+  paragraph: visitParent,
+  blockquote: visitParent,
+  listItem: visitParent,
+});
+```
 
 ### Supported visitor keys
 
@@ -268,8 +286,10 @@ const plugin = defineHastPlugin({
 Leaf and value nodes don't carry a name, so they take a plain function that fires for every node of that type.
 
 ```ts
-type HastVisitor<N> = (node: Readonly<N>, ctx: HastVisitorContext) => HastNode | void | Promise<HastNode | void>;
+type HastVisitorFn<N> = (node: Readonly<N>, ctx: HastVisitorContext) => HastNode | void | Promise<HastNode | void>;
 ```
+
+Like `MdastVisitorFn`, `HastVisitorFn` is exported from `satteri` for typing a visitor shared by several of these keys.
 
 | Key                 | Notes                           |
 | ------------------- | ------------------------------- |
