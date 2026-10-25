@@ -1075,8 +1075,10 @@ fn emit_paragraph_with_backrefs<S: ConvertSink>(
     depth: u32,
 ) {
     let view = ctx.view;
-    open_plain(sink, "p", Pos::Node(para_id));
-    if let Some((&last_id, prefix)) = view.get_children(para_id).split_last() {
+    sink.open_source_element("p", para_id);
+    if sink.finish_source_attrs() == Children::Replaced {
+        sink.text(" ", Pos::None);
+    } else if let Some((&last_id, prefix)) = view.get_children(para_id).split_last() {
         for &cid in prefix {
             emit_node(cid, ctx, sink, depth + 1);
         }
