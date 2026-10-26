@@ -396,6 +396,31 @@ x
 </code></pre>
 ````````````````````````````````
 
+So does a brace written as a character reference:
+
+```````````````````````````````` example
+```js &#123;.a&#125;
+x
+```
+.
+<pre><code class="language-js">x
+</code></pre>
+````````````````````````````````
+
+On a fence or a block, a brace inside a quoted value belongs to the value:
+
+```````````````````````````````` example
+```js {title="a}b"}
+x
+```
+
+para {title="a{b"}
+.
+<pre><code class="language-js" title="a}b">x
+</code></pre>
+<p title="a{b">para</p>
+````````````````````````````````
+
 A collapsed reference takes the block after its `[]`:
 
 ```````````````````````````````` example

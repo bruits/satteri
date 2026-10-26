@@ -939,9 +939,7 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                     reader.read_u32()?,
                     reader.read_u32()?,
                 ];
-                // JS offsets count UTF-16 units and the arena's count bytes, so they
-                // are derived from the lines and columns; a position the source
-                // cannot hold is dropped, as it was before positions were encoded.
+                // JS offsets count UTF-16 units, so the byte offsets come from lines and columns.
                 if !stack.is_empty()
                     && let Some(start_offset) = builder.source_offset_at(start_line, start_column)
                     && let Some(end_offset) = builder.source_offset_at(end_line, end_column)

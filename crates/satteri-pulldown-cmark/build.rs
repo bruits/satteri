@@ -55,8 +55,7 @@ fn generate_tests_from_spec() {
         File::open(file_path)
             .and_then(|mut f| f.read_to_string(&mut raw_spec))
             .expect("Could not read the spec file");
-        // A Windows checkout with `core.autocrlf` gives the specs CRLF line endings,
-        // which the example parser does not match.
+        // A Windows checkout with `core.autocrlf` gives the specs CRLF line endings.
         let raw_spec = raw_spec.replace("\r\n", "\n");
 
         let rs_test_file = PathBuf::from("./tests/suite/")

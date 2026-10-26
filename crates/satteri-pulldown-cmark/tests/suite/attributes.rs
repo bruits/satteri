@@ -445,6 +445,35 @@ x
 
 #[test]
 fn attributes_test_30() {
+    let original = r##"```js &#123;.a&#125;
+x
+```
+"##;
+    let expected = r##"<pre><code class="language-js">x
+</code></pre>
+"##;
+
+    test_markdown_html(original, expected, 16778266, false, false, false, false, false, false);
+}
+
+#[test]
+fn attributes_test_31() {
+    let original = r##"```js {title="a}b"}
+x
+```
+
+para {title="a{b"}
+"##;
+    let expected = r##"<pre><code class="language-js" title="a}b">x
+</code></pre>
+<p title="a{b">para</p>
+"##;
+
+    test_markdown_html(original, expected, 16778266, false, false, false, false, false, false);
+}
+
+#[test]
+fn attributes_test_32() {
     let original = r##"[ref][]{.a} ![ref][]{.b}
 
 [ref]: /u
@@ -456,7 +485,7 @@ fn attributes_test_30() {
 }
 
 #[test]
-fn attributes_test_31() {
+fn attributes_test_33() {
     let original = r##"see [brackets]{.a}
 
 foo_{.b}
@@ -475,7 +504,7 @@ a <b>bold</b>{.c}
 }
 
 #[test]
-fn attributes_test_32() {
+fn attributes_test_34() {
     let original = r##"$x${.m}
 "##;
     let expected = r##"<p class="m"><code class="language-math math-inline">x</code></p>
@@ -485,7 +514,7 @@ fn attributes_test_32() {
 }
 
 #[test]
-fn attributes_test_33() {
+fn attributes_test_35() {
     let original = r##"- item (x){.a}
   {.b}
 "##;
@@ -498,7 +527,7 @@ fn attributes_test_33() {
 }
 
 #[test]
-fn attributes_test_34() {
+fn attributes_test_36() {
     let original = r##"- [ ] task {.a}
 - [x] done
   {.b}
@@ -513,7 +542,7 @@ fn attributes_test_34() {
 }
 
 #[test]
-fn attributes_test_35() {
+fn attributes_test_37() {
     let original = r##"- [ ] one
 - [x] two
 {.list}
@@ -528,7 +557,7 @@ fn attributes_test_35() {
 }
 
 #[test]
-fn attributes_test_36() {
+fn attributes_test_38() {
     let original = r##"Term {.t}
 : tight {.d}
 
@@ -552,7 +581,7 @@ Loose
 }
 
 #[test]
-fn attributes_test_37() {
+fn attributes_test_39() {
     let original = r##"Term
 : def
   {.own}

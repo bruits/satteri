@@ -7,7 +7,7 @@ import remarkRehype from "remark-rehype";
 import rehypeStringify from "rehype-stringify";
 import type { Root as MdastRoot, Nodes as MdastNodes } from "mdast";
 import type { ElementContent, Properties } from "hast";
-import { markdownToHtml, defineMdastPlugin } from "../../src/index.js";
+import { markdownToHtml, markdownToHast, defineMdastPlugin } from "../../src/index.js";
 import type { MdastPluginInstance } from "../../src/mdast/mdast-visitor.js";
 import type { MdastNode } from "../../src/types.js";
 
@@ -495,7 +495,34 @@ describe("data hints on a code block apply to its <code>, as in mdast-util-to-ha
       }),
     );
   }
+
+  test("hChildren keep the meta on the <code>", async () => {
+    const md = "```js title=x\nx\n```";
+    const patch = { hChildren: [{ type: "text", value: "replaced" }] };
+    const processor = unified()
+      .use(remarkParse)
+      .use(() => mutateOnRemark((n) => n.type === "code", patch))
+      .use(remarkRehype);
+    const reference = await processor.run(processor.parse(md));
+    const tree = await markdownToHast(md, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "hdata-test",
+          ...mutateOnSatteri("code", (n) => n.type === "code", patch)(),
+          before() {},
+        }),
+      ],
+    });
+    expect(codeMeta(tree)).toBe("title=x");
+    expect(codeMeta(tree)).toBe(codeMeta(reference));
+  });
 });
+
+function codeMeta(tree: object): unknown {
+  const pre = (tree as { children: Array<{ children: Array<{ data?: { meta?: unknown } }> }> })
+    .children[0];
+  return pre?.children[0]?.data?.meta;
+}
 
 describe("data hints on table rows and cells, as in mdast-util-to-hast", () => {
   const TABLE = "| A | B |\n| - | - |\n| c | d |";

@@ -19,6 +19,7 @@ use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
 };
 
+use crate::block_attributes::attribute_block_open;
 use crate::firstpass::{
     extend_indented_code_block, extend_inner_blockquote_through_outer_markers,
     extend_list_in_blockquote_through_marker_lines, extend_list_item_to_next_sibling_content,
@@ -1163,7 +1164,7 @@ pub(crate) fn parse_document<'a>(
                         // A trailing `{...}` holds the block's attributes, as in
                         // markdown-it-attrs; the language and meta are what precedes it.
                         let attributes = if options.contains(Options::ENABLE_ATTRIBUTES)
-                            && !fence_attribute_block_escaped(&source[item.start..])
+                            && fence_line_ends_with_attribute_block(&source[item.start..])
                         {
                             split_fence_attributes(info_str).map(|(before, attributes)| {
                                 info_str = before;
@@ -2787,20 +2788,16 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 /// with several, only the last, as in markdown-it-attrs.
 fn split_fence_attributes(info: &str) -> Option<(&str, HeadingAttributes<'_>)> {
     let info = info.trim_end();
-    let body = info.strip_suffix('}')?;
-    let open = body.rfind('{')?;
-    let inside = &body[open + 1..];
-    if inside.contains('}') {
-        return None;
-    }
-    let attributes = parse_inside_attribute_block(inside)?;
+    let open = attribute_block_open(info, info.len())?;
+    let attributes = parse_inside_attribute_block(&info[open + 1..info.len() - 1])?;
     Some((info[..open].trim_end(), attributes))
 }
 
-/// An escaped brace keeps a fence's trailing `{...}` text, as an escape does elsewhere.
-fn fence_attribute_block_escaped(fence: &str) -> bool {
+/// Whether the fence line itself ends with `{...}`: an escaped or entity-encoded brace is text.
+fn fence_line_ends_with_attribute_block(fence: &str) -> bool {
     let line = &fence[..fence.find(['\n', '\r']).unwrap_or(fence.len())];
-    let bytes = line.trim_end().as_bytes();
+    let line = line.trim_end();
+    let bytes = line.as_bytes();
     let escaped = |ix: usize| {
         bytes[..ix]
             .iter()
@@ -2810,10 +2807,8 @@ fn fence_attribute_block_escaped(fence: &str) -> bool {
             % 2
             == 1
     };
-    match (bytes.last(), bytes.iter().rposition(|&b| b == b'{')) {
-        (Some(b'}'), Some(open)) => escaped(bytes.len() - 1) || escaped(open),
-        _ => false,
-    }
+    attribute_block_open(line, line.len())
+        .is_some_and(|open| !escaped(open) && !escaped(bytes.len() - 1))
 }
 
 /// A code block's attributes as its `<code>` gets them. The language is written

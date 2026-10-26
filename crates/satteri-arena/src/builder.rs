@@ -12,6 +12,16 @@ pub struct DocumentBuilder<'a, K: ArenaKind> {
     /// Byte offset where each source line starts, built on first use by
     /// [`Self::source_offset_at`]; empty until then.
     line_starts: Vec<u32>,
+    line_is_ascii: Vec<bool>,
+    /// Where the last non-ASCII lookup landed; plugins hand positions back in document order.
+    column_cursor: ColumnCursor,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ColumnCursor {
+    line: u32,
+    units: u32,
+    offset: u32,
 }
 // Each open node owns a suffix of pending_children. Closing it moves that
 // suffix into the arena and appends its ID to its parent's pending children.
@@ -43,6 +53,8 @@ impl<'a, K: ArenaKind> DocumentBuilder<'a, K> {
             arena,
             stack: Vec::with_capacity(16),
             line_starts: Vec::new(),
+            line_is_ascii: Vec::new(),
+            column_cursor: ColumnCursor::default(),
         }
     }
 
@@ -165,24 +177,54 @@ impl<'a, K: ArenaKind> DocumentBuilder<'a, K> {
     /// `None` when the pair is outside the source or splits a character.
     pub fn source_offset_at(&mut self, line: u32, column: u32) -> Option<u32> {
         if self.line_starts.is_empty() {
-            self.line_starts.push(0);
-            push_line_starts(self.arena.source().as_bytes(), &mut self.line_starts);
+            self.index_lines();
         }
+        let line_index = line.checked_sub(1)? as usize;
+        let start = *self.line_starts.get(line_index)?;
         let source = self.arena.source();
-        let start = *self.line_starts.get(line.checked_sub(1)? as usize)? as usize;
         let end = self
             .line_starts
-            .get(line as usize)
-            .map_or(source.len(), |&next| next as usize);
+            .get(line_index + 1)
+            .map_or(source.len() as u32, |&next| next);
         let target = column.checked_sub(1)?;
-        let mut units = 0;
-        for (index, ch) in source[start..end].char_indices() {
+        if self.line_is_ascii[line_index] {
+            return (target <= end - start).then_some(start + target);
+        }
+        let cursor = self.column_cursor;
+        let (mut units, from) = if cursor.line == line && cursor.units <= target {
+            (cursor.units, cursor.offset)
+        } else {
+            (0, start)
+        };
+        for (index, ch) in source[from as usize..end as usize].char_indices() {
             if units == target {
-                return Some((start + index) as u32);
+                let offset = from + index as u32;
+                self.column_cursor = ColumnCursor {
+                    line,
+                    units,
+                    offset,
+                };
+                return Some(offset);
             }
             units += ch.len_utf16() as u32;
         }
-        (units == target).then_some(end as u32)
+        (units == target).then_some(end)
+    }
+
+    fn index_lines(&mut self) {
+        let bytes = self.arena.source().as_bytes();
+        self.line_starts.push(0);
+        push_line_starts(bytes, &mut self.line_starts);
+        let ends = self.line_starts[1..]
+            .iter()
+            .copied()
+            .chain(std::iter::once(bytes.len() as u32));
+        self.line_is_ascii = self
+            .line_starts
+            .iter()
+            .zip(ends)
+            .map(|(&start, end)| bytes[start as usize..end as usize].is_ascii())
+            .collect();
     }
 
     #[inline(always)]
@@ -337,6 +379,18 @@ mod tests {
         assert_eq!(builder.source_offset_at(3, 1), Some(13)); // after the CRLF and the LF
         assert_eq!(builder.source_offset_at(3, 4), Some(19)); // the space after é😀
         assert_eq!(builder.source_offset_at(3, 6), Some(21)); // end of the source
+    }
+
+    #[test]
+    fn source_offset_at_resolves_earlier_columns_after_later_ones() {
+        let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::new("é😀 b\nplain".to_string());
+        assert_eq!(builder.source_offset_at(1, 5), Some(7));
+        assert_eq!(builder.source_offset_at(1, 2), Some(2));
+        assert_eq!(builder.source_offset_at(1, 3), None);
+        assert_eq!(builder.source_offset_at(1, 6), Some(8));
+        assert_eq!(builder.source_offset_at(2, 3), Some(11));
+        assert_eq!(builder.source_offset_at(2, 7), None);
+        assert_eq!(builder.source_offset_at(1, 1), Some(0));
     }
 
     #[test]

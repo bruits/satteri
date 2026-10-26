@@ -477,12 +477,10 @@ impl<'input, F> Parser<'input, BrokenLinkCallback<F>> {
 
 impl<'input> ParserInner<'input> {
     /// Unlike the event iterator, the arena consumer can expand committed
-    /// autolinks directly into their final link and text nodes. Keep MDX on
-    /// the ordinary representation used by its inline rewriting paths.
+    /// autolinks directly into their final link and text nodes, and reads
+    /// attributes written after inline elements.
     pub(crate) fn new_for_arena(text: &'input str, options: Options) -> Self {
-        let compact_links = !options.contains(Options::ENABLE_MDX);
-        let (mut tree, allocs, firstpass_mdx_errors) =
-            run_first_pass_mode(text, options, compact_links);
+        let (mut tree, allocs, firstpass_mdx_errors) = run_first_pass_mode(text, options, true);
         tree.reset();
         ParserInner {
             text,
@@ -617,24 +615,6 @@ impl<'input> ParserInner<'input> {
             block_end += len;
         }
         let attributes = attributes?;
-
-        // Check before changing anything: escapes or syntax inside the braces
-        // mean they aren't an attribute block. An emphasis marker there is still
-        // text, as the block takes it before it could pair (`{.a_b}`).
-        let mut next = self.tree[ix].next;
-        while let Some(n) = next
-            && self.tree[n].item.start < block_end
-        {
-            if !matches!(
-                self.tree[n].item.body,
-                ItemBody::Text {
-                    backslash_escaped: false
-                } | ItemBody::MaybeEmphasis(..)
-            ) {
-                return None;
-            }
-            next = self.tree[n].next;
-        }
 
         while let Some(n) = self.tree[ix].next
             && self.tree[n].item.start < block_end

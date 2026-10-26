@@ -41,8 +41,10 @@ pub(crate) fn run_first_pass(
 pub(crate) fn run_first_pass_mode(
     text: &str,
     options: Options,
-    compact_links: bool,
+    for_arena: bool,
 ) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
+    // Keep MDX on the ordinary representation used by its inline rewriting paths.
+    let compact_links = for_arena && !options.contains(Options::ENABLE_MDX);
     // Measured: real-world Markdown yields ~1 tree item per 10 source bytes.
     let start_capacity = max(128, text.len() / 10);
     // Only gate raw construct triggers. Keep GFM enabled in `options`: the
@@ -89,6 +91,9 @@ pub(crate) fn run_first_pass_mode(
         table_markers_present: None,
         unresolved_code_seen: false,
         link_mode,
+        inline_attributes: for_arena
+            && options.contains(Options::ENABLE_ATTRIBUTES)
+            && !options.contains(Options::ENABLE_MDX),
     };
     first_pass.run()
 }
@@ -115,6 +120,8 @@ enum LinkMode {
 pub(crate) struct FirstPass<'a, 'b> {
     pub(crate) text: &'a str,
     link_mode: LinkMode,
+    // Only the arena build reads a `{...}` written after an inline element.
+    inline_attributes: bool,
     // An earlier unresolved run can claim a later code pair.
     unresolved_code_seen: bool,
     pub(crate) tree: Tree<Item>,
@@ -4196,8 +4203,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // With attributes on inline elements, one ending the heading
         // (`# Title **b**{.x}`) reads the block first, so it's left for the
         // block pass to give the heading if that element doesn't take it.
-        if self.options.contains(Options::ENABLE_ATTRIBUTES)
-            && !self.options.contains(Options::ENABLE_MDX)
+        if self.inline_attributes
             && !tail_has_content
             && may_end_inline_element(self.text, attribute_chain_start(self.text, block_open))
         {
@@ -4387,6 +4393,7 @@ fn scan_paragraph_interrupt_no_table(
         // functions aren't named in the lite build (where it returns false).
         || mdx_block_interrupts(bytes, mdx)
         || definition_list
+            && is_definition_list_marker(bytes)
             && ((current_container
                 && tree.peek_up().is_some_and(|cur| {
                     matches!(
@@ -4399,7 +4406,6 @@ fn scan_paragraph_interrupt_no_table(
                 || tree.walk_spine().nth(tree_position).is_some_and(|cur| {
                     matches!(tree[*cur].item.body, ItemBody::DefinitionListDefinition(..))
                 }))
-            && is_definition_list_marker(bytes)
         || (has_footnote
             && bytes.starts_with(b"[^")
             && scan_link_label_rest(

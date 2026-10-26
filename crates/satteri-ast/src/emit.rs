@@ -409,8 +409,7 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
 
         Some(MdastNodeType::Code) => {
             let code_data = decode_code_data(view.get_type_data(node_id));
-            // As in mdast-util-to-hast, the node's data applies to the `<code>`,
-            // overlaying its language class, and the `<pre>` stays bare.
+            // As in mdast-util-to-hast, the node's data goes on the `<code>`, not the `<pre>`.
             sink.open_element("pre", Pos::Node(node_id));
             sink.finish_attrs();
             sink.open_source_element("code", node_id);
@@ -423,12 +422,13 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
                     AttrValue::Prefixed(PROP_SPACE_SEP, "language-", first),
                 );
             }
-            if sink.finish_source_attrs() == Children::Replaced {
+            let children = sink.finish_source_attrs();
+            sink.code_info(code_data.lang, code_data.meta);
+            if children == Children::Replaced {
                 sink.close_element("code");
                 sink.close_element("pre");
                 return;
             }
-            sink.code_info(code_data.lang, code_data.meta);
             sink.code_block_text(view.get_str(code_data.value), Pos::None);
             sink.close_element("code");
             sink.close_element("pre");

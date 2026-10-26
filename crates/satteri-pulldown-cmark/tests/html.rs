@@ -1,4 +1,4 @@
-use satteri_pulldown_cmark::Options;
+use satteri_pulldown_cmark::{Event, Options, Parser, Tag};
 
 fn parse_to_html(input: &str) -> String {
     let (arena, _) = satteri_pulldown_cmark::parse(input, Options::empty());
@@ -318,6 +318,19 @@ fn heading_attributes_emit_custom_attributes() {
     let original = "### Note {#n data-key=value flag}";
     let expected = "<h3 id=\"n\" data-key=\"value\" flag=\"\">Note</h3>\n";
     assert_eq!(expected, parse_to_html_with_heading_attrs(original));
+}
+
+#[test]
+fn event_parser_gives_the_heading_a_block_after_an_inline_element() {
+    let classes = Parser::new_ext("# Title *b*{.x}", Options::ENABLE_ATTRIBUTES).find_map(
+        |event| match event {
+            Event::Start(Tag::Heading { classes, .. }) => {
+                Some(classes.iter().map(|c| c.to_string()).collect::<Vec<_>>())
+            }
+            _ => None,
+        },
+    );
+    assert_eq!(classes, Some(vec!["x".to_string()]));
 }
 
 #[test]

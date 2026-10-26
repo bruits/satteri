@@ -294,10 +294,7 @@ impl<'input> ParserInner<'input> {
         while end > 0 && matches!(text.as_bytes()[end - 1], b' ' | b'\t') {
             end -= 1;
         }
-        let open = text[..end].rfind('{')?;
-        if scan_inline_attribute_block(&text.as_bytes()[open..])? != end - open {
-            return None;
-        }
+        let open = attribute_block_open(text, end)?;
         let attributes = parse_inside_attribute_block(&text[open + 1..end - 1])?;
         // Of several blocks that follow one another (`{.a}{.b}`), only the last
         // goes on the block, the rest staying text; but an inline element before
@@ -406,14 +403,22 @@ pub(crate) fn may_end_inline_element(text: &str, open: usize) -> bool {
         )
 }
 
+/// The `{` opening the attribute block that ends at `end`, skipping braces in quoted values.
+pub(crate) fn attribute_block_open(text: &str, end: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..end]).map_or(0, |ix| ix + 1);
+    memchr::memchr_iter(b'{', &bytes[line_start..end])
+        .map(|ix| line_start + ix)
+        .find(|&open| scan_inline_attribute_block(&bytes[open..]) == Some(end - open))
+}
+
 /// Where the run of blocks that follow one another (`{.a}{.b}`) and end with
 /// the block at `open` starts.
 pub(crate) fn attribute_chain_start(text: &str, open: usize) -> usize {
     let mut chain_start = open;
     while chain_start > 0
         && text.as_bytes()[chain_start - 1] == b'}'
-        && let Some(earlier) = text[..chain_start].rfind('{')
-        && scan_inline_attribute_block(&text.as_bytes()[earlier..]) == Some(chain_start - earlier)
+        && let Some(earlier) = attribute_block_open(text, chain_start)
         && parse_inside_attribute_block(&text[earlier + 1..chain_start - 1]).is_some()
     {
         chain_start = earlier;
