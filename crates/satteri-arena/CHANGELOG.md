@@ -1,5 +1,11 @@
 # satteri-arena
 
+## 0.4.1 — 2026-10-26
+
+### Patch changes
+
+- [beae7c9](https://github.com/bruits/satteri/commit/beae7c9ea45edaad0f7f00f6ac61f38352a1b447) Fixed nodes a plugin passes back losing their `position`: a spread copy of a node, or a custom node given a position, now keeps it for the plugins after it. — Thanks @Saeris!
+
 ## 0.4.0 — 2026-10-26
 
 ### Minor changes

@@ -1,5 +1,11 @@
 # satteri
 
+## 0.2.15 — 2026-10-26
+
+### Patch changes
+
+- Updated dependencies: satteri-ast (Cargo)@0.6.1, satteri-mdxjs (Cargo)@0.3.15, satteri-pulldown-cmark (Cargo)@0.6.5
+
 ## 0.2.14 — 2026-10-26
 
 ### Patch changes

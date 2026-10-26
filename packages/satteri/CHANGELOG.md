@@ -1,5 +1,19 @@
 # satteri
 
+## 0.11.2 — 2026-10-26
+
+### Patch changes
+
+- [1be47fb](https://github.com/bruits/satteri/commit/1be47fb1f1c95fcbc2c7462ce7447d06d7e3cc01) Added the `attributes` feature, which reads `{...}` attributes on fenced code blocks (` ```js {.class #id} `) as well as on headings. — Thanks @Saeris!
+- [99e7ab5](https://github.com/bruits/satteri/commit/99e7ab52a97f80f7287e5d94c50fda88a93172f5) Added inline elements to the `attributes` feature: a `{...}` right after emphasis, strong, a code span, a link, an image or strikethrough (`*em*{.class}`) applies to it. — Thanks @Saeris!
+- [7db3e86](https://github.com/bruits/satteri/commit/7db3e864540e8cb5acc4f5f8f2c217c2a66d6c86) Added blocks to the `attributes` feature: a `{...}` ending a paragraph, list item, table cell or definition list entry applies to it, and one on a line of its own applies to the block it follows. — Thanks @Saeris!
+- [4ef9200](https://github.com/bruits/satteri/commit/4ef920011fec62507c05aee4a88710e86d4c836c) Fixed `data.hName`, `data.hProperties` and `data.hChildren` on a code block applying to its `<pre>` instead of its `<code>`. — Thanks @Saeris!
+- [c6cbc06](https://github.com/bruits/satteri/commit/c6cbc0650846b2a9ddfca9896d539cc8a2192097) Fixed `data.hName`, `data.hProperties` and `data.hChildren` being ignored on table rows and cells. — Thanks @Saeris!
+- [d95c76c](https://github.com/bruits/satteri/commit/d95c76c7e654391198cda4057f2ba66a9e5d50d1) Changed definition list terms to fit on one line, so a `:` marker after a paragraph of several lines no longer makes each line a term. — Thanks @Saeris!
+- [beae7c9](https://github.com/bruits/satteri/commit/beae7c9ea45edaad0f7f00f6ac61f38352a1b447) Fixed nodes a plugin passes back losing their `position`: a spread copy of a node, or a custom node given a position, now keeps it for the plugins after it. — Thanks @Saeris!
+- [1be47fb](https://github.com/bruits/satteri/commit/1be47fb1f1c95fcbc2c7462ce7447d06d7e3cc01) Deprecated the `headingAttributes` feature in favor of `attributes`, which reads heading attributes as well as attributes on other elements. `headingAttributes` keeps working. — Thanks @Saeris!
+- [fc432e5](https://github.com/bruits/satteri/commit/fc432e58ed8bbacc51f98379412e2426f5beb885) Added `features` to the plugin factory context, so a plugin can compile a fragment with the same syntax as the document: `markdownToMdast(fragment, { features: ctx.features })`. — Thanks @Saeris!
+
 ## 0.11.1 — 2026-10-26
 
 ### Patch changes

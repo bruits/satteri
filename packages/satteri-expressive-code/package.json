@@ -1,6 +1,6 @@
 {
   "name": "satteri-expressive-code",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "description": "Sätteri HAST plugin for Expressive Code",
   "keywords": [
     "code-blocks",

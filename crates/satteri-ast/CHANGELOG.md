@@ -1,5 +1,13 @@
 # satteri-ast
 
+## 0.6.1 — 2026-10-26
+
+### Patch changes
+
+- [4ef9200](https://github.com/bruits/satteri/commit/4ef920011fec62507c05aee4a88710e86d4c836c) Fixed `data.hName`, `data.hProperties` and `data.hChildren` on a code block applying to its `<pre>` instead of its `<code>`. — Thanks @Saeris!
+- [c6cbc06](https://github.com/bruits/satteri/commit/c6cbc0650846b2a9ddfca9896d539cc8a2192097) Fixed `data.hName`, `data.hProperties` and `data.hChildren` being ignored on table rows and cells. — Thanks @Saeris!
+- Updated dependencies: satteri-arena (Cargo)@0.4.1
+
 ## 0.6.0 — 2026-10-26
 
 ### Minor changes

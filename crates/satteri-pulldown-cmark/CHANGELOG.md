@@ -1,5 +1,18 @@
 # satteri-pulldown-cmark
 
+## 0.6.5 — 2026-10-26
+
+### Patch changes
+
+- [1be47fb](https://github.com/bruits/satteri/commit/1be47fb1f1c95fcbc2c7462ce7447d06d7e3cc01) Added the `attributes` feature, which reads `{...}` attributes on fenced code blocks (` ```js {.class #id} `) as well as on headings. — Thanks @Saeris!
+- [cb0320d](https://github.com/bruits/satteri/commit/cb0320ddc5327ccbaf47f119f4ca6237b78a356b) Fixed a `{...}` holding something other than attributes, such as `{base|reading}`, being read as heading attributes. — Thanks @Saeris!
+- [99e7ab5](https://github.com/bruits/satteri/commit/99e7ab52a97f80f7287e5d94c50fda88a93172f5) Added inline elements to the `attributes` feature: a `{...}` right after emphasis, strong, a code span, a link, an image or strikethrough (`*em*{.class}`) applies to it. — Thanks @Saeris!
+- [7db3e86](https://github.com/bruits/satteri/commit/7db3e864540e8cb5acc4f5f8f2c217c2a66d6c86) Added blocks to the `attributes` feature: a `{...}` ending a paragraph, list item, table cell or definition list entry applies to it, and one on a line of its own applies to the block it follows. — Thanks @Saeris!
+- [dee2aa7](https://github.com/bruits/satteri/commit/dee2aa7c7477d6afcee728b61d19cd2762c744d3) Fixed directive attributes dropping an explicit `class=` or a later id, and made directive and heading attributes keep the order they are written in. — Thanks @Saeris!
+- [d95c76c](https://github.com/bruits/satteri/commit/d95c76c7e654391198cda4057f2ba66a9e5d50d1) Changed definition list terms to fit on one line, so a `:` marker after a paragraph of several lines no longer makes each line a term. — Thanks @Saeris!
+- [5183c4f](https://github.com/bruits/satteri/commit/5183c4f74a2227fccd8180f5b58ba2024de93671) Added the tilde (`~`) definition marker to definition lists, alongside the colon. — Thanks @Saeris!
+- Updated dependencies: satteri-arena (Cargo)@0.4.1, satteri-ast (Cargo)@0.6.1
+
 ## 0.6.4 — 2026-10-26
 
 ### Patch changes
