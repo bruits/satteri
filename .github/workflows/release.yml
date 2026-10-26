@@ -172,19 +172,21 @@ jobs:
         run: pnpm napi create-npm-dirs && pnpm napi artifacts
         working-directory: packages/satteri
 
-      - name: Check if release PR merge
+      - name: Check if satteri needs publishing
         id: check
+        # Keyed on npm rather than the commit subject because sampo publishes any unpublished version on every push.
         run: |
-          COMMIT_MSG=$(git log -1 --pretty=%s)
-          echo "commit_message=$COMMIT_MSG"
-          if echo "$COMMIT_MSG" | grep -qE "^Release \(main\) \(#[0-9]+\)$"; then
-            echo "is_release=true" >> $GITHUB_OUTPUT
+          version=$(node -p "require('./package.json').version")
+          published=$(npm view "satteri@$version" version 2>/dev/null || true)
+          if [ "$published" = "$version" ]; then
+            echo "needs_publish=false" >> "$GITHUB_OUTPUT"
           else
-            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "needs_publish=true" >> "$GITHUB_OUTPUT"
           fi
+        working-directory: packages/satteri
 
       - name: Publish NAPI platform packages
-        if: steps.check.outputs.is_release == 'true'
+        if: steps.check.outputs.needs_publish == 'true'
         run: |
           set -euo pipefail
           pnpm napi version
@@ -199,8 +201,8 @@ jobs:
             if npm publish "$dir" --access public --provenance 2>&1 | tee "$log"; then
               continue
             fi
-            # Tolerated so a re-run after a partial publish can finish the remaining bindings.
-            if grep -q EPUBLISHCONFLICT "$log"; then
+            # Tolerated so a later run can finish a partially published release.
+            if grep -q "cannot publish over the previously published versions" "$log"; then
               echo "$name is already published at this version, skipping."
               continue
             fi
@@ -215,7 +217,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Inject optionalDependencies into main package.json
-        if: steps.check.outputs.is_release == 'true'
+        if: steps.check.outputs.needs_publish == 'true'
         run: pnpm napi pre-publish -t npm --skip-optional-publish --no-gh-release
         working-directory: packages/satteri
 
