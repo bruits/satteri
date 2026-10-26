@@ -7,14 +7,14 @@ import rehypeStringify from "rehype-stringify";
 import { markdownToHast } from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 
-const reference = unified()
+const referenceProcessor = unified()
   .use(remarkParse)
   .use(remarkRehype, { allowDangerousHtml: true })
   .use(rehypeRaw)
   .use(rehypeStringify);
 
 const referenceTree = (md: string): HastNode =>
-  reference.runSync(reference.parse(md)) as unknown as HastNode;
+  referenceProcessor.runSync(referenceProcessor.parse(md)) as unknown as HastNode;
 
 const stringify = (tree: HastNode): string =>
   unified()
@@ -123,6 +123,18 @@ const cases: Array<{ name: string; md: string }> = [
   { name: "nested forms", md: `<form><form><input></form></form>` },
   { name: "inline svg in paragraph", md: `<p><svg><circle r="1"/></svg>after</p>` },
   { name: "mathml", md: `<math><mi>x</mi></math>` },
+  { name: "raw block interrupts paragraph", md: `before <div>inside</div> after` },
+  { name: "formatting crosses paragraphs", md: `before <b>bold\n\nnext</b>` },
+  { name: "coalesced raw and Markdown text", md: `before <span>raw &amp; text</span> after` },
+  { name: "Unicode surrounding raw HTML", md: `# 👋 héllo\n\n<div>raw</div>\n\nA [café](x) here.` },
+  { name: "escaped Markdown text", md: `# a & b < c\n\n<div>raw</div>\n\nx & y` },
+  { name: "multiple raw elements", md: `<div>a</div><div>b</div>` },
+  { name: "ignored suffix after void raw element", md: `<input checked></div>` },
+  { name: "ignored raw wrapper", md: `<body><div>a</div></body>` },
+  {
+    name: "raw element swallowing Markdown",
+    md: `<script>\n\n# swallowed\n\n</script>\n\n# survivor`,
+  },
 ];
 
 describe("rawHtml conformance vs rehype-raw", () => {
@@ -137,4 +149,55 @@ describe("rawHtml conformance vs rehype-raw", () => {
       expect(clean(ours)).toEqual(clean(referenceTree(md)));
     });
   }
+});
+
+/** Flatten to `path → span`, so two trees compare node position by node position. */
+function spans(node: HastNode, path = "", out: Array<[string, string | null]> = []) {
+  const p = node.position;
+  out.push([path, p ? `${p.start.offset}..${p.end ? p.end.offset : "?"}` : null]);
+  if ("children" in node && node.children) {
+    (node.children as HastNode[]).forEach((child, i) => spans(child, `${path}/${i}`, out));
+  }
+  return out;
+}
+
+// The root is excluded: rehype-raw collapses it to a zero-width span at 1:1.
+describe("rawHtml position conformance vs rehype-raw", () => {
+  for (const { name, md } of cases) {
+    test(`every position kept matches the reference: ${name}`, () => {
+      const reference = new Map(spans(referenceTree(md)));
+      for (const [path, span] of spans(markdownToHast(md, { features: { rawHtml: true } }))) {
+        if (path === "" || span === null) continue;
+        expect([path, span]).toEqual([path, reference.get(path)]);
+      }
+    });
+  }
+
+  test("nodes that came from Markdown keep their positions", () => {
+    const md = "# Hi\n\n<div>raw</div>\n\nA [link](x) here.\n";
+    const reference = new Map(spans(referenceTree(md)));
+    const kept = spans(markdownToHast(md, { features: { rawHtml: true } })).filter(
+      ([path, span]) => path !== "" && span !== null,
+    );
+    expect(kept.length).toBeGreaterThan(4);
+    for (const [path, span] of kept) expect([path, span]).toEqual([path, reference.get(path)]);
+  });
+
+  test("a raw block that is one element gets that element's span", () => {
+    const md = "text\n\n<div><em>x</em></div>\n";
+    const reference = new Map(spans(referenceTree(md)));
+    const ours = new Map(spans(markdownToHast(md, { features: { rawHtml: true } })));
+    expect(ours.get("/2")).toBe(reference.get("/2"));
+    expect(ours.get("/2")).toBe("6..27");
+  });
+
+  // Spans within a raw block need per-token offsets, which html5ever does not expose.
+  test("nodes nested inside raw HTML carry no position", () => {
+    const tree = markdownToHast("text\n\n<div><em>x</em></div>\n", {
+      features: { rawHtml: true },
+    });
+    const inner = spans(tree).filter(([path]) => path.startsWith("/2/"));
+    expect(inner.length).toBeGreaterThan(0);
+    for (const [, span] of inner) expect(span).toBeNull();
+  });
 });

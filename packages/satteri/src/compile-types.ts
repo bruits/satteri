@@ -138,7 +138,11 @@ export interface Features {
    * (re-emitted verbatim on stringify). With `rawHtml: true`, the tree is
    * reparsed so raw HTML becomes structured `element`/`text`/`comment` nodes
    * with normalized properties, including tags that open in one raw block
-   * and close in another. Positions are not preserved through the reparse.
+   * and close in another. Markdown-derived positions are retained when the
+   * source association is unambiguous, as are spans of self-contained raw
+   * blocks containing exactly one element. Nodes parsed within a raw block
+   * have no positions. Original code-fence elements
+   * retain their `data.lang` and `data.meta`.
    */
   rawHtml?: boolean;
 }

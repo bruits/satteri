@@ -1,6 +1,7 @@
 //! Render a HAST arena to an HTML string.
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use satteri_arena::{Document, Hast};
 use satteri_property_info::{PropKind, find_property};
@@ -85,11 +86,14 @@ pub fn render_node_with_options(
     out: &mut String,
     options: RenderOptions,
 ) {
-    render_node_inner(node_id, view, out, options, None, 0);
+    render_node_inner(node_id, view, out, options, None, None, 0);
 }
 
 /// Raw-HTML reparse hook: receives the output buffer and the MDX node's id.
 pub(crate) type OnMdx<'a> = dyn FnMut(&mut String, u32) + 'a;
+
+/// Records each serialized node's opening token and whole byte ranges without changing HTML.
+pub(crate) type OnNode<'a> = dyn FnMut(u32, Range<usize>, Range<usize>) + 'a;
 
 /// MDX nodes have no HTML representation: `on_mdx` decides what to emit for
 /// them; `None` skips them.
@@ -99,10 +103,11 @@ pub(crate) fn render_node_inner<'cb>(
     out: &mut String,
     context: RenderOptions,
     on_mdx: Option<&mut OnMdx<'cb>>,
+    on_node: Option<&mut OnNode<'cb>>,
     depth: u32,
 ) {
     with_headroom(depth, || {
-        render_node_at(node_id, view, out, context, on_mdx, depth);
+        render_node_at(node_id, view, out, context, on_mdx, on_node, depth);
     });
 }
 
@@ -112,6 +117,7 @@ fn render_node_at<'cb>(
     out: &mut String,
     context: RenderOptions,
     mut on_mdx: Option<&mut OnMdx<'cb>>,
+    mut on_node: Option<&mut OnNode<'cb>>,
     depth: u32,
 ) {
     let node = view.get_node(node_id);
@@ -124,12 +130,14 @@ fn render_node_at<'cb>(
                 out,
                 context,
                 on_mdx.as_deref_mut(),
+                on_node.as_deref_mut(),
                 depth + 1,
             );
         }
         return;
     };
 
+    let start = out.len();
     match node_type {
         HastNodeType::Root => {
             for &child_id in view.get_children(node_id) {
@@ -139,6 +147,7 @@ fn render_node_at<'cb>(
                     out,
                     context,
                     on_mdx.as_deref_mut(),
+                    on_node.as_deref_mut(),
                     depth + 1,
                 );
             }
@@ -157,6 +166,7 @@ fn render_node_at<'cb>(
             let svg_schema = context.svg_schema || tag == "svg";
             let element_in_svg = context.svg_content || tag == "svg";
 
+            let start = out.len();
             out.push('<');
             out.push_str(tag);
 
@@ -183,10 +193,9 @@ fn render_node_at<'cb>(
                 }
             }
 
-            if !element_in_svg && is_void_element(tag) {
-                out.push('>');
-            } else {
-                out.push('>');
+            out.push('>');
+            let opening_end = out.len();
+            if element_in_svg || !is_void_element(tag) {
                 let child_context = context.for_children(tag);
                 for &child_id in view.get_children(node_id) {
                     render_node_inner(
@@ -195,12 +204,16 @@ fn render_node_at<'cb>(
                         out,
                         child_context,
                         on_mdx.as_deref_mut(),
+                        on_node.as_deref_mut(),
                         depth + 1,
                     );
                 }
                 out.push_str("</");
                 out.push_str(tag);
                 out.push('>');
+            }
+            if let Some(cb) = on_node.as_mut() {
+                cb(node_id, start..opening_end, start..out.len());
             }
         }
 
@@ -250,6 +263,13 @@ fn render_node_at<'cb>(
                 cb(out, node_id);
             }
         }
+    }
+    if matches!(
+        node_type,
+        HastNodeType::Text | HastNodeType::Comment | HastNodeType::Doctype | HastNodeType::Raw
+    ) && let Some(cb) = on_node.as_mut()
+    {
+        cb(node_id, start..out.len(), start..out.len());
     }
 }
 
