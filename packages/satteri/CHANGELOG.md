@@ -1,5 +1,11 @@
 # satteri
 
+## 0.11.1 — 2026-10-26
+
+### Patch changes
+
+- [04dffbe](https://github.com/bruits/satteri/commit/04dffbea3f5da76565ed7610729dafeece19ee27) Fixed the 0.11.0 release, which never reached npm. — Thanks @Princesseuh!
+
 ## 0.11.0 — 2026-10-26
 
 ### Minor changes
