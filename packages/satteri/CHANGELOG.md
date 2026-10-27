@@ -1,5 +1,11 @@
 # satteri
 
+## 0.11.4 — 2026-10-27
+
+### Patch changes
+
+- [3df0ea8](https://github.com/bruits/satteri/commit/3df0ea869c84dc2fead0396d4a569930838ad45f) Fixed 0.11.1 and 0.11.3 failing to load because their native bindings were not installed with them. — Thanks @Princesseuh!
+
 ## 0.11.3 — 2026-10-27
 
 ### Patch changes
