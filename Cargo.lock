@@ -1282,9 +1282,9 @@ checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags",
  "errno",
@@ -1307,7 +1307,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "satteri"
-version = "0.2.15"
+version = "0.2.16"
 dependencies = [
  "satteri-ast",
  "satteri-mdxjs",
@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-arena"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "memchr",
  "rustc-hash",
@@ -1324,7 +1324,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-ast"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "html5ever",
  "memchr",
@@ -1357,7 +1357,7 @@ version = "0.0.0"
 
 [[package]]
 name = "satteri-mdxjs"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-napi"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "napi",
  "napi-build",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-plugin-api"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "rustc-hash",
  "satteri-arena",
@@ -1407,7 +1407,7 @@ version = "0.2.1"
 
 [[package]]
 name = "satteri-pulldown-cmark"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "bincode",
  "bitflags",

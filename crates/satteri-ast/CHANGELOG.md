@@ -1,5 +1,12 @@
 # satteri-ast
 
+## 0.6.2 — 2026-10-27
+
+### Patch changes
+
+- [c472f43](https://github.com/bruits/satteri/commit/c472f4323e265fc2739f8de7a7a681cf63ce50c3) Fixed a code block losing its `meta` when a plugin sets `data.hChildren` on it. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.4.2
+
 ## 0.6.1 — 2026-10-26
 
 ### Patch changes

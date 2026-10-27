@@ -1,5 +1,14 @@
 # satteri-pulldown-cmark
 
+## 0.6.6 — 2026-10-27
+
+### Patch changes
+
+- [c472f43](https://github.com/bruits/satteri/commit/c472f4323e265fc2739f8de7a7a681cf63ce50c3) Fixed the event parser with `ENABLE_ATTRIBUTES` leaving a heading's `{...}` as text when it follows an inline element. — Thanks @Princesseuh!
+- [c472f43](https://github.com/bruits/satteri/commit/c472f4323e265fc2739f8de7a7a681cf63ce50c3) Fixed a brace inside a quoted attribute value, such as `{title="a{b"}`, stopping the attributes from applying to a fenced code block, paragraph or table cell. — Thanks @Princesseuh!
+- [c472f43](https://github.com/bruits/satteri/commit/c472f4323e265fc2739f8de7a7a681cf63ce50c3) Fixed braces written as character references, such as `&#123;.a&#125;`, being read as a fenced code block's attributes. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.4.2, satteri-ast (Cargo)@0.6.2
+
 ## 0.6.5 — 2026-10-26
 
 ### Patch changes

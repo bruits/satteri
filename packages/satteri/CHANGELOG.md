@@ -1,5 +1,15 @@
 # satteri
 
+## 0.11.3 — 2026-10-27
+
+### Patch changes
+
+- [c472f43](https://github.com/bruits/satteri/commit/c472f4323e265fc2739f8de7a7a681cf63ce50c3) Fixed a code block losing its `meta` when a plugin sets `data.hChildren` on it. — Thanks @Princesseuh!
+- [c472f43](https://github.com/bruits/satteri/commit/c472f4323e265fc2739f8de7a7a681cf63ce50c3) Fixed plugins that hand nodes back becoming very slow on documents with long lines. — Thanks @Princesseuh!
+- [a102233](https://github.com/bruits/satteri/commit/a102233f3fffe679c253c6939816688b677dc66e) Fixed 0.11.1 failing to load because its native bindings were not installed with it. — Thanks @Princesseuh!
+- [c472f43](https://github.com/bruits/satteri/commit/c472f4323e265fc2739f8de7a7a681cf63ce50c3) Fixed a brace inside a quoted attribute value, such as `{title="a{b"}`, stopping the attributes from applying to a fenced code block, paragraph or table cell. — Thanks @Princesseuh!
+- [c472f43](https://github.com/bruits/satteri/commit/c472f4323e265fc2739f8de7a7a681cf63ce50c3) Fixed braces written as character references, such as `&#123;.a&#125;`, being read as a fenced code block's attributes. — Thanks @Princesseuh!
+
 ## 0.11.2 — 2026-10-26
 
 ### Patch changes

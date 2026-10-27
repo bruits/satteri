@@ -1,5 +1,11 @@
 # satteri-arena
 
+## 0.4.2 — 2026-10-27
+
+### Patch changes
+
+- [c472f43](https://github.com/bruits/satteri/commit/c472f4323e265fc2739f8de7a7a681cf63ce50c3) Fixed plugins that hand nodes back becoming very slow on documents with long lines. — Thanks @Princesseuh!
+
 ## 0.4.1 — 2026-10-26
 
 ### Patch changes
