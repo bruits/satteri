@@ -84,3 +84,32 @@ test("a hast node a plugin copies keeps its position for later plugins", () => {
   expect(untouched).toHaveLength(2);
   expect(run(true)).toEqual(untouched);
 });
+
+test("copies of several nodes on one line keep their positions", () => {
+  const run = (copy: boolean) => {
+    const seen: (Position | undefined)[] = [];
+    markdownToHtml("é *a* 😀 *b* *c*\n\nplain *d* *e*", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "edit",
+          options: { position: true },
+          emphasis(node, ctx) {
+            if (copy) ctx.replaceNode(node, { ...node });
+          },
+        }),
+        defineMdastPlugin({
+          name: "read",
+          options: { position: true },
+          emphasis(node) {
+            seen.push(node.position);
+          },
+        }),
+      ],
+    });
+    return seen;
+  };
+  const untouched = run(false);
+  expect(untouched).toHaveLength(5);
+  expect(untouched).not.toContain(undefined);
+  expect(run(true)).toEqual(untouched);
+});

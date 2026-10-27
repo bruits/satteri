@@ -37,6 +37,11 @@ describe("attributes: conformance vs markdown-it-attrs", () => {
     ["fence: a block that doesn't end the info string", "```js {.a} extra\nx\n```"],
     ["fence: an empty block", "```js {}\nx\n```"],
     ["fence: an unclosed block", "```js {.a\nx\n```"],
+    [
+      "fence: a brace inside a quoted value",
+      '``` {title="a}b"}\nx\n```\n\n``` {title="a{b"}\nx\n```',
+    ],
+    ["fence: braces written as character references", "```js &#123;.a&#125;\nx\n```"],
     ["inline: emphasis, strong and a code span", "*em*{.a} **strong**{#b} `code`{c=d}"],
     [
       "inline: link, image and reference link",
@@ -78,6 +83,10 @@ describe("attributes: conformance vs markdown-it-attrs", () => {
     ],
     ["block: a paragraph of its own anywhere else stays, empty", "# H\n\n{.alone}"],
     ["block: only the last of several blocks ending a paragraph", "text{.a}{.b}"],
+    [
+      "block: a brace inside a quoted value",
+      'para {title="a{b"}\n\n| h {title="a}b"} |\n| --- |\n| c {title="{"} |',
+    ],
     ["block: a block mid-paragraph stays text", "para\n{.x}\nmore"],
     ["block: braces in image alt text", "![{.cls}](x.png)"],
     ["block: an inline element before the block takes it", "![alt](img.png){.img-class}"],
