@@ -40,7 +40,7 @@ import langHtml from "shiki/langs/html.mjs";
 import langJavascript from "shiki/langs/javascript.mjs";
 import themeVitesseLight from "shiki/themes/vitesse-light.mjs";
 import themeVitesseDark from "shiki/themes/vitesse-dark.mjs";
-import satteriPkg from "../../packages/satteri/package.json" with { type: "json" };
+import satteriPkg from "../node_modules/satteri/package.json" with { type: "json" };
 
 const SATTERI_VERSION = satteriPkg.version;
 
