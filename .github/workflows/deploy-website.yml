@@ -7,9 +7,11 @@ on:
       - main
     paths:
       - "website/**"
-      - "packages/satteri/**"
-      - "crates/satteri-napi-binding/**"
       - ".github/workflows/deploy-website.yml"
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -20,7 +22,13 @@ concurrency:
 
 jobs:
   deploy:
-    if: "!contains(github.event.head_commit.message, '[skip cd]')"
+    # Release runs on every push to main, but only a release merge publishes a new version.
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && startsWith(github.event.workflow_run.head_commit.message, 'Release (main)'))
+      || (github.event_name != 'workflow_run'
+        && !contains(github.event.head_commit.message, '[skip cd]'))
     runs-on: ubuntu-latest
     name: Deploy
     steps:
@@ -39,6 +47,10 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install
+
+      # The lockfile pins whatever `latest` was when it was last refreshed.
+      - name: Use the latest published Sätteri
+        run: pnpm --filter satteri-website update satteri
 
       - uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3 # v1.3.0
         with:
