@@ -530,7 +530,8 @@ pub fn get_mdast_frontmatter(handle: &MdastHandle) -> Result<Option<JsFrontmatte
 const SMALL_WIRE_LIMIT: usize = 8192;
 
 fn wire_out<'env>(env: &'env Env, buf: Vec<u8>) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
-    if buf.len() <= SMALL_WIRE_LIMIT {
+    // emnapi builds a Buffer copy from `globalThis.Buffer`, which browsers do not have.
+    if !cfg!(target_family = "wasm") && buf.len() <= SMALL_WIRE_LIMIT {
         return Ok(Either::A(BufferSlice::copy_from(env, &buf)?));
     }
     Ok(Either::B(Uint8Array::new(buf)))
