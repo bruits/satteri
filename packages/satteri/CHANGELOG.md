@@ -1,5 +1,11 @@
 # satteri
 
+## 0.11.6 — 2026-10-28
+
+### Patch changes
+
+- [e20efd7](https://github.com/bruits/satteri/commit/e20efd7b695b520b0d21b460d0c3f3183ca44595) Fixed the tree functions and plugins failing in the browser with a `Buffer` error. — Thanks @Princesseuh!
+
 ## 0.11.5 — 2026-10-27
 
 ### Patch changes
