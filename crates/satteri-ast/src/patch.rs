@@ -559,6 +559,25 @@ fn flush_pending_splices<K: ArenaKind>(
     arena.set_children(parent, &new_list);
 }
 
+/// Anchors whose sibling inserts a live slot ref carries out of a detached parent.
+fn live_slot_ref_targets<K: ArenaKind>(
+    patches: &[Patch<K>],
+    plans: &FxHashMap<u32, AnchorPlan>,
+    ref_positions: &FxHashMap<usize, Vec<(u32, u32, bool)>>,
+    ref_placeholders: &FxHashMap<usize, Vec<(u32, u32, bool)>>,
+) -> FxHashSet<u32> {
+    ref_positions
+        .iter()
+        .chain(ref_placeholders)
+        .filter(|(pi, _)| !plans[&patch_anchor(&patches[**pi])].dropped)
+        .flat_map(|(_, refs)| {
+            refs.iter()
+                .filter(|&&(_, _, slot_ref)| slot_ref)
+                .map(|&(_, target, _)| target)
+        })
+        .collect()
+}
+
 /// Move `src`'s shape onto node 0: type, type_data, position, node_data, and
 /// children (re-parented to 0). `src` itself becomes unreachable garbage. The
 /// in-place equivalent of "the replacement becomes the new root".
@@ -1619,12 +1638,27 @@ fn apply_patches_impl<K: ArenaKind>(
         }
     }
 
+    let mut handed_back: Option<FxHashSet<u32>> = None;
     let parents: Vec<u32> = pending_splices.keys().copied().collect();
     for parent in parents {
         // A replaced or removed parent is detached; relisting its rescued children would re-parent them onto it.
         if plans.get(&parent).is_some_and(|plan| plan.deleted)
             && discards.get(&parent) == Some(&true)
         {
+            if let Some(parked) = pending_splices.remove(&parent) {
+                let handed_back = handed_back.get_or_insert_with(|| {
+                    live_slot_ref_targets(patches, &plans, &ref_positions, &ref_placeholders)
+                });
+                stranded.extend(
+                    parked
+                        .into_iter()
+                        .filter(|(anchor, slot)| {
+                            !handed_back.contains(anchor)
+                                && slot.len() > slots.get(anchor).map_or(0, Vec::len)
+                        })
+                        .map(|(anchor, _)| anchor),
+                );
+            }
             continue;
         }
         flush_pending_splices(arena, &mut pending_splices, parent, &mut stranded);
