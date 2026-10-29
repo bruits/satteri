@@ -2998,7 +2998,7 @@ fn unwrapping_a_node_keeps_the_sibling_inserts_on_its_children() {
 fn a_child_moved_out_of_a_replaced_parent_lands_once() {
     let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
     let mut arena = orig.clone();
-    apply_patches_strict(
+    let dropped = apply_patches_in_place(
         &mut arena,
         &[
             Patch::Replace {
@@ -3015,10 +3015,48 @@ fn a_child_moved_out_of_a_replaced_parent_lands_once() {
     )
     .expect("apply failed");
 
+    assert!(dropped.is_empty(), "nothing queued was lost: {dropped:?}");
     let kids = arena.get_children(0).to_vec();
     assert_eq!(kids.len(), 2);
     assert_eq!(arena.get_children(kids[0]), &[p2]);
     assert_eq!(kids[1], p1);
     assert_children_point_back(&arena, 0);
     assert_children_point_back(&arena, kids[0]);
+}
+
+/// A child whose position the root replacement drops loses its sibling insert
+/// even when it is copied elsewhere, and that loss is reported.
+#[test]
+fn an_insert_beside_a_child_the_root_replacement_drops_is_reported() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+
+    let mut arena = orig.clone();
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::Replace {
+                node_id: 0,
+                new_tree: PatchContent::Tree(root_with_ref(heading, None)),
+                keep_children: false,
+            },
+            Patch::InsertAfter {
+                node_id: heading,
+                new_tree: PatchContent::Tree(ref_payload_mdast(paragraph)),
+            },
+            Patch::InsertAfter {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    assert_eq!(dropped, vec![paragraph]);
+    assert_eq!(
+        child_types(&arena, 0),
+        vec![MdastNodeType::Heading as u8, MdastNodeType::Paragraph as u8]
+    );
+    assert_children_point_back(&arena, 0);
 }
