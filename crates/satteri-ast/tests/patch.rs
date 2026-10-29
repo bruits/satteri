@@ -2838,3 +2838,225 @@ fn a_sibling_insert_survives_a_later_set_children_on_its_parent() {
         "the insert queued on the retained text must survive the parent's rebuild"
     );
 }
+
+/// `root > blockquote > [paragraph, paragraph]`, returning `(arena, blockquote, [p1, p2])`.
+fn build_quote_of_two_paragraphs() -> (Arena<Mdast>, u32, [u32; 2]) {
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node(MdastNodeType::Root as u8);
+    b.open_node(MdastNodeType::Blockquote as u8);
+    for _ in 0..2 {
+        b.open_node(MdastNodeType::Paragraph as u8);
+        b.close_node();
+    }
+    b.close_node();
+    b.close_node();
+    let arena = b.finish();
+    let quote = arena.get_children(0)[0];
+    let paragraphs = arena.get_children(quote);
+    let paragraphs = [paragraphs[0], paragraphs[1]];
+    (arena, quote, paragraphs)
+}
+
+/// A `node_type` node whose children are refs to `targets`, the shape a
+/// visitor returning `{ ...node }` sends for the node's own children.
+fn node_with_refs(node_type: MdastNodeType, targets: &[u32]) -> Arena<Mdast> {
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node(node_type as u8);
+    for target in targets {
+        b.open_node(REF_NODE_TYPE);
+        b.set_data_current(&target.to_le_bytes());
+        b.close_node();
+    }
+    b.close_node();
+    b.finish()
+}
+
+fn assert_children_point_back(arena: &Arena<Mdast>, parent: u32) {
+    for &child in arena.get_children(parent) {
+        assert_eq!(
+            arena.get_node(child).parent,
+            parent,
+            "child {child} must name its new parent"
+        );
+    }
+}
+
+/// A replacement handing back the replaced node's own children keeps their
+/// positions, so a sibling insert queued on one of them lands beside it.
+#[test]
+fn a_replacement_handing_back_its_children_keeps_their_sibling_inserts() {
+    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
+    for immediate in [false, true] {
+        let mut patches = vec![
+            Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[p1, p2])),
+                keep_children: false,
+            },
+            Patch::InsertAfter {
+                node_id: p1,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+        ];
+        if immediate {
+            // A non-insert patch on a ref target switches to the ungrouped splice path.
+            patches.push(Patch::Replace {
+                node_id: p2,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Heading)),
+                keep_children: false,
+            });
+        }
+        let mut arena = orig.clone();
+        apply_patches_strict(&mut arena, &patches).expect("apply failed");
+
+        let new_quote = arena.get_children(0)[0];
+        assert_eq!(
+            child_types(&arena, new_quote),
+            vec![
+                MdastNodeType::Paragraph as u8,
+                MdastNodeType::ThematicBreak as u8,
+                if immediate {
+                    MdastNodeType::Heading as u8
+                } else {
+                    MdastNodeType::Paragraph as u8
+                },
+            ],
+            "the break inserted after the first paragraph must survive (immediate: {immediate})"
+        );
+        assert_eq!(arena.get_children(new_quote)[0], p1);
+        assert_children_point_back(&arena, new_quote);
+    }
+}
+
+/// The handed-back position of a removed child is empty, so the removal holds.
+#[test]
+fn a_replacement_handing_back_its_children_keeps_a_removal_among_them() {
+    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
+    let mut arena = orig.clone();
+    apply_patches_strict(
+        &mut arena,
+        &[
+            Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[p1, p2])),
+                keep_children: false,
+            },
+            Patch::Remove { node_id: p1 },
+        ],
+    )
+    .expect("apply failed");
+
+    let new_quote = arena.get_children(0)[0];
+    assert_eq!(arena.get_children(new_quote), &[p2]);
+}
+
+/// A child handed back at the top level of the payload, as unwrapping the
+/// node with `replaceNode(node, node.children)` does, keeps its position too.
+#[test]
+fn unwrapping_a_node_keeps_the_sibling_inserts_on_its_children() {
+    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
+    let mut arena = orig.clone();
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(root_with_ref(p2, None)),
+                keep_children: false,
+            },
+            Patch::InsertBefore {
+                node_id: p2,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+            Patch::InsertAfter {
+                node_id: p1,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Heading)),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    assert_eq!(
+        dropped,
+        vec![p1],
+        "the dropped child takes its insert along"
+    );
+    assert_eq!(
+        child_types(&arena, 0),
+        vec![
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::Paragraph as u8
+        ]
+    );
+    assert_eq!(arena.get_children(0)[1], p2);
+    assert_children_point_back(&arena, 0);
+}
+
+/// A child moved out of a parent whose replacement hands back its children is
+/// still a move: the node lands where it was inserted, not where it was.
+#[test]
+fn a_child_moved_out_of_a_replaced_parent_lands_once() {
+    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
+    let mut arena = orig.clone();
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[p1, p2])),
+                keep_children: false,
+            },
+            Patch::InsertAfter {
+                node_id: quote,
+                new_tree: PatchContent::Tree(ref_payload_mdast(p1)),
+            },
+            Patch::Remove { node_id: p1 },
+        ],
+    )
+    .expect("apply failed");
+
+    assert!(dropped.is_empty(), "nothing queued was lost: {dropped:?}");
+    let kids = arena.get_children(0).to_vec();
+    assert_eq!(kids.len(), 2);
+    assert_eq!(arena.get_children(kids[0]), &[p2]);
+    assert_eq!(kids[1], p1);
+    assert_children_point_back(&arena, 0);
+    assert_children_point_back(&arena, kids[0]);
+}
+
+/// A child whose position the root replacement drops loses its sibling insert
+/// even when it is copied elsewhere, and that loss is reported.
+#[test]
+fn an_insert_beside_a_child_the_root_replacement_drops_is_reported() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+
+    let mut arena = orig.clone();
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::Replace {
+                node_id: 0,
+                new_tree: PatchContent::Tree(root_with_ref(heading, None)),
+                keep_children: false,
+            },
+            Patch::InsertAfter {
+                node_id: heading,
+                new_tree: PatchContent::Tree(ref_payload_mdast(paragraph)),
+            },
+            Patch::InsertAfter {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    assert_eq!(dropped, vec![paragraph]);
+    assert_eq!(
+        child_types(&arena, 0),
+        vec![MdastNodeType::Heading as u8, MdastNodeType::Paragraph as u8]
+    );
+    assert_children_point_back(&arena, 0);
+}

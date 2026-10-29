@@ -419,15 +419,19 @@ fn resolve_target<K: ArenaKind>(
         }
         return vec![copy_subtree(arena, anchor, 0)];
     }
-    // An emptied slot is a removal, whose content the ref still names.
-    if let Some(slot) = slots.get(&target)
-        && !slot.is_empty()
-    {
-        if truly_dead.contains(&target) && adopted_by_id.insert(target) {
-            return slot.clone();
+    if let Some(slot) = slots.get(&target) {
+        // An emptied slot is a removal: a slot ref keeps it, a node ref still names the node.
+        if slot.is_empty() {
+            if slot_ref {
+                return Vec::new();
+            }
+        } else {
+            if truly_dead.contains(&target) && adopted_by_id.insert(target) {
+                return slot.clone();
+            }
+            let ids: Vec<u32> = slot.clone();
+            return ids.iter().map(|&id| copy_subtree(arena, id, 0)).collect();
         }
-        let ids: Vec<u32> = slot.clone();
-        return ids.iter().map(|&id| copy_subtree(arena, id, 0)).collect();
     }
     if truly_dead.contains(&target) && adopted_by_id.insert(target) {
         return vec![target];
@@ -453,11 +457,15 @@ fn resolve_grafted<K: ArenaKind>(
     let mut resolved_placeholders: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut placeholder_parents: Vec<u32> = Vec::new();
     let mut seen_parents: FxHashSet<u32> = FxHashSet::default();
+    let mut top_level_slot_refs: FxHashSet<u32> = FxHashSet::default();
     for &(ph, target, slot_ref) in placeholders {
         // Top-level placeholders have no parent and are resolved below. Checking
         // that directly avoids scanning every root for every placeholder.
         let parent = arena.get_node(ph).parent;
         if parent == u32::MAX {
+            if slot_ref {
+                top_level_slot_refs.insert(ph);
+            }
             continue;
         }
         let ids = resolve_target(
@@ -503,7 +511,7 @@ fn resolve_grafted<K: ArenaKind>(
                 self_removed,
                 slots,
                 position_slots,
-                false,
+                top_level_slot_refs.contains(&r),
                 truly_dead,
                 adopted_by_id,
             ));
@@ -549,6 +557,25 @@ fn flush_pending_splices<K: ArenaKind>(
         stranded.extend(slots.keys().copied().filter(|a| !current.contains(a)));
     }
     arena.set_children(parent, &new_list);
+}
+
+/// Anchors whose sibling inserts a live slot ref carries out of a detached parent.
+fn live_slot_ref_targets<K: ArenaKind>(
+    patches: &[Patch<K>],
+    plans: &FxHashMap<u32, AnchorPlan>,
+    ref_positions: &FxHashMap<usize, Vec<(u32, u32, bool)>>,
+    ref_placeholders: &FxHashMap<usize, Vec<(u32, u32, bool)>>,
+) -> FxHashSet<u32> {
+    ref_positions
+        .iter()
+        .chain(ref_placeholders)
+        .filter(|(pi, _)| !plans[&patch_anchor(&patches[**pi])].dropped)
+        .flat_map(|(_, refs)| {
+            refs.iter()
+                .filter(|&&(_, _, slot_ref)| slot_ref)
+                .map(|&(_, target, _)| target)
+        })
+        .collect()
 }
 
 /// Move `src`'s shape onto node 0: type, type_data, position, node_data, and
@@ -810,6 +837,12 @@ fn apply_patches_impl<K: ArenaKind>(
                 // Payload children are never emitted for keep_children.
                 continue;
             }
+            // A replacement handing back the replaced node's own children passes their slots on, edits around them included.
+            let hands_back_children = matches!(p, Patch::Replace { .. });
+            let names_slot = |target: u32, td: &[u8]| {
+                td.get(4) == Some(&REF_KIND_SLOT)
+                    || (hands_back_children && arena.get_node(target).parent == anchor)
+            };
             // A REF at wrap position 0 is the wrapper itself, copied verbatim, never resolved.
             let is_wrap = matches!(p, Patch::Wrap { .. });
             match content {
@@ -834,7 +867,7 @@ fn apply_patches_impl<K: ArenaKind>(
                         ref_positions.entry(pi).or_default().push((
                             sub_id,
                             target,
-                            td.get(4) == Some(&REF_KIND_SLOT),
+                            names_slot(target, td),
                         ));
                         ref_targets.insert(target);
                     }
@@ -865,7 +898,7 @@ fn apply_patches_impl<K: ArenaKind>(
                             ref_placeholders.entry(pi).or_default().push((
                                 id,
                                 target,
-                                td.get(4) == Some(&REF_KIND_SLOT),
+                                names_slot(target, td),
                             ));
                             ref_targets.insert(target);
                         } else {
@@ -1605,8 +1638,29 @@ fn apply_patches_impl<K: ArenaKind>(
         }
     }
 
+    let mut handed_back: Option<FxHashSet<u32>> = None;
     let parents: Vec<u32> = pending_splices.keys().copied().collect();
     for parent in parents {
+        // A replaced or removed parent is detached; relisting its rescued children would re-parent them onto it.
+        if plans.get(&parent).is_some_and(|plan| plan.deleted)
+            && discards.get(&parent) == Some(&true)
+        {
+            if let Some(parked) = pending_splices.remove(&parent) {
+                let handed_back = handed_back.get_or_insert_with(|| {
+                    live_slot_ref_targets(patches, &plans, &ref_positions, &ref_placeholders)
+                });
+                stranded.extend(
+                    parked
+                        .into_iter()
+                        .filter(|(anchor, slot)| {
+                            !handed_back.contains(anchor)
+                                && slot.len() > slots.get(anchor).map_or(0, Vec::len)
+                        })
+                        .map(|(anchor, _)| anchor),
+                );
+            }
+            continue;
+        }
         flush_pending_splices(arena, &mut pending_splices, parent, &mut stranded);
     }
 
