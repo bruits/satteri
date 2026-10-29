@@ -273,8 +273,9 @@ As such, we can guarantee that the non-childish forms of entertainment are proba
 ````````````````````````````````
 
 
-As a special exception, footnotes cannot be nested directly inside each other.
-If they are, they act like they're declared beside each other.
+A footnote definition can sit directly inside another one, as in remark-gfm,
+but each still renders as its own entry, as if they were declared beside each
+other.
 
 ```````````````````````````````` example
 Nested footnotes are considered poor style. [^a] [^xkcd] [^indent1] [^indent2]
@@ -759,4 +760,115 @@ Lorem ipsum.[^a] [^b]
 </li>
 </ol>
 </section>
+````````````````````````````````
+
+An image opener over a defined footnote label falls back to `!` and the
+footnote reference when what follows is not a resolved reference, even an
+unclosed `[` (https://github.com/bruits/satteri/issues/326).
+
+```````````````````````````````` example
+[^1]:![^1][
+
+x[^1]
+.
+<p>x<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref aria-describedby="footnote-label">1</a></sup></p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-1">
+<p>!<sup><a href="#user-content-fn-1" id="user-content-fnref-1-2" data-footnote-ref aria-describedby="footnote-label">1</a></sup>[ <a href="#user-content-fnref-1" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a> <a href="#user-content-fnref-1-2" data-footnote-backref="" aria-label="Back to reference 1-2" class="data-footnote-backref">↩<sup>2</sup></a></p>
+</li>
+</ol>
+</section>
+````````````````````````````````
+
+```````````````````````````````` example
+x![^1][nope]
+
+[^1]: a
+.
+<p>x!<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref aria-describedby="footnote-label">1</a></sup>[nope]</p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-1">
+<p>a <a href="#user-content-fnref-1" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a></p>
+</li>
+</ol>
+</section>
+````````````````````````````````
+
+A full reference that resolves keeps the image.
+
+```````````````````````````````` example
+x![^1][ref]
+
+[ref]: /u
+[^1]: a
+.
+<p>x<img src="/u" alt="^1"></p>
+````````````````````````````````
+
+A definition that starts on another definition's line nests inside it, as in
+remark-gfm, so a line indented for both continues the inner one
+(https://github.com/bruits/satteri/issues/326).
+
+```````````````````````````````` example
+x[^1] [^2]
+
+[^1]: [^2]: b
+
+        c
+.
+<p>x<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref aria-describedby="footnote-label">1</a></sup> <sup><a href="#user-content-fn-2" id="user-content-fnref-2" data-footnote-ref aria-describedby="footnote-label">2</a></sup></p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-1">
+<a href="#user-content-fnref-1" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a>
+</li>
+<li id="user-content-fn-2">
+<p>b</p>
+<p>c <a href="#user-content-fnref-2" data-footnote-backref="" aria-label="Back to reference 2" class="data-footnote-backref">↩</a></p>
+</li>
+</ol>
+</section>
+````````````````````````````````
+
+A definition that renders nothing, like a nested footnote definition or a link
+reference definition, doesn't count as the last block, so the backref still
+goes in the paragraph before it.
+
+```````````````````````````````` example
+x[^1]
+
+[^1]: a
+
+    [x]: /u
+.
+<p>x<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref aria-describedby="footnote-label">1</a></sup></p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-1">
+<p>a <a href="#user-content-fnref-1" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a></p>
+</li>
+</ol>
+</section>
+````````````````````````````````
+
+A footnote label can't hold whitespace, so `[^a b]` is a link label like any
+other, and `[^a b]:` starts a link reference definition, which can't interrupt
+a paragraph.
+
+```````````````````````````````` example
+x[^a b] ![^a b] [y][^a b]
+
+[^a b]: /u
+.
+<p>x<a href="/u">^a b</a> <img src="/u" alt="^a b"> <a href="/u">y</a></p>
+````````````````````````````````
+
+```````````````````````````````` example
+a
+[^a b]: /u
+.
+<p>a
+[^a b]: /u</p>
 ````````````````````````````````
