@@ -312,6 +312,38 @@ describe("HTML conformance: GFM autolink literals vs remark-gfm", () => {
     assertHtmlConformance("www.example.com/p>\n");
   });
 
+  test("punctuation and entity suffixes keep the forward tokenizer boundary", () => {
+    for (const body of ["!!a!", "&a;!a!", "a(b.)", "a(b&NotAnEntity;)", ")a(b))", "a&;", "a&#1;"]) {
+      assertMdastConformance(`https://example.com/${body}\n`);
+      assertHtmlConformance(`https://example.com/${body}\n`);
+    }
+  });
+
+  test("long punctuation runs with an intervening non-trail remain one complete link", () => {
+    // Do not send the large cases through remark's quadratic reference path.
+    // Exact URL, label, node count and position also pin the trimming boundary.
+    for (const count of [1024, 8192, 131072]) {
+      for (const punctuation of ["!", "&NotAnEntity;"]) {
+        const url = `https://example.com/${punctuation.repeat(count)}a`;
+        const md = `${url}!\n`;
+        const paragraph = (satteriMdast(md) as Root).children[0] as Paragraph;
+        expect(paragraph.children).toHaveLength(2);
+        const link = paragraph.children[0] as Link;
+        expect(link.url).toBe(url);
+        expect(link.children).toEqual([{ type: "text", value: url, position: expect.anything() }]);
+        expect(link.position).toEqual({
+          start: { line: 1, column: 1, offset: 0 },
+          end: { line: 1, column: url.length + 1, offset: url.length },
+        });
+        expect(paragraph.children[1]).toEqual({
+          type: "text",
+          value: "!",
+          position: expect.anything(),
+        });
+      }
+    }
+  });
+
   test("autolink trigger at inline content start (after a `>` marker)", () => {
     assertHtmlConformance(">www.example.com/p*_~\n");
     assertHtmlConformance(">https://example.com).\n");
