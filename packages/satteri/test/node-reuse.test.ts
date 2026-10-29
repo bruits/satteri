@@ -477,6 +477,107 @@ test("keeping a node's children keeps a sibling inserted among them", () => {
   expect(html).toContain("<p>b</p>\n<hr>\n<p>c</p>");
 });
 
+test("keeping a node's children keeps a removal among them", () => {
+  const plugin = defineMdastPlugin({
+    name: "keep-children-with-removal",
+    blockquote(node) {
+      return { ...node, data: { hName: "section" }, _keepChildren: true } as never;
+    },
+    paragraph(node, ctx) {
+      if (ctx.indexOf(node) === 0) ctx.removeNode(node);
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<section>\n<p>b</p>\n</section>\n");
+});
+
+test("a node returned with its own children keeps the edits queued around them", () => {
+  const plugin = defineMdastPlugin({
+    name: "tabs",
+    containerDirective(node, ctx) {
+      ctx.insertBefore(node, { type: "html", value: `<${node.name}>` });
+      ctx.insertAfter(node, { type: "html", value: `</${node.name}>` });
+      return { ...node, data: { hName: "div" } };
+    },
+  });
+  const source = ":::tabs\n::::tab\na\n::::\n::::tab\nb\n::::\n:::\n";
+  const { html } = markdownToHtml(source, {
+    features: { directive: true },
+    mdastPlugins: [plugin],
+  });
+  expect(html).toBe(
+    "<tabs>\n<div><tab><div><p>a</p></div></tab><tab><div><p>b</p></div></tab></div>\n</tabs>\n",
+  );
+});
+
+test("a node returned with its own children keeps a removal among them", () => {
+  const plugin = defineMdastPlugin({
+    name: "drop-first-paragraph",
+    blockquote(node) {
+      return { ...node, data: { hName: "section" } };
+    },
+    paragraph(node, ctx) {
+      if (ctx.indexOf(node) === 0) ctx.removeNode(node);
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<section>\n<p>b</p>\n</section>\n");
+});
+
+test("unwrapping a node keeps the edits queued around its children", () => {
+  const plugin = defineMdastPlugin({
+    name: "unwrap-quote",
+    blockquote(node, ctx) {
+      ctx.replaceNode(node, node.children);
+    },
+    paragraph(node, ctx) {
+      if (ctx.indexOf(node) === 0) ctx.insertAfter(node, { type: "thematicBreak" });
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<p>a</p>\n<hr>\n<p>b</p>\n");
+});
+
+test("children handed back by a replacement belong to it in later plugins", () => {
+  const replace = defineMdastPlugin({
+    name: "quote-to-section",
+    blockquote(node, ctx) {
+      ctx.insertAfter(node.children[0]!, { type: "thematicBreak" });
+      return { ...node, data: { hName: "section" } };
+    },
+  });
+  const parents: unknown[] = [];
+  const probe = defineMdastPlugin({
+    name: "probe-parent",
+    paragraph(node, ctx) {
+      parents.push(ctx.parent(node).data);
+    },
+  });
+  markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [replace, probe] });
+  expect(parents).toEqual([{ hName: "section" }, { hName: "section" }]);
+});
+
+test("hast: an element returned with its own children keeps the edits queued around them", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-handed-back-children",
+    element: {
+      filter: ["blockquote", "p"],
+      visit(node, ctx) {
+        if (node.tagName === "blockquote") return { ...node, tagName: "section" };
+        const text = node.children[0];
+        if (text?.type !== "text") return;
+        if (text.value === "a") {
+          ctx.insertAfter(node, { type: "element", tagName: "hr", properties: {}, children: [] });
+        } else {
+          ctx.removeNode(node);
+        }
+      },
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
+  expect(html).toBe("<section>\n<p>a</p><hr>\n\n</section>\n");
+});
+
 test("mixed raw replace arrays preserve references to reused nodes", () => {
   const plugin = defineMdastPlugin({
     name: "mixed-raw-reuse",
