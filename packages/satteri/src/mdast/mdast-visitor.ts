@@ -262,6 +262,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: MdastDiagnostic[];
   readonly #pendingNodes: Map<number, MdastTarget> = new Map();
+  readonly #removedIds: number[] = [];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
@@ -299,6 +300,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     const id = requireNid(node as MdastNode, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
+    this.#removedIds.push(id);
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
@@ -386,24 +388,32 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
         emitMdastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
         return;
       }
-      let previous: MdastContent | undefined;
-      for (const n of newNode) {
-        if (previous !== undefined) {
-          emitMdastTree(this.#commandBuffer, "insertBefore", id, previous, false, this.#refs, true);
-        }
-        previous = n;
+      // Only the run in the replace command itself hands the node's children back with their edits.
+      const [start, end] = replacementRun(newNode);
+      for (const n of newNode.slice(0, start)) {
+        emitMdastTree(this.#commandBuffer, "insertBefore", id, n, false, this.#refs, true);
       }
-      if (previous === undefined) {
-        this.removeNode(node);
-      } else if (id === ROOT_NODE_ID && !isRawMdastContent(previous)) {
-        emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
-      } else {
-        emitMdastTree(this.#commandBuffer, "replace", id, previous, true, this.#refs, true);
-      }
-      if (previous !== undefined && !isRawMdastContent(previous)) {
-        this.#pendingNodes.set(id, previous);
-      } else {
+      const replacement = newNode.slice(start, end);
+      if (replacement.length > 1) {
+        emitMdastMultiReplace(this.#commandBuffer, id, replacement, this.#refs);
         this.#pendingNodes.delete(id);
+      } else {
+        const [only] = replacement;
+        if (only === undefined) {
+          this.removeNode(node);
+        } else if (id === ROOT_NODE_ID && !isRawMdastContent(only)) {
+          emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(only), this.#refs);
+        } else {
+          emitMdastTree(this.#commandBuffer, "replace", id, only, true, this.#refs, true);
+        }
+        if (only !== undefined && !isRawMdastContent(only)) {
+          this.#pendingNodes.set(id, only);
+        } else {
+          this.#pendingNodes.delete(id);
+        }
+      }
+      for (const n of newNode.slice(end)) {
+        emitMdastTree(this.#commandBuffer, "insertAfter", id, n, false, this.#refs, true);
       }
       return;
     }
@@ -542,6 +552,21 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
 
   getDiagnostics(): MdastDiagnostic[] {
     return this.#diagnostics;
+  }
+
+  removalCount(): number {
+    return this.#removedIds.length;
+  }
+
+  relistsRemovedChild(result: unknown, removalsBefore: number): boolean {
+    if (this.#removedIds.length === removalsBefore) return false;
+    const children = (result as { children?: unknown } | null | undefined)?.children;
+    if (!Array.isArray(children)) return false;
+    const removed = new Set(this.#removedIds.slice(removalsBefore));
+    return children.some((child) => {
+      const id = reusedId(child, this.#refs);
+      return id !== undefined && removed.has(id);
+    });
   }
 }
 
@@ -704,6 +729,22 @@ function isPlainReplacement(content: MdastContent): boolean {
   return (
     !isRawMdastContent(content) && (content as { _keepChildren?: unknown })._keepChildren !== true
   );
+}
+
+/** The longest run of op-stream items in an array replacement, else its last item. */
+function replacementRun(items: readonly MdastContent[]): [number, number] {
+  let run: [number, number] = [Math.max(items.length - 1, 0), items.length];
+  let longest = 0;
+  let start = 0;
+  items.forEach((item, i) => {
+    if (!isPlainReplacement(item)) {
+      start = i + 1;
+    } else if (i + 1 - start > longest) {
+      longest = i + 1 - start;
+      run = [start, i + 1];
+    }
+  });
+  return run;
 }
 
 /** Replace `id` with several nodes in one command, root-wrapped so the engine
@@ -1021,13 +1062,18 @@ export function visitMdastHandle(
       sub.nodeType,
       resolver,
     );
+    const removalsBefore = context.removalCount();
     const result = sub.visitFn.call(plugin, node, context);
 
     if (result instanceof Promise) {
       deferred ??= [];
       deferred.push({ nodeId, promise: result, originalNode: node });
     } else {
-      applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, node);
+      // Relisting a child this visit removed is a move, so the replacement must follow the removal.
+      const buffer = context.relistsRemovedChild(result, removalsBefore)
+        ? context.getCommandBuffer()
+        : returnBuffer;
+      applyMdastVisitResult(result, nodeId, buffer, resolver.refs, node);
     }
   }
 

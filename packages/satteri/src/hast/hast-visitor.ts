@@ -390,6 +390,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: HastDiagnostic[];
   readonly #pendingNodes: Map<number, HastNode> = new Map();
+  readonly #removedIds: number[] = [];
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
@@ -427,6 +428,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     const id = requireNid(node, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
+    this.#removedIds.push(id);
   }
 
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
@@ -651,6 +653,21 @@ class HastVisitorContextImpl implements HastVisitorContext {
   getDiagnostics(): HastDiagnostic[] {
     return this.#diagnostics;
   }
+
+  removalCount(): number {
+    return this.#removedIds.length;
+  }
+
+  relistsRemovedChild(result: unknown, removalsBefore: number): boolean {
+    if (this.#removedIds.length === removalsBefore) return false;
+    const children = (result as { children?: unknown } | null | undefined)?.children;
+    if (!Array.isArray(children)) return false;
+    const removed = new Set(this.#removedIds.slice(removalsBefore));
+    return children.some((child) => {
+      const id = hastReusedId(child, this.#refs);
+      return id !== undefined && removed.has(id);
+    });
+  }
 }
 
 /** A filtered visitor: Rust filters by tag/component name, only matched nodes cross the boundary. */
@@ -834,12 +851,17 @@ function dispatchMatches(
 
     const sub = subs[subIndex]!;
     const node = readMatchedNode(wire, dataOffset, nodeId, sub.nodeType);
+    const removalsBefore = ctx.removalCount();
     const result = sub.visitFn(node, ctx);
     if (result instanceof Promise) {
       deferred ??= [];
       deferred.push({ nodeId, promise: result, originalNode: node });
     } else {
-      applyHastVisitResult(result, nodeId, returnBuffer, node, resolver.refs);
+      // Relisting a child this visit removed is a move, so the replacement must follow the removal.
+      const buffer = ctx.relistsRemovedChild(result, removalsBefore)
+        ? ctx.getCommandBuffer()
+        : returnBuffer;
+      applyHastVisitResult(result, nodeId, buffer, node, resolver.refs);
     }
   }
 

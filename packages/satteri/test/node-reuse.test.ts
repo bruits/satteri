@@ -578,6 +578,65 @@ test("hast: an element returned with its own children keeps the edits queued aro
   expect(html).toBe("<section>\n<p>a</p><hr>\n\n</section>\n");
 });
 
+test("a child removed and listed again in its parent's replacement is moved, not lost", () => {
+  const plugin = defineMdastPlugin({
+    name: "move-first-paragraph-last",
+    blockquote(node, ctx) {
+      const [first, ...rest] = node.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      return { ...node, children: [...rest, first] };
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n<p>b</p>\n<p>a</p>\n</blockquote>\n");
+});
+
+test("hast: a child removed and listed again in its parent's replacement is moved, not lost", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-move-first-paragraph-last",
+    element: {
+      filter: ["blockquote"],
+      visit(node, ctx) {
+        const first = node.children.find((child) => child.type === "element");
+        if (!first) return;
+        ctx.removeNode(first);
+        return { ...node, children: [...node.children.filter((child) => child !== first), first] };
+      },
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n\n<p>b</p>\n<p>a</p></blockquote>\n");
+});
+
+test("a node replaced by its children between raw items keeps the edits queued around them", () => {
+  const plugin = defineMdastPlugin({
+    name: "wrap-children-in-raw-html",
+    blockquote(node, ctx) {
+      ctx.replaceNode(node, [{ raw: "<section>" }, ...node.children, { raw: "</section>" }]);
+    },
+    paragraph(node, ctx) {
+      if (ctx.indexOf(node) === 0) ctx.insertAfter(node, { type: "thematicBreak" });
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<section>\n<p>a</p>\n<hr>\n<p>b</p>\n</section>\n");
+});
+
+test("unwrapping a single-child node keeps the edits queued around that child", () => {
+  const plugin = defineMdastPlugin({
+    name: "unwrap-single-child-quote",
+    blockquote(node, ctx) {
+      ctx.replaceNode(node, node.children);
+    },
+    paragraph(node, ctx) {
+      ctx.insertAfter(node, { type: "thematicBreak" });
+    },
+  });
+  const { html } = markdownToHtml("> a\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<p>a</p>\n<hr>\n");
+});
+
 test("mixed raw replace arrays preserve references to reused nodes", () => {
   const plugin = defineMdastPlugin({
     name: "mixed-raw-reuse",
