@@ -137,16 +137,8 @@ export interface MdastDiagnostic {
   severity: "error" | "warning" | "info";
 }
 
-const requireNid = makeRequireNid(getNodeId);
-
-export class MdastVisitorContext {
-  readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
-  readonly #diagnostics: MdastDiagnostic[];
-  readonly #pendingNodes: Map<number, MdastTarget> = new Map();
-  readonly #handle: MdastHandle;
-  readonly #getSource: () => string;
-  readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
-  readonly #refs: NodeRefs;
+export interface MdastVisitorContext {
+  readonly source: string;
   /**
    * The URL of the document being processed (the compile `fileURL` option),
    * or `undefined` when none was given. Use `fileURLToPath(ctx.fileURL)` for a
@@ -166,6 +158,116 @@ export class MdastVisitorContext {
    * Markdown compile, `"mdx"` for an MDX one. Lets a plugin shared between both
    * pipelines branch on which it is handling.
    */
+  readonly sourceFormat: SourceFormat;
+  removeNode(node: Readonly<MdastTarget>): void;
+  /**
+   * Swap `node` for one node, or for an array of nodes placed in order at its
+   * position. An empty array drops the node, the same as `removeNode`.
+   * The document root takes a `root`, the one place a `root` is accepted as
+   * content, or a raw string, which parses to a root of its own.
+   */
+  replaceNode(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void;
+  insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void;
+  insertAfter(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void;
+  /**
+   * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
+   * children `parentNode` declares are kept after it. `parentNode` must be a
+   * node type that can hold children, or a raw string parsing to exactly one
+   * such block (`{ raw: "> " }` wraps in a blockquote); to surround a node
+   * with raw HTML tags, use `replaceNode(node, [openTag, node, closeTag])`
+   * instead.
+   */
+  wrapNode(
+    node: Readonly<MdastTarget>,
+    parentNode: MdastParentContent | RawMdastContent | RawHtmlMdastContent,
+  ): void;
+  prependChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void;
+  appendChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void;
+  /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
+  insertChildAt(
+    node: Readonly<MdastTarget>,
+    index: number,
+    childNode: MdastContent | MdastContent[],
+  ): void;
+  /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
+  removeChildAt(node: Readonly<MdastTarget>, index: number): void;
+  setField<N extends MdastTarget, K extends SettableFieldKey<N, true>>(
+    node: Readonly<N>,
+    key: K,
+    value: Exclude<N[K], undefined>,
+  ): void;
+  /** Table alignment is an array stored in the table's typed data. */
+  setField(node: Readonly<Table>, key: "align", value: Table["align"]): void;
+  /** `children` is structural and every parent accepts it, including node-type unions. */
+  setField(node: Readonly<MdastTarget>, key: "children", value: readonly MdastTarget[]): void;
+  /** `data` is an open per-node bag serialized to JSON. `null` clears it. */
+  setField(node: Readonly<MdastTarget>, key: "data", value: Record<string, unknown> | null): void;
+  /** Set one string entry in a directive's `attributes`. */
+  setAttribute(
+    node: Readonly<ContainerDirective | LeafDirective | TextDirective>,
+    name: string,
+    value: string,
+  ): void;
+  /** Set one entry in an MDX JSX element's `attributes`. */
+  setAttribute(
+    node: Readonly<MdxJsxFlowElement | MdxJsxTextElement>,
+    name: string,
+    value: unknown,
+  ): void;
+  /** @deprecated MDAST has no property container; use `setField`. */
+  setProperty<N extends MdastTarget, K extends keyof N & string>(
+    node: Readonly<N>,
+    key: K,
+    value: N[K],
+  ): void;
+  /** `children` is structural and every parent accepts it, so the key also
+   *  works on node-type unions (e.g. a node returned by `parent()`). */
+  setProperty(node: Readonly<MdastTarget>, key: "children", value: readonly MdastTarget[]): void;
+  /** `data` is an open per-node bag serialized to JSON on the wire, so it
+   *  accepts any record (hName/hProperties/custom fields), not just the node's
+   *  declared `data` shape. `null` clears it. */
+  setProperty(
+    node: Readonly<MdastTarget>,
+    key: "data",
+    value: Record<string, unknown> | null,
+  ): void;
+  /** Collect the concatenated text of all descendant text nodes (like mdast-util-to-string). */
+  textContent(
+    node: Readonly<MdastTarget>,
+    options?: { includeImageAlt?: boolean; includeHtml?: boolean },
+  ): string;
+  /**
+   * The parent of a node, or `undefined` at the root. Within a pass the same
+   * parent is always the same object, so visitors on sibling nodes can dedupe
+   * by identity.
+   */
+  parent<N extends Exclude<MdastNode, MdastRoot>>(node: Readonly<N>): Readonly<MdastParents>;
+  parent(node: Readonly<MdastTarget>): Readonly<MdastParents> | undefined;
+  /**
+   * Index of `node` within its parent's children, or `undefined` at the root.
+   * Use this rather than `parent.children.indexOf(node)`, which won't find it.
+   */
+  indexOf(node: Readonly<MdastTarget>): number | undefined;
+  report(opts: {
+    message: string;
+    node?: Readonly<MdastTarget>;
+    severity?: "error" | "warning" | "info";
+  }): void;
+  getDiagnostics(): MdastDiagnostic[];
+}
+
+const requireNid = makeRequireNid(getNodeId);
+
+class MdastVisitorContextImpl implements MdastVisitorContext {
+  readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
+  readonly #diagnostics: MdastDiagnostic[];
+  readonly #pendingNodes: Map<number, MdastTarget> = new Map();
+  readonly #handle: MdastHandle;
+  readonly #getSource: () => string;
+  readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
+  readonly #refs: NodeRefs;
+  readonly fileURL: URL | undefined;
+  readonly data: Data;
   readonly sourceFormat: SourceFormat;
 
   constructor(
@@ -217,14 +319,6 @@ export class MdastVisitorContext {
     }
   }
 
-  /**
-   * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
-   * children `parentNode` declares are kept after it. `parentNode` must be a
-   * node type that can hold children, or a raw string parsing to exactly one
-   * such block (`{ raw: "> " }` wraps in a blockquote); to surround a node
-   * with raw HTML tags, use `replaceNode(node, [openTag, node, closeTag])`
-   * instead.
-   */
   wrapNode(
     node: Readonly<MdastTarget>,
     parentNode: MdastParentContent | RawMdastContent | RawHtmlMdastContent,
@@ -250,7 +344,6 @@ export class MdastVisitorContext {
     );
   }
 
-  /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
   insertChildAt(
     node: Readonly<MdastTarget>,
     index: number,
@@ -266,18 +359,11 @@ export class MdastVisitorContext {
     this.#splice(requireNid(anchor as MdastNode, "insertChildAt", this.#refs), childNode, op);
   }
 
-  /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
   removeChildAt(node: Readonly<MdastTarget>, index: number): void {
     const child = "children" in node ? node.children?.[index] : undefined;
     if (child) this.removeNode(child);
   }
 
-  /**
-   * Swap `node` for one node, or for an array of nodes placed in order at its
-   * position. An empty array drops the node, the same as `removeNode`.
-   * The document root takes a `root`, the one place a `root` is accepted as
-   * content, or a raw string, which parses to a root of its own.
-   */
   replaceNode(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "replaceNode", this.#refs);
     const onlyReplacement = Array.isArray(newNode)
@@ -330,17 +416,6 @@ export class MdastVisitorContext {
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs, true);
   }
 
-  setField<N extends MdastTarget, K extends SettableFieldKey<N, true>>(
-    node: Readonly<N>,
-    key: K,
-    value: Exclude<N[K], undefined>,
-  ): void;
-  /** Table alignment is an array stored in the table's typed data. */
-  setField(node: Readonly<Table>, key: "align", value: Table["align"]): void;
-  /** `children` is structural and every parent accepts it, including node-type unions. */
-  setField(node: Readonly<MdastTarget>, key: "children", value: readonly MdastTarget[]): void;
-  /** `data` is an open per-node bag serialized to JSON. `null` clears it. */
-  setField(node: Readonly<MdastTarget>, key: "data", value: Record<string, unknown> | null): void;
   setField(node: Readonly<MdastTarget>, key: string, value: unknown): void {
     const id = requireNid(node as MdastNode, "setField", this.#refs);
     if (this.#foldPendingField(node, id, key, value)) return;
@@ -362,18 +437,6 @@ export class MdastVisitorContext {
     this.#commandBuffer.setField(id, key, value);
   }
 
-  /** Set one string entry in a directive's `attributes`. */
-  setAttribute(
-    node: Readonly<ContainerDirective | LeafDirective | TextDirective>,
-    name: string,
-    value: string,
-  ): void;
-  /** Set one entry in an MDX JSX element's `attributes`. */
-  setAttribute(
-    node: Readonly<MdxJsxFlowElement | MdxJsxTextElement>,
-    name: string,
-    value: unknown,
-  ): void;
   setAttribute(node: Readonly<MdastTarget>, name: string, value: unknown): void {
     const id = requireNid(node as MdastNode, "setAttribute", this.#refs);
     const target = this.#pendingNodes.get(id) ?? node;
@@ -415,23 +478,6 @@ export class MdastVisitorContext {
     return false;
   }
 
-  /** @deprecated MDAST has no property container; use `setField`. */
-  setProperty<N extends MdastTarget, K extends keyof N & string>(
-    node: Readonly<N>,
-    key: K,
-    value: N[K],
-  ): void;
-  /** `children` is structural and every parent accepts it, so the key also
-   *  works on node-type unions (e.g. a node returned by `parent()`). */
-  setProperty(node: Readonly<MdastTarget>, key: "children", value: readonly MdastTarget[]): void;
-  /** `data` is an open per-node bag serialized to JSON on the wire, so it
-   *  accepts any record (hName/hProperties/custom fields), not just the node's
-   *  declared `data` shape. `null` clears it. */
-  setProperty(
-    node: Readonly<MdastTarget>,
-    key: "data",
-    value: Record<string, unknown> | null,
-  ): void;
   setProperty(node: Readonly<MdastTarget>, key: string, value: unknown): void {
     const id = requireNid(node as MdastNode, "setProperty", this.#refs);
     if (key === "children") {
@@ -449,7 +495,6 @@ export class MdastVisitorContext {
     this.#commandBuffer.setProperty(id, key, value);
   }
 
-  /** Collect the concatenated text of all descendant text nodes (like mdast-util-to-string). */
   textContent(
     node: Readonly<MdastTarget>,
     options?: { includeImageAlt?: boolean; includeHtml?: boolean },
@@ -461,11 +506,6 @@ export class MdastVisitorContext {
     );
   }
 
-  /**
-   * The parent of a node, or `undefined` at the root. Within a pass the same
-   * parent is always the same object, so visitors on sibling nodes can dedupe
-   * by identity.
-   */
   parent<N extends Exclude<MdastNode, MdastRoot>>(node: Readonly<N>): Readonly<MdastParents>;
   parent(node: Readonly<MdastTarget>): Readonly<MdastParents> | undefined;
   parent(node: Readonly<MdastTarget>): Readonly<MdastParents> | undefined {
@@ -474,10 +514,6 @@ export class MdastVisitorContext {
     return this.#resolver.materializeOne(parentId) as MdastParents;
   }
 
-  /**
-   * Index of `node` within its parent's children, or `undefined` at the root.
-   * Use this rather than `parent.children.indexOf(node)`, which won't find it.
-   */
   indexOf(node: Readonly<MdastTarget>): number | undefined {
     return this.#resolver.indexInParent(requireNid(node as MdastNode, "indexOf", this.#refs));
   }
@@ -951,7 +987,7 @@ export function visitMdastHandle(
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new MdastLazyChildResolver(handle);
-  const context = new MdastVisitorContext(
+  const context = new MdastVisitorContextImpl(
     handle,
     getSource,
     fileURL,
@@ -1026,7 +1062,7 @@ export function visitMdastHook(
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new MdastLazyChildResolver(handle);
-  const context = new MdastVisitorContext(
+  const context = new MdastVisitorContextImpl(
     handle,
     getSource,
     fileURL,
@@ -1057,7 +1093,7 @@ export function visitMdastHook(
 }
 
 function finalizeMdastVisit(
-  context: MdastVisitorContext,
+  context: MdastVisitorContextImpl,
   returnBuffer: CommandBuffer,
 ): MdastVisitResult {
   const commandBuffer = collectCommands(returnBuffer, context.getCommandBuffer());
