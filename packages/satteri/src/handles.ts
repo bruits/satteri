@@ -8,8 +8,11 @@ declare global {
     readonly __satteriHandleKind: "hast";
   }
 
+  // An interface, not a union alias, so two installed satteri versions merge this global instead of clashing.
   /** Handle accepted by kind-agnostic entry points (drop, serialize, …). */
-  type AnyHandle = MdastHandle | HastHandle;
+  interface AnyHandle {
+    readonly __satteriHandleKind: "mdast" | "hast";
+  }
 }
 
 type MdastHandleAlias = MdastHandle;
