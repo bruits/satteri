@@ -63,7 +63,7 @@ jobs:
 
           # -- WASM --
           - host: ubuntu-latest
-            target: wasm32-wasip1-threads
+            target: wasm32-wasip1
             build: pnpm run build:binary:wasm
 
     name: Build - ${{ matrix.settings.target }}
@@ -122,9 +122,13 @@ jobs:
         run: ${{ matrix.settings.build }}
         shell: bash
 
+      - name: Test workerd binding
+        if: matrix.settings.target == 'wasm32-wasip1'
+        run: pnpm build:ts && pnpm test:workerd
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: matrix.settings.target != 'wasm32-wasip1-threads'
+        if: matrix.settings.target != 'wasm32-wasip1'
         with:
           name: bindings-${{ matrix.settings.target }}
           path: packages/satteri/${{ env.APP_NAME }}.*.node
@@ -132,10 +136,12 @@ jobs:
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: matrix.settings.target == 'wasm32-wasip1-threads'
+        if: matrix.settings.target == 'wasm32-wasip1'
         with:
           name: bindings-${{ matrix.settings.target }}
-          path: packages/satteri/${{ env.APP_NAME }}.*.wasm
+          path: |
+            packages/satteri/${{ env.APP_NAME }}.*.wasm
+            packages/satteri/${{ env.APP_NAME }}.wasip1*
           if-no-files-found: error
 
   release:
@@ -216,7 +222,9 @@ jobs:
 
       - name: Inject optionalDependencies into main package.json
         if: steps.check.outputs.is_release == 'true'
-        run: pnpm napi pre-publish -t npm --skip-optional-publish --no-gh-release
+        run: |
+          pnpm napi pre-publish -t npm --skip-optional-publish --no-gh-release
+          node patch-binding.js --strip-root-wasm
         working-directory: packages/satteri
 
       - uses: bruits/sampo/crates/sampo-github-action@f7241754458e1be4073902b2860596340c7d089c # sampo-v0.17.4
