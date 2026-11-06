@@ -558,15 +558,21 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     return this.#removedIds.length;
   }
 
-  relistsRemovedChild(result: unknown, removalsBefore: number): boolean {
-    if (this.#removedIds.length === removalsBefore) return false;
+  // Relisting a child removed since the visit began is a move, so the replacement must follow the removal.
+  bufferForResult(
+    result: unknown,
+    removalsBefore: number,
+    returnBuffer: CommandBuffer,
+  ): CommandBuffer {
+    if (this.#removedIds.length === removalsBefore) return returnBuffer;
     const children = (result as { children?: unknown } | null | undefined)?.children;
-    if (!Array.isArray(children)) return false;
+    if (!Array.isArray(children)) return returnBuffer;
     const removed = new Set(this.#removedIds.slice(removalsBefore));
-    return children.some((child) => {
+    const relists = children.some((child) => {
       const id = reusedId(child, this.#refs);
       return id !== undefined && removed.has(id);
     });
+    return relists ? this.#commandBuffer : returnBuffer;
   }
 }
 
@@ -1009,6 +1015,13 @@ function applyMdastVisitResult(
   }
 }
 
+interface DeferredMdastVisit {
+  nodeId: number;
+  promise: Promise<MdastVisitorResult>;
+  originalNode: MdastNode;
+  removalsBefore: number;
+}
+
 /**
  * Walk an MDAST handle in Rust, dispatch matched nodes to JS visitor functions,
  * and collect mutations for the caller to apply. No arena buffers cross NAPI.
@@ -1043,9 +1056,7 @@ export function visitMdastHandle(
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = ru32(matchView, 0);
 
-  let deferred:
-    | { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[]
-    | null = null;
+  let deferred: DeferredMdastVisit[] | null = null;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -1067,12 +1078,9 @@ export function visitMdastHandle(
 
     if (result instanceof Promise) {
       deferred ??= [];
-      deferred.push({ nodeId, promise: result, originalNode: node });
+      deferred.push({ nodeId, promise: result, originalNode: node, removalsBefore });
     } else {
-      // Relisting a child this visit removed is a move, so the replacement must follow the removal.
-      const buffer = context.relistsRemovedChild(result, removalsBefore)
-        ? context.getCommandBuffer()
-        : returnBuffer;
+      const buffer = context.bufferForResult(result, removalsBefore, returnBuffer);
       applyMdastVisitResult(result, nodeId, buffer, resolver.refs, node);
     }
   }
@@ -1081,8 +1089,9 @@ export function visitMdastHandle(
     const visits = deferred;
     return Promise.all(visits.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < visits.length; i++) {
-        const { nodeId, originalNode } = visits[i]!;
-        applyMdastVisitResult(results[i], nodeId, returnBuffer, resolver.refs, originalNode);
+        const { nodeId, originalNode, removalsBefore } = visits[i]!;
+        const buffer = context.bufferForResult(results[i], removalsBefore, returnBuffer);
+        applyMdastVisitResult(results[i], nodeId, buffer, resolver.refs, originalNode);
       }
       return finalizeMdastVisit(context, returnBuffer);
     });

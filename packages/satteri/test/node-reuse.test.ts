@@ -609,6 +609,39 @@ test("hast: a child removed and listed again in its parent's replacement is move
   expect(html).toBe("<blockquote>\n\n<p>b</p>\n<p>a</p></blockquote>\n");
 });
 
+test("an async visitor that removes a child and lists it again moves it", async () => {
+  const plugin = defineMdastPlugin({
+    name: "async-move-first-paragraph-last",
+    async blockquote(node, ctx) {
+      await Promise.resolve();
+      const [first, ...rest] = node.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      return { ...node, children: [...rest, first] };
+    },
+  });
+  const { html } = await markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n<p>b</p>\n<p>a</p>\n</blockquote>\n");
+});
+
+test("hast: an async visitor that removes a child and lists it again moves it", async () => {
+  const plugin = defineHastPlugin({
+    name: "hast-async-move-first-paragraph-last",
+    element: {
+      filter: ["blockquote"],
+      async visit(node, ctx) {
+        await Promise.resolve();
+        const first = node.children.find((child) => child.type === "element");
+        if (!first) return;
+        ctx.removeNode(first);
+        return { ...node, children: [...node.children.filter((child) => child !== first), first] };
+      },
+    },
+  });
+  const { html } = await markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n\n<p>b</p>\n<p>a</p></blockquote>\n");
+});
+
 test("a node replaced by its children between raw items keeps the edits queued around them", () => {
   const plugin = defineMdastPlugin({
     name: "wrap-children-in-raw-html",

@@ -658,15 +658,21 @@ class HastVisitorContextImpl implements HastVisitorContext {
     return this.#removedIds.length;
   }
 
-  relistsRemovedChild(result: unknown, removalsBefore: number): boolean {
-    if (this.#removedIds.length === removalsBefore) return false;
+  // Relisting a child removed since the visit began is a move, so the replacement must follow the removal.
+  bufferForResult(
+    result: unknown,
+    removalsBefore: number,
+    returnBuffer: CommandBuffer,
+  ): CommandBuffer {
+    if (this.#removedIds.length === removalsBefore) return returnBuffer;
     const children = (result as { children?: unknown } | null | undefined)?.children;
-    if (!Array.isArray(children)) return false;
+    if (!Array.isArray(children)) return returnBuffer;
     const removed = new Set(this.#removedIds.slice(removalsBefore));
-    return children.some((child) => {
+    const relists = children.some((child) => {
       const id = hastReusedId(child, this.#refs);
       return id !== undefined && removed.has(id);
     });
+    return relists ? this.#commandBuffer : returnBuffer;
   }
 }
 
@@ -829,19 +835,24 @@ function isTextValueSwap(result: HastNode, original: HastNode): boolean {
   );
 }
 
+interface DeferredHastVisit {
+  nodeId: number;
+  promise: Promise<HastNode | void>;
+  originalNode: HastNode;
+  removalsBefore: number;
+}
+
 function dispatchMatches(
   matchBuf: Uint8Array,
   subs: ResolvedSubscription[],
   ctx: HastVisitorContextImpl,
   returnBuffer: CommandBuffer,
   resolver: HastLazyChildResolver,
-): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
+): DeferredHastVisit[] | null {
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = matchView.getUint32(0, true);
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
-  let deferred:
-    | { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[]
-    | null = null;
+  let deferred: DeferredHastVisit[] | null = null;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -855,12 +866,9 @@ function dispatchMatches(
     const result = sub.visitFn(node, ctx);
     if (result instanceof Promise) {
       deferred ??= [];
-      deferred.push({ nodeId, promise: result, originalNode: node });
+      deferred.push({ nodeId, promise: result, originalNode: node, removalsBefore });
     } else {
-      // Relisting a child this visit removed is a move, so the replacement must follow the removal.
-      const buffer = ctx.relistsRemovedChild(result, removalsBefore)
-        ? ctx.getCommandBuffer()
-        : returnBuffer;
+      const buffer = ctx.bufferForResult(result, removalsBefore, returnBuffer);
       applyHastVisitResult(result, nodeId, buffer, node, resolver.refs);
     }
   }
@@ -937,8 +945,9 @@ export function visitHastHandleCollect(
   if (deferred) {
     return Promise.all(deferred.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < deferred.length; i++) {
-        const { nodeId, originalNode } = deferred[i]!;
-        applyHastVisitResult(results[i], nodeId, returnBuffer, originalNode, resolver.refs);
+        const { nodeId, originalNode, removalsBefore } = deferred[i]!;
+        const buffer = ctx.bufferForResult(results[i], removalsBefore, returnBuffer);
+        applyHastVisitResult(results[i], nodeId, buffer, originalNode, resolver.refs);
       }
       return collectCommands(returnBuffer, ctx.getCommandBuffer());
     });
