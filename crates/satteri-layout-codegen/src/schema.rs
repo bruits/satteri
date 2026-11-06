@@ -1443,9 +1443,12 @@ pub const ARENA_NODE_FIELDS: &[(&str, usize)] = &[
 /// Raw-buffer header fields in write order; each occupies 4 bytes (u32 LE,
 /// `magic` being the 4 magic bytes). `Arena::to_raw_buffer` writes at these
 /// offsets and the JS readers' `HEADER` table reads them back.
+/// `magic`, `kind` and `format_version` must keep their offsets in every format version, so any reader can refuse a buffer from another one.
 pub const ARENA_HEADER_FIELDS: &[&str] = &[
     "magic",
     "kind",
+    "format_version",
+    "offset_unit",
     "node_struct_size",
     "node_count",
     "nodes_offset",
@@ -1455,6 +1458,7 @@ pub const ARENA_HEADER_FIELDS: &[&str] = &[
     "type_data_offset",
     "string_pool_len",
     "string_pool_offset",
+    "source_len",
     "node_data_count",
     "node_data_offset",
 ];
@@ -1463,3 +1467,6 @@ pub const ARENA_HEADER_FIELDS: &[&str] = &[
 pub const ARENA_MAGIC: u32 = u32::from_le_bytes(*b"MDAR");
 /// `Arena<K>` kind tags carried in the header's `kind` field.
 pub const ARENA_KINDS: &[(&str, u8)] = &[("Mdast", 1), ("Hast", 2)];
+/// Bump on any wire change an older reader would misread: node numbering, a `type_data` layout, the header, offset units.
+pub const ARENA_FORMAT_VERSION: u32 = 1;
+pub const ARENA_OFFSET_UNITS: &[(&str, u32)] = &[("Utf16", 0), ("Byte", 1)];

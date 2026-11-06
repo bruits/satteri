@@ -25,3 +25,4 @@ pub use codec::{decode_string_ref_data, encode_string_ref_data};
 pub use kind::{ArenaKind, Hast, Mdast};
 pub use line_index::{LineIndex, LineIndexCursor, line_ending_iter};
 pub use node::{ArenaNode, NODE_STRUCT_SIZE, NodePosition, StringRef};
+pub use raw_buffer::{FORMAT_VERSION, OffsetUnit, RawBufferError};

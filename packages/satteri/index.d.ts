@@ -224,6 +224,15 @@ export interface JsOptimizeStaticConfig {
   ignoreElements?: Array<string>
 }
 
+export interface JsSerializeOptions {
+  /**
+   * Count node offsets and string refs in UTF-8 bytes rather than UTF-16
+   * units, for a Rust reader (`Arena::from_raw_buffer`) to take as is.
+   * `MdastReader` and `HastReader` refuse such a buffer. Default: `false`.
+   */
+  byteOffsets?: boolean
+}
+
 /** A subscription passed from JS. */
 export interface JsSubscription {
   nodeType: number
@@ -331,7 +340,7 @@ export interface RenderHtmlOneShot {
  * reader from. The kind tag in the header tells the JS side whether to
  * pick `MdastReader` or `HastReader`.
  */
-export declare function serializeHandle(handle: AnyHandle): Buffer | Uint8Array
+export declare function serializeHandle(handle: AnyHandle, options?: JsSerializeOptions | undefined | null): Buffer | Uint8Array
 
 /**
  * Set the `data` blob (JSON bytes) for a node. Works for both MDAST and
