@@ -226,9 +226,8 @@ export interface JsOptimizeStaticConfig {
 
 export interface JsSerializeOptions {
   /**
-   * Count node offsets and string refs in UTF-8 bytes rather than UTF-16
-   * units, for a Rust reader (`Arena::from_raw_buffer`) to take as is.
-   * `MdastReader` and `HastReader` refuse such a buffer. Default: `false`.
+   * Write offsets in UTF-8 bytes for `Arena::from_raw_buffer` in Rust, which
+   * `MdastReader` and `HastReader` refuse. Default: `false`.
    */
   byteOffsets?: boolean
 }

@@ -1,5 +1,3 @@
-//! Integration tests for raw buffer export and import.
-
 use satteri_arena::{
     Arena, ArenaBuilder, ArenaKind, FORMAT_VERSION, Hast, Mdast, NODE_STRUCT_SIZE, NodePosition,
     OffsetUnit,

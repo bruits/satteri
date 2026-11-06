@@ -10,8 +10,6 @@
 //! overlapping numeric values. `format_version` follows, so a reader refuses
 //! a buffer from another wire format version instead of misreading it.
 //!
-//! `offset_unit` says whether offsets and string refs count UTF-16 units (for the JS readers) or UTF-8 bytes.
-//!
 //! `node_data` is the per-node JSON blob set via `Arena::set_node_data`
 //! (used for `data.meta` on code elements, plugin-set custom data, etc.).
 //! Each entry is `[node_id: u32 LE][data_len: u32 LE][bytes...]` and
@@ -40,15 +38,17 @@ pub enum OffsetUnit {
     Byte,
 }
 
-/// Why [`Document::from_raw_buffer`] refused a buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RawBufferError {
     /// The magic bytes are wrong, or the buffer ends before the format version.
     NotARawBuffer,
-    /// The buffer holds the other kind of tree.
-    WrongKind { expected: u8, found: u32 },
-    /// Written with another wire format version than [`FORMAT_VERSION`].
-    UnsupportedVersion { found: u32 },
+    WrongKind {
+        expected: u8,
+        found: u32,
+    },
+    UnsupportedVersion {
+        found: u32,
+    },
     /// The named part of the buffer is out of bounds or invalid.
     Malformed(&'static str),
 }
@@ -118,7 +118,6 @@ impl<K: ArenaKind> Document<'_, K> {
         self.to_raw_buffer_in(OffsetUnit::Utf16)
     }
 
-    /// Serialize like [`Self::to_raw_buffer`], with offsets counted in `unit`.
     pub fn to_raw_buffer_in(&self, unit: OffsetUnit) -> Vec<u8> {
         let pool = self.contiguous_pool();
         let nodes_bytes = self.nodes.len() * NODE_STRUCT_SIZE;
@@ -213,10 +212,7 @@ impl<K: ArenaKind> Document<'_, K> {
         put(header::NODE_DATA_OFFSET, node_data_offset);
         buf.extend_from_slice(&hdr);
 
-        // The arena tracks `start_offset`/`end_offset` as **byte** offsets
-        // (the parser works in bytes); `position` carries JS string indices
-        // (UTF-16 code units), so convert here at serialization time.
-        // Columns and lines are already in UTF-16 units.
+        // Lines and columns are already UTF-16 units, so only the byte offsets need converting.
         // SAFETY: ArenaNode is #[repr(C)] with explicit padding.
         let nodes_slice: &[u8] =
             unsafe { std::slice::from_raw_parts(self.nodes.as_ptr() as *const u8, nodes_bytes) };
@@ -289,9 +285,8 @@ impl<K: ArenaKind> Document<'_, K> {
 impl<K: ArenaKind> Arena<K> {
     /// Rebuild an arena from a buffer [`Document::to_raw_buffer_in`] wrote, in either offset unit.
     ///
-    /// `mdx` and `parse_options` are not on the wire and come back unset, so
-    /// set `mdx` before compiling an MDX tree. The header, sections, and each
-    /// node's child and data ranges are bounds-checked; the tree's shape is not.
+    /// `mdx` and `parse_options` come back unset; set `mdx` before compiling MDX.
+    /// Bounds are checked, the tree's shape is not.
     pub fn from_raw_buffer(buf: &[u8]) -> Result<Self, RawBufferError> {
         if read_u32(buf, header::MAGIC) != Some(u32::from_le_bytes(BUFFER_MAGIC)) {
             return Err(RawBufferError::NotARawBuffer);
