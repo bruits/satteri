@@ -112,6 +112,8 @@
       "wasm32-wasip1"
     ],
     "wasm": {
+      "cpu": false,
+      "optionalDependency": false,
       "browser": {
         "asyncInit": true
       }

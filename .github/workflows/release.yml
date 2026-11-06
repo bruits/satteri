@@ -224,7 +224,7 @@ jobs:
         if: steps.check.outputs.is_release == 'true'
         run: |
           pnpm napi pre-publish -t npm --skip-optional-publish --no-gh-release
-          node patch-binding.js --strip-root-wasm
+          node patch-binding.js --pre-publish
         working-directory: packages/satteri
 
       - uses: bruits/sampo/crates/sampo-github-action@f7241754458e1be4073902b2860596340c7d089c # sampo-v0.17.4
