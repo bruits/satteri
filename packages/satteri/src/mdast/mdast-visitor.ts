@@ -262,7 +262,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: MdastDiagnostic[];
   readonly #pendingNodes: Map<number, MdastTarget> = new Map();
-  readonly #removedIds: number[] = [];
+  readonly #removedIds = new Set<number>();
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
@@ -300,7 +300,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     const id = requireNid(node as MdastNode, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
-    this.#removedIds.push(id);
+    this.#removedIds.add(id);
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
@@ -554,23 +554,14 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     return this.#diagnostics;
   }
 
-  removalCount(): number {
-    return this.#removedIds.length;
-  }
-
-  // Relisting a child removed since the visit began is a move, so the replacement must follow the removal.
-  bufferForResult(
-    result: unknown,
-    removalsBefore: number,
-    returnBuffer: CommandBuffer,
-  ): CommandBuffer {
-    if (this.#removedIds.length === removalsBefore) return returnBuffer;
-    const children = (result as { children?: unknown } | null | undefined)?.children;
+  // Relisting a removed child is a move, so the replacement must follow the removal.
+  bufferForResult(result: MdastNode, returnBuffer: CommandBuffer): CommandBuffer {
+    if (this.#removedIds.size === 0) return returnBuffer;
+    const children = (result as { children?: unknown }).children;
     if (!Array.isArray(children)) return returnBuffer;
-    const removed = new Set(this.#removedIds.slice(removalsBefore));
     const relists = children.some((child) => {
       const id = reusedId(child, this.#refs);
-      return id !== undefined && removed.has(id);
+      return id !== undefined && this.#removedIds.has(id);
     });
     return relists ? this.#commandBuffer : returnBuffer;
   }
@@ -991,6 +982,7 @@ function applyMdastVisitResult(
   nodeId: number,
   returnBuffer: CommandBuffer,
   refs: NodeRefs,
+  context: MdastVisitorContextImpl,
   originalNode?: MdastNode,
 ): void {
   if (result === undefined || result === null) return;
@@ -1009,17 +1001,11 @@ function applyMdastVisitResult(
         returnBuffer.setProperty(nodeId, "value", node.value);
         break;
       }
-      emitMdastTree(returnBuffer, "replace", nodeId, node as MdastContent, true, refs, true);
+      const buffer = context.bufferForResult(node, returnBuffer);
+      emitMdastTree(buffer, "replace", nodeId, node as MdastContent, true, refs, true);
       break;
     }
   }
-}
-
-interface DeferredMdastVisit {
-  nodeId: number;
-  promise: Promise<MdastVisitorResult>;
-  originalNode: MdastNode;
-  removalsBefore: number;
 }
 
 /**
@@ -1056,7 +1042,9 @@ export function visitMdastHandle(
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = ru32(matchView, 0);
 
-  let deferred: DeferredMdastVisit[] | null = null;
+  let deferred:
+    | { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[]
+    | null = null;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -1073,15 +1061,13 @@ export function visitMdastHandle(
       sub.nodeType,
       resolver,
     );
-    const removalsBefore = context.removalCount();
     const result = sub.visitFn.call(plugin, node, context);
 
     if (result instanceof Promise) {
       deferred ??= [];
-      deferred.push({ nodeId, promise: result, originalNode: node, removalsBefore });
+      deferred.push({ nodeId, promise: result, originalNode: node });
     } else {
-      const buffer = context.bufferForResult(result, removalsBefore, returnBuffer);
-      applyMdastVisitResult(result, nodeId, buffer, resolver.refs, node);
+      applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, context, node);
     }
   }
 
@@ -1089,9 +1075,15 @@ export function visitMdastHandle(
     const visits = deferred;
     return Promise.all(visits.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < visits.length; i++) {
-        const { nodeId, originalNode, removalsBefore } = visits[i]!;
-        const buffer = context.bufferForResult(results[i], removalsBefore, returnBuffer);
-        applyMdastVisitResult(results[i], nodeId, buffer, resolver.refs, originalNode);
+        const { nodeId, originalNode } = visits[i]!;
+        applyMdastVisitResult(
+          results[i],
+          nodeId,
+          returnBuffer,
+          resolver.refs,
+          context,
+          originalNode,
+        );
       }
       return finalizeMdastVisit(context, returnBuffer);
     });

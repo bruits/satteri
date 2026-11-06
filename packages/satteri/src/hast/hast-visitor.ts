@@ -390,7 +390,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: HastDiagnostic[];
   readonly #pendingNodes: Map<number, HastNode> = new Map();
-  readonly #removedIds: number[] = [];
+  readonly #removedIds = new Set<number>();
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
@@ -428,7 +428,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     const id = requireNid(node, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
-    this.#removedIds.push(id);
+    this.#removedIds.add(id);
   }
 
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
@@ -654,23 +654,14 @@ class HastVisitorContextImpl implements HastVisitorContext {
     return this.#diagnostics;
   }
 
-  removalCount(): number {
-    return this.#removedIds.length;
-  }
-
-  // Relisting a child removed since the visit began is a move, so the replacement must follow the removal.
-  bufferForResult(
-    result: unknown,
-    removalsBefore: number,
-    returnBuffer: CommandBuffer,
-  ): CommandBuffer {
-    if (this.#removedIds.length === removalsBefore) return returnBuffer;
-    const children = (result as { children?: unknown } | null | undefined)?.children;
+  // Relisting a removed child is a move, so the replacement must follow the removal.
+  bufferForResult(result: HastNode, returnBuffer: CommandBuffer): CommandBuffer {
+    if (this.#removedIds.size === 0) return returnBuffer;
+    const children = (result as { children?: unknown }).children;
     if (!Array.isArray(children)) return returnBuffer;
-    const removed = new Set(this.#removedIds.slice(removalsBefore));
     const relists = children.some((child) => {
       const id = hastReusedId(child, this.#refs);
-      return id !== undefined && removed.has(id);
+      return id !== undefined && this.#removedIds.has(id);
     });
     return relists ? this.#commandBuffer : returnBuffer;
   }
@@ -808,6 +799,7 @@ function applyHastVisitResult(
   returnBuffer: CommandBuffer,
   originalNode: HastNode,
   refs: NodeRefs,
+  ctx: HastVisitorContextImpl,
 ): void {
   if (result == null) return;
   if (result === originalNode) return;
@@ -815,7 +807,7 @@ function applyHastVisitResult(
     returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
     return;
   }
-  emitHastTree(returnBuffer, "replace", nodeId, result, refs, true);
+  emitHastTree(ctx.bufferForResult(result, returnBuffer), "replace", nodeId, result, refs, true);
 }
 
 // Explicit field checks avoid allocating Object.keys on the per-text-node hot path.
@@ -835,24 +827,19 @@ function isTextValueSwap(result: HastNode, original: HastNode): boolean {
   );
 }
 
-interface DeferredHastVisit {
-  nodeId: number;
-  promise: Promise<HastNode | void>;
-  originalNode: HastNode;
-  removalsBefore: number;
-}
-
 function dispatchMatches(
   matchBuf: Uint8Array,
   subs: ResolvedSubscription[],
   ctx: HastVisitorContextImpl,
   returnBuffer: CommandBuffer,
   resolver: HastLazyChildResolver,
-): DeferredHastVisit[] | null {
+): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = matchView.getUint32(0, true);
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
-  let deferred: DeferredHastVisit[] | null = null;
+  let deferred:
+    | { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[]
+    | null = null;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -862,14 +849,12 @@ function dispatchMatches(
 
     const sub = subs[subIndex]!;
     const node = readMatchedNode(wire, dataOffset, nodeId, sub.nodeType);
-    const removalsBefore = ctx.removalCount();
     const result = sub.visitFn(node, ctx);
     if (result instanceof Promise) {
       deferred ??= [];
-      deferred.push({ nodeId, promise: result, originalNode: node, removalsBefore });
+      deferred.push({ nodeId, promise: result, originalNode: node });
     } else {
-      const buffer = ctx.bufferForResult(result, removalsBefore, returnBuffer);
-      applyHastVisitResult(result, nodeId, buffer, node, resolver.refs);
+      applyHastVisitResult(result, nodeId, returnBuffer, node, resolver.refs, ctx);
     }
   }
 
@@ -945,9 +930,8 @@ export function visitHastHandleCollect(
   if (deferred) {
     return Promise.all(deferred.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < deferred.length; i++) {
-        const { nodeId, originalNode, removalsBefore } = deferred[i]!;
-        const buffer = ctx.bufferForResult(results[i], removalsBefore, returnBuffer);
-        applyHastVisitResult(results[i], nodeId, buffer, originalNode, resolver.refs);
+        const { nodeId, originalNode } = deferred[i]!;
+        applyHastVisitResult(results[i], nodeId, returnBuffer, originalNode, resolver.refs, ctx);
       }
       return collectCommands(returnBuffer, ctx.getCommandBuffer());
     });
