@@ -448,27 +448,32 @@ fn resolve_target<K: ArenaKind>(
         return vec![copy_subtree(arena, anchor, 0)];
     }
     let core = slots.get(&target).filter(|core| !core.is_empty());
-    let (ids, takes_node, takes_inserts) = match position_slots.get(&target) {
-        Some(position) if kind == RefKind::Slot => {
-            let core_len = core.map_or(0, Vec::len);
-            (position.clone(), core_len > 0, position.len() > core_len)
-        }
-        // An emptied slot is a removal, whose node a node ref still names.
-        _ => (core.cloned().unwrap_or_else(|| vec![target]), true, false),
-    };
-    if ids.is_empty() {
-        return ids;
-    }
-    if truly_dead.contains(&target)
-        && !(takes_node && adopted.nodes.contains(&target))
-        && !(takes_inserts && adopted.inserts.contains(&target))
+    let dead = truly_dead.contains(&target);
+    if kind == RefKind::Slot
+        && let Some(position) = position_slots.get(&target)
     {
-        if takes_node {
-            adopted.nodes.insert(target);
-        }
-        if takes_inserts {
-            adopted.inserts.insert(target);
-        }
+        let core: &[u32] = core.map_or(&[], Vec::as_slice);
+        // Inserts land once, with the first ref to move the position; a copy is the node alone.
+        let takes_node = dead && !core.is_empty() && adopted.nodes.insert(target);
+        let takes_inserts = dead && position.len() > core.len() && adopted.inserts.insert(target);
+        return position
+            .iter()
+            .filter_map(|&id| {
+                if core.contains(&id) {
+                    Some(if takes_node {
+                        id
+                    } else {
+                        copy_subtree(arena, id, 0)
+                    })
+                } else {
+                    takes_inserts.then_some(id)
+                }
+            })
+            .collect();
+    }
+    // An emptied slot is a removal, whose node a node ref still names.
+    let ids = core.cloned().unwrap_or_else(|| vec![target]);
+    if dead && adopted.nodes.insert(target) {
         return ids;
     }
     ids.iter().map(|&id| copy_subtree(arena, id, 0)).collect()
@@ -1137,6 +1142,19 @@ fn apply_patches_impl<K: ArenaKind>(
                 && plans.get(&parent).is_some_and(|plan| !plan.deleted)
                 && !dropped_set.contains(&parent))
         }));
+        // Its old list is gone, so a node moved out of it takes the inserts queued beside it along.
+        for (&pi, refs) in ref_positions.iter_mut().chain(ref_placeholders.iter_mut()) {
+            let referrer = patch_anchor(&patches[pi]);
+            for (_, target, kind) in refs.iter_mut() {
+                let removed = plans
+                    .get(target)
+                    .is_some_and(|plan| plan.deleted && plan.winning_replace.is_none());
+                if *kind == RefKind::Node && moved_out.contains(target) && !removed {
+                    *kind = RefKind::Slot;
+                    slot_referrers.entry(*target).or_default().push(referrer);
+                }
+            }
+        }
         // A node moved out of a discarded list leaves its sibling inserts there unless a slot ref carries them.
         lost_inserts.extend(moved_out.iter().copied().filter(|&target| {
             let carried = slot_referrers

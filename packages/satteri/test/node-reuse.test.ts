@@ -728,6 +728,74 @@ test("hast: a removed child stays removed when its parent returns a spread copy"
   }
 });
 
+test("an async parent's new list does not undo a removal another visitor makes meanwhile", async () => {
+  const plugin = defineMdastPlugin({
+    name: "async-reverse",
+    async blockquote(node) {
+      await Promise.resolve();
+      return { ...node, children: node.children.toReversed() };
+    },
+    paragraph(node, ctx) {
+      const [text] = node.children;
+      if (text?.type === "text" && text.value === "a") ctx.removeNode(node);
+    },
+  });
+  const { html } = await markdownToHtml("> a\n>\n> b\n>\n> c\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n<p>c</p>\n<p>b</p>\n</blockquote>\n");
+});
+
+test("hast: an async parent's new list does not undo a removal another visitor makes meanwhile", async () => {
+  const plugin = defineHastPlugin({
+    name: "hast-async-elements-only",
+    element: {
+      filter: ["blockquote", "p"],
+      async visit(node, ctx) {
+        if (node.tagName === "p") return removeParagraphA(node, ctx);
+        await Promise.resolve();
+        return { ...node, children: node.children.filter((child) => child.type === "element") };
+      },
+    },
+  });
+  const { html } = await markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
+  expect(html).toBe("<blockquote><p>b</p></blockquote>\n");
+});
+
+test("an async grandparent's copies of its children keep a grandchild removed meanwhile", async () => {
+  const plugin = defineMdastPlugin({
+    name: "async-copy-children",
+    async blockquote(node, ctx) {
+      if (ctx.parent(node)?.type !== "root") return;
+      await Promise.resolve();
+      return {
+        ...node,
+        children: node.children.map((child) => ({ ...child, data: { hName: "aside" } })),
+      };
+    },
+    paragraph(node, ctx) {
+      const [text] = node.children;
+      if (text?.type === "text" && text.value === "a") ctx.removeNode(node);
+    },
+  });
+  const { html } = await markdownToHtml("> > a\n> >\n> > b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n<aside>\n<p>b</p>\n</aside>\n</blockquote>\n");
+});
+
+test("a removed child moved by editing the children array in place is kept", () => {
+  const plugin = defineMdastPlugin({
+    name: "move-in-place",
+    blockquote(node, ctx) {
+      const [first] = node.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      node.children.shift();
+      node.children.push(first);
+      return asSection(node);
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<section>\n<p>b</p>\n<p>a</p>\n</section>\n");
+});
+
 test("moving done items to the bottom keeps them when they are already there", () => {
   const plugin = defineMdastPlugin({
     name: "done-items-last",

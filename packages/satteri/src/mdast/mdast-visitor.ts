@@ -83,14 +83,17 @@ import type {
 } from "../types.js";
 import {
   asArray,
+  AsyncVisitRemovals,
   collectCommands,
   FOREIGN_REF,
   foreignContentError,
+  isAsyncFunction,
   makeRequireNid,
   requireRootReplacement,
   relists,
   ROOT_NODE_ID,
   rootReplacementError,
+  scopeContext,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
@@ -264,7 +267,9 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: MdastDiagnostic[];
   readonly #pendingNodes: Map<number, MdastTarget> = new Map();
-  readonly #removedIds = new Set<number>();
+  /** Each removed id with its removal order. */
+  readonly #removedIds = new Map<number, number>();
+  #removalScope: Set<number> | undefined;
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
@@ -302,7 +307,8 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     const id = requireNid(node as MdastNode, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
-    this.#removedIds.add(id);
+    if (!this.#removedIds.has(id)) this.#removedIds.set(id, this.#removedIds.size);
+    this.#removalScope?.add(id);
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
@@ -590,9 +596,26 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     return this.#diagnostics;
   }
 
-  relistFor(target: Readonly<MdastTarget> | undefined): Relist | undefined {
+  relistFor(
+    target: Readonly<MdastTarget> | undefined,
+    removals?: AsyncVisitRemovals,
+  ): Relist | undefined {
     if (this.#removedIds.size === 0) return undefined;
-    return { removed: this.#removedIds, target };
+    return { removed: removals ?? this.#removedIds, target, resolver: this.#resolver };
+  }
+
+  runInRemovalScope<T>(scope: Set<number>, run: () => T): T {
+    const outer = this.#removalScope;
+    this.#removalScope = scope;
+    try {
+      return run();
+    } finally {
+      this.#removalScope = outer;
+    }
+  }
+
+  asyncVisitRemovals(): AsyncVisitRemovals {
+    return new AsyncVisitRemovals(this.#removedIds);
   }
 }
 
@@ -680,6 +703,7 @@ export type { MdastHandle };
 interface MdastSubscription {
   nodeType: number;
   visitFn: MdastVisitorFn;
+  isAsync: boolean;
 }
 
 // Cache subscriptions by plugin identity to avoid rebuilding them on every compile.
@@ -716,6 +740,7 @@ function buildMdastSubscriptions(plugin: MdastPluginInstance): CachedMdastSubs {
         subs.push({
           nodeType,
           visitFn: fn as MdastSubscription["visitFn"],
+          isAsync: isAsyncFunction(fn),
         });
       }
     }
@@ -827,7 +852,7 @@ function emitMdastOp(
   const id = getNodeId(node as MdastNode, refs);
   if (id === FOREIGN_REF) throw foreignContentError();
   if ((!isRoot || allowRootRef) && id !== undefined) {
-    if (relist !== undefined && relists(relist, id, siblings)) w.relistRef(id);
+    if (relist !== undefined && relists(relist, id, node, siblings)) w.relistRef(id);
     else w.ref(id);
     return true;
   }
@@ -1020,6 +1045,7 @@ function applyMdastVisitResult(
   refs: NodeRefs,
   context: MdastVisitorContextImpl,
   originalNode?: MdastNode,
+  removals?: AsyncVisitRemovals,
 ): void {
   if (result === undefined || result === null) return;
   if (result === originalNode) return;
@@ -1037,7 +1063,7 @@ function applyMdastVisitResult(
         returnBuffer.setProperty(nodeId, "value", node.value);
         break;
       }
-      const relist = context.relistFor(originalNode);
+      const relist = context.relistFor(originalNode, removals);
       emitMdastTree(
         returnBuffer,
         "replace",
@@ -1088,7 +1114,12 @@ export function visitMdastHandle(
   const matchCount = ru32(matchView, 0);
 
   let deferred:
-    | { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[]
+    | {
+        nodeId: number;
+        promise: Promise<MdastVisitorResult>;
+        originalNode: MdastNode;
+        removals?: AsyncVisitRemovals;
+      }[]
     | null = null;
 
   for (let i = 0; i < matchCount; i++) {
@@ -1106,6 +1137,15 @@ export function visitMdastHandle(
       sub.nodeType,
       resolver,
     );
+    // The result counts removals as of the call, as a sync visit's would, plus the visit's own.
+    if (sub.isAsync) {
+      const removals = context.asyncVisitRemovals();
+      const scoped = scopeContext(context, removals.own);
+      const promise = sub.visitFn.call(plugin, node, scoped) as Promise<MdastVisitorResult>;
+      deferred ??= [];
+      deferred.push({ nodeId, promise, originalNode: node, removals });
+      continue;
+    }
     const result = sub.visitFn.call(plugin, node, context);
 
     if (result instanceof Promise) {
@@ -1120,7 +1160,7 @@ export function visitMdastHandle(
     const visits = deferred;
     return Promise.all(visits.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < visits.length; i++) {
-        const { nodeId, originalNode } = visits[i]!;
+        const { nodeId, originalNode, removals } = visits[i]!;
         applyMdastVisitResult(
           results[i],
           nodeId,
@@ -1128,6 +1168,7 @@ export function visitMdastHandle(
           resolver.refs,
           context,
           originalNode,
+          removals,
         );
       }
       return finalizeMdastVisit(context, returnBuffer);

@@ -53,14 +53,17 @@ import type { HastHandle } from "../handles.js";
 import { LazyChildResolver, markHandleMutated } from "../lazy-child-resolver.js";
 import {
   asArray,
+  AsyncVisitRemovals,
   collectCommands,
   FOREIGN_REF,
   foreignContentError,
+  isAsyncFunction,
   makeRequireNid,
   requireRootReplacement,
   relists,
   ROOT_NODE_ID,
   rootReplacementError,
+  scopeContext,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
@@ -357,7 +360,7 @@ function emitHastOp(
   const id = getNodeId(node as HastNode, refs);
   if (id === FOREIGN_REF && !document) throw foreignContentError();
   if ((!isRoot || allowRootRef) && id !== undefined && id !== FOREIGN_REF) {
-    if (relist !== undefined && relists(relist, id, siblings)) w.relistRef(id);
+    if (relist !== undefined && relists(relist, id, node, siblings)) w.relistRef(id);
     else w.ref(id);
     return true;
   }
@@ -415,7 +418,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: HastDiagnostic[];
   readonly #pendingNodes: Map<number, HastNode> = new Map();
-  readonly #removedIds = new Set<number>();
+  /** Each removed id with its removal order. */
+  readonly #removedIds = new Map<number, number>();
+  #removalScope: Set<number> | undefined;
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
@@ -453,7 +458,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
     const id = requireNid(node, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
-    this.#removedIds.add(id);
+    if (!this.#removedIds.has(id)) this.#removedIds.set(id, this.#removedIds.size);
+    this.#removalScope?.add(id);
   }
 
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
@@ -716,9 +722,23 @@ class HastVisitorContextImpl implements HastVisitorContext {
     return this.#diagnostics;
   }
 
-  relistFor(target: HastNode): Relist | undefined {
+  relistFor(target: HastNode, removals?: AsyncVisitRemovals): Relist | undefined {
     if (this.#removedIds.size === 0) return undefined;
-    return { removed: this.#removedIds, target };
+    return { removed: removals ?? this.#removedIds, target, resolver: this.#resolver };
+  }
+
+  runInRemovalScope<T>(scope: Set<number>, run: () => T): T {
+    const outer = this.#removalScope;
+    this.#removalScope = scope;
+    try {
+      return run();
+    } finally {
+      this.#removalScope = outer;
+    }
+  }
+
+  asyncVisitRemovals(): AsyncVisitRemovals {
+    return new AsyncVisitRemovals(this.#removedIds);
   }
 }
 
@@ -769,7 +789,8 @@ export interface HastVisitorInstance {
 interface ResolvedSubscription {
   nodeType: number;
   tagFilter: string[];
-  visitFn: (node: HastNode, ctx: HastVisitorContext) => HastNode | void;
+  visitFn: (node: HastNode, ctx: HastVisitorContext) => HastNode | void | Promise<HastNode | void>;
+  isAsync: boolean;
 }
 
 const FILTERED_METHODS = new Set(["element", "mdxJsxFlowElement", "mdxJsxTextElement"]);
@@ -832,10 +853,16 @@ function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
           nodeType,
           tagFilter: fv.filter,
           visitFn: fv.visit as ResolvedSubscription["visitFn"],
+          isAsync: isAsyncFunction(fv.visit),
         });
       }
     } else {
-      subs.push({ nodeType, tagFilter: [], visitFn: value as ResolvedSubscription["visitFn"] });
+      subs.push({
+        nodeType,
+        tagFilter: [],
+        visitFn: value as ResolvedSubscription["visitFn"],
+        isAsync: isAsyncFunction(value),
+      });
     }
   }
 
@@ -855,6 +882,7 @@ function applyHastVisitResult(
   originalNode: HastNode,
   refs: NodeRefs,
   ctx: HastVisitorContextImpl,
+  removals?: AsyncVisitRemovals,
 ): void {
   if (result == null) return;
   if (result === originalNode) return;
@@ -862,7 +890,8 @@ function applyHastVisitResult(
     returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
     return;
   }
-  emitHastTree(returnBuffer, "replace", nodeId, result, refs, true, ctx.relistFor(originalNode));
+  const relist = ctx.relistFor(originalNode, removals);
+  emitHastTree(returnBuffer, "replace", nodeId, result, refs, true, relist);
 }
 
 // Explicit field checks avoid allocating Object.keys on the per-text-node hot path.
@@ -882,19 +911,24 @@ function isTextValueSwap(result: HastNode, original: HastNode): boolean {
   );
 }
 
+interface DeferredHastVisit {
+  nodeId: number;
+  promise: Promise<HastNode | void>;
+  originalNode: HastNode;
+  removals?: AsyncVisitRemovals;
+}
+
 function dispatchMatches(
   matchBuf: Uint8Array,
   subs: ResolvedSubscription[],
   ctx: HastVisitorContextImpl,
   returnBuffer: CommandBuffer,
   resolver: HastLazyChildResolver,
-): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
+): DeferredHastVisit[] | null {
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = matchView.getUint32(0, true);
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
-  let deferred:
-    | { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[]
-    | null = null;
+  let deferred: DeferredHastVisit[] | null = null;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -904,6 +938,14 @@ function dispatchMatches(
 
     const sub = subs[subIndex]!;
     const node = readMatchedNode(wire, dataOffset, nodeId, sub.nodeType);
+    // The result counts removals as of the call, as a sync visit's would, plus the visit's own.
+    if (sub.isAsync) {
+      const removals = ctx.asyncVisitRemovals();
+      const promise = Promise.resolve(sub.visitFn(node, scopeContext(ctx, removals.own)));
+      deferred ??= [];
+      deferred.push({ nodeId, promise, originalNode: node, removals });
+      continue;
+    }
     const result = sub.visitFn(node, ctx);
     if (result instanceof Promise) {
       deferred ??= [];
@@ -985,8 +1027,17 @@ export function visitHastHandleCollect(
   if (deferred) {
     return Promise.all(deferred.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < deferred.length; i++) {
-        const { nodeId, originalNode } = deferred[i]!;
-        applyHastVisitResult(results[i], nodeId, returnBuffer, originalNode, resolver.refs, ctx);
+        const { nodeId, originalNode, removals } = deferred[i]!;
+        const result = results[i];
+        applyHastVisitResult(
+          result,
+          nodeId,
+          returnBuffer,
+          originalNode,
+          resolver.refs,
+          ctx,
+          removals,
+        );
       }
       return collectCommands(returnBuffer, ctx.getCommandBuffer());
     });

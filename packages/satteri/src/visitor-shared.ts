@@ -114,22 +114,69 @@ export const FOREIGN_REF = -1;
 
 /** Nodes the plugin removed so far this pass; content listing one again puts it back. */
 export interface Relist {
-  readonly removed: ReadonlySet<number>;
+  readonly removed: { has(id: number): boolean };
   /** The node the content replaces or sits beside. */
   readonly target: object | undefined;
+  readonly resolver: { indexInParent(id: number): number | undefined };
 }
 
 /** Passing on the target's own children array, as `{ ...node }` does, keeps the removals among them. */
 export function relists(
   relist: Relist,
   id: number,
+  node: unknown,
   siblings: readonly unknown[] | undefined,
 ): boolean {
   if (!relist.removed.has(id)) return false;
-  return (
-    siblings === undefined ||
-    siblings !== (relist.target as { children?: unknown } | undefined)?.children
-  );
+  if (siblings === undefined) return true;
+  if (siblings !== (relist.target as { children?: unknown } | undefined)?.children) return true;
+  // The array may have been edited in place, so only a child it moved counts as listed again.
+  return siblings.indexOf(node) !== relist.resolver.indexInParent(id);
+}
+
+const AsyncFunction = (async () => {}).constructor;
+
+export function isAsyncFunction(fn: unknown): boolean {
+  return fn instanceof AsyncFunction;
+}
+
+/** The removals an async visit's result counts as earlier: those made before it ran, and its own. */
+export class AsyncVisitRemovals {
+  readonly own = new Set<number>();
+  readonly #order: ReadonlyMap<number, number>;
+  readonly #start: number;
+
+  constructor(order: ReadonlyMap<number, number>) {
+    this.#order = order;
+    this.#start = order.size;
+  }
+
+  has(id: number): boolean {
+    const seq = this.#order.get(id);
+    return seq !== undefined && (seq < this.#start || this.own.has(id));
+  }
+}
+
+interface ScopableContext {
+  runInRemovalScope<T>(scope: Set<number>, run: () => T): T;
+}
+
+/** A context for one async visit: removals made through it, even after an `await`, are recorded as its own. */
+export function scopeContext<C extends ScopableContext>(ctx: C, own: Set<number>): C {
+  const wrapped = new Map<PropertyKey, unknown>();
+  return new Proxy(ctx, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key, target);
+      if (typeof value !== "function") return value;
+      let method = wrapped.get(key);
+      if (method === undefined) {
+        method = (...args: unknown[]) =>
+          target.runInRemovalScope(own, () => (value as Function).apply(target, args));
+        wrapped.set(key, method);
+      }
+      return method;
+    },
+  });
 }
 
 export function foreignContentError(): Error {

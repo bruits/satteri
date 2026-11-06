@@ -3028,7 +3028,7 @@ fn a_child_moved_out_of_a_replaced_parent_lands_once() {
 }
 
 #[test]
-fn an_insert_beside_a_child_the_root_replacement_drops_is_reported() {
+fn an_insert_beside_a_child_moved_out_of_a_replaced_root_comes_along() {
     let orig = build_hello_world();
     let heading = orig.get_children(0)[0];
     let paragraph = orig.get_children(0)[1];
@@ -3054,10 +3054,14 @@ fn an_insert_beside_a_child_the_root_replacement_drops_is_reported() {
     )
     .expect("apply failed");
 
-    assert_eq!(dropped, vec![paragraph]);
+    assert!(dropped.is_empty(), "{dropped:?}");
     assert_eq!(
         child_types(&arena, 0),
-        vec![MdastNodeType::Heading as u8, MdastNodeType::Paragraph as u8]
+        vec![
+            MdastNodeType::Heading as u8,
+            MdastNodeType::Paragraph as u8,
+            MdastNodeType::ThematicBreak as u8,
+        ]
     );
     assert_children_point_back(&arena, 0);
 }
@@ -3206,7 +3210,7 @@ fn a_removed_child_handed_back_without_relisting_stays_removed() {
 }
 
 #[test]
-fn a_grandchild_moved_out_of_a_discarded_parent_keeps_its_new_parent() {
+fn a_grandchild_moved_out_of_a_discarded_parent_keeps_its_new_parent_and_inserts() {
     let (orig, quote, [item, _]) = build_quote_of_a_list_of_two_items();
     for remove in [false, true] {
         let mut patches = if remove {
@@ -3231,12 +3235,12 @@ fn a_grandchild_moved_out_of_a_discarded_parent_keeps_its_new_parent() {
         let mut arena = orig.clone();
         let dropped = apply_patches_in_place(&mut arena, &patches).expect("apply failed");
 
+        assert!(dropped.is_empty(), "remove: {remove}: {dropped:?}");
+        assert_eq!(arena.get_children(0)[0], item);
         assert_eq!(
-            dropped,
-            vec![item],
-            "the lost insert is reported (remove: {remove})"
+            child_types(&arena, 0),
+            vec![MdastNodeType::ListItem as u8, MdastNodeType::Html as u8]
         );
-        assert_eq!(arena.get_children(0), &[item]);
         assert_children_point_back(&arena, 0);
     }
 }
@@ -3283,16 +3287,17 @@ fn an_insert_beside_a_child_moved_out_of_a_removed_parent_comes_along_on_both_sp
 }
 
 #[test]
-fn strict_apply_rejects_an_insert_left_behind_by_a_moved_grandchild() {
+fn strict_apply_rejects_an_insert_left_behind_by_a_removed_grandchild_listed_elsewhere() {
     let (orig, quote, [item, _]) = build_quote_of_a_list_of_two_items();
     let mut arena = orig.clone();
     let err = apply_patches_strict(
         &mut arena,
         &[
             Patch::Remove { node_id: quote },
+            Patch::Remove { node_id: item },
             Patch::InsertAfter {
                 node_id: quote,
-                new_tree: PatchContent::Tree(ref_payload_mdast(item)),
+                new_tree: PatchContent::Tree(relist_payload_mdast(item)),
             },
             Patch::InsertAfter {
                 node_id: item,
@@ -3474,4 +3479,41 @@ fn a_children_list_on_a_node_that_is_replaced_does_not_relist() {
 
     let new_quote = arena.get_children(0)[0];
     assert_eq!(arena.get_children(new_quote), &[p2]);
+}
+
+#[test]
+fn a_child_listed_twice_keeps_the_insert_beside_it_once() {
+    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
+    let mut arena = orig.clone();
+    apply_patches_strict(
+        &mut arena,
+        &[
+            Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(node_with_refs(
+                    MdastNodeType::Blockquote,
+                    &[p1, p1, p2],
+                )),
+                keep_children: false,
+            },
+            Patch::InsertAfter {
+                node_id: p1,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    let new_quote = arena.get_children(0)[0];
+    assert_eq!(
+        child_types(&arena, new_quote),
+        vec![
+            MdastNodeType::Paragraph as u8,
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::Paragraph as u8,
+            MdastNodeType::Paragraph as u8,
+        ]
+    );
+    assert_eq!(arena.get_children(new_quote)[0], p1);
+    assert_children_point_back(&arena, new_quote);
 }
