@@ -1787,6 +1787,17 @@ fn ref_payload_mdast(target: u32) -> Arena<Mdast> {
     b.finish()
 }
 
+/// A ref the JS side writes for a node the plugin removed and lists again.
+fn relist_payload_mdast(target: u32) -> Arena<Mdast> {
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node(REF_NODE_TYPE);
+    let mut td = target.to_le_bytes().to_vec();
+    td.push(REF_KIND_RELIST);
+    b.set_data_current(&td);
+    b.close_node();
+    b.finish()
+}
+
 fn root_with_ref(target: u32, prefix: Option<MdastNodeType>) -> Arena<Mdast> {
     let mut b = ArenaBuilder::<Mdast>::new(String::new());
     b.open_node(MdastNodeType::Root as u8);
@@ -3000,7 +3011,7 @@ fn a_child_moved_out_of_a_replaced_parent_lands_once() {
             },
             Patch::InsertAfter {
                 node_id: quote,
-                new_tree: PatchContent::Tree(ref_payload_mdast(p1)),
+                new_tree: PatchContent::Tree(relist_payload_mdast(p1)),
             },
             Patch::Remove { node_id: p1 },
         ],
@@ -3231,7 +3242,7 @@ fn a_grandchild_moved_out_of_a_discarded_parent_keeps_its_new_parent() {
 }
 
 #[test]
-fn an_insert_left_behind_by_a_moved_child_is_reported_on_both_splice_paths() {
+fn an_insert_beside_a_child_moved_out_of_a_removed_parent_comes_along_on_both_splice_paths() {
     let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
     for immediate in [false, true] {
         let mut patches = vec![
@@ -3260,15 +3271,20 @@ fn an_insert_left_behind_by_a_moved_child_is_reported_on_both_splice_paths() {
         let mut arena = orig.clone();
         let dropped = apply_patches_in_place(&mut arena, &patches).expect("apply failed");
 
-        assert_eq!(dropped, vec![p1], "immediate: {immediate}");
-        assert_eq!(arena.get_children(0).last(), Some(&p1));
+        assert!(dropped.is_empty(), "immediate: {immediate}: {dropped:?}");
+        let kids = arena.get_children(0).to_vec();
+        assert_eq!(kids[kids.len() - 2], p1, "immediate: {immediate}");
+        assert_eq!(
+            arena.get_node(kids[kids.len() - 1]).node_type,
+            MdastNodeType::ThematicBreak as u8
+        );
         assert_children_point_back(&arena, 0);
     }
 }
 
 #[test]
-fn strict_apply_rejects_an_insert_left_behind_by_a_moved_child() {
-    let (orig, quote, [p1, _]) = build_quote_of_two_paragraphs();
+fn strict_apply_rejects_an_insert_left_behind_by_a_moved_grandchild() {
+    let (orig, quote, [item, _]) = build_quote_of_a_list_of_two_items();
     let mut arena = orig.clone();
     let err = apply_patches_strict(
         &mut arena,
@@ -3276,10 +3292,10 @@ fn strict_apply_rejects_an_insert_left_behind_by_a_moved_child() {
             Patch::Remove { node_id: quote },
             Patch::InsertAfter {
                 node_id: quote,
-                new_tree: PatchContent::Tree(ref_payload_mdast(p1)),
+                new_tree: PatchContent::Tree(ref_payload_mdast(item)),
             },
             Patch::InsertAfter {
-                node_id: p1,
+                node_id: item,
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
             },
         ],
@@ -3287,7 +3303,7 @@ fn strict_apply_rejects_an_insert_left_behind_by_a_moved_child() {
     .unwrap_err();
 
     match err {
-        CommandError::PatchOnRemovedSubtree(id) => assert_eq!(id, p1),
+        CommandError::PatchOnRemovedSubtree(id) => assert_eq!(id, item),
         other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
     }
     assert_eq!(arena.len(), orig.len());
@@ -3295,7 +3311,7 @@ fn strict_apply_rejects_an_insert_left_behind_by_a_moved_child() {
 }
 
 #[test]
-fn a_child_moved_out_keeps_its_id_when_its_handed_back_position_holds_only_inserts() {
+fn a_relisted_child_moved_out_of_its_replaced_parent_takes_its_inserts_along() {
     let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
     let mut arena = orig.clone();
     let dropped = apply_patches_in_place(
@@ -3312,7 +3328,7 @@ fn a_child_moved_out_keeps_its_id_when_its_handed_back_position_holds_only_inser
             },
             Patch::InsertAfter {
                 node_id: quote,
-                new_tree: PatchContent::Tree(ref_payload_mdast(p1)),
+                new_tree: PatchContent::Tree(relist_payload_mdast(p1)),
             },
             Patch::Remove { node_id: p1 },
         ],
@@ -3321,13 +3337,17 @@ fn a_child_moved_out_keeps_its_id_when_its_handed_back_position_holds_only_inser
 
     assert!(dropped.is_empty(), "nothing queued was lost: {dropped:?}");
     let kids = arena.get_children(0).to_vec();
-    assert_eq!(kids.len(), 2);
     assert_eq!(
-        child_types(&arena, kids[0]),
-        vec![MdastNodeType::Html as u8, MdastNodeType::Paragraph as u8]
+        child_types(&arena, 0),
+        vec![
+            MdastNodeType::Blockquote as u8,
+            MdastNodeType::Html as u8,
+            MdastNodeType::Paragraph as u8,
+        ]
     );
-    assert_eq!(arena.get_children(kids[0])[1], p2);
-    assert_eq!(kids[1], p1);
+    assert_eq!(arena.get_children(kids[0]), &[p2]);
+    assert_eq!(kids[2], p1);
+    assert_children_point_back(&arena, 0);
 }
 
 #[test]
@@ -3361,4 +3381,97 @@ fn a_single_grafted_child_handed_back_keeps_its_sibling_inserts() {
         ]
     );
     assert_children_point_back(&arena, 0);
+}
+
+#[test]
+fn a_grandchild_removed_after_its_grandparent_lists_it_stays_removed() {
+    let (orig, quote, [item, other]) = build_quote_of_a_list_of_two_items();
+    let list = orig.get_children(quote)[0];
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node(MdastNodeType::Blockquote as u8);
+    b.open_node(MdastNodeType::List as u8);
+    for target in [item, other] {
+        b.open_node(REF_NODE_TYPE);
+        b.set_data_current(&target.to_le_bytes());
+        b.close_node();
+    }
+    b.close_node();
+    b.close_node();
+    let mut arena = orig.clone();
+    apply_patches_strict(
+        &mut arena,
+        &[
+            Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(b.finish()),
+                keep_children: false,
+            },
+            Patch::Remove { node_id: item },
+        ],
+    )
+    .expect("apply failed");
+
+    let new_quote = arena.get_children(0)[0];
+    let new_list = arena.get_children(new_quote)[0];
+    assert_ne!(new_list, list);
+    assert_eq!(arena.get_children(new_list), &[other]);
+}
+
+#[test]
+fn a_relisted_child_keeps_a_child_edit_queued_on_it() {
+    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
+    let mut arena = orig.clone();
+    apply_patches_strict(
+        &mut arena,
+        &[
+            Patch::Remove { node_id: p1 },
+            Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(node_with_kind_refs(
+                    MdastNodeType::Blockquote,
+                    &[p2, p1],
+                    REF_KIND_RELIST,
+                )),
+                keep_children: false,
+            },
+            Patch::AppendChild {
+                node_id: p1,
+                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Text)),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    let new_quote = arena.get_children(0)[0];
+    assert_eq!(arena.get_children(new_quote), &[p2, p1]);
+    assert_eq!(child_types(&arena, p1), vec![MdastNodeType::Text as u8]);
+}
+
+#[test]
+fn a_children_list_on_a_node_that_is_replaced_does_not_relist() {
+    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
+    let mut arena = orig.clone();
+    apply_patches_strict(
+        &mut arena,
+        &[
+            Patch::Remove { node_id: p1 },
+            Patch::SetChildren {
+                node_id: quote,
+                new_children: PatchContent::Tree(node_with_kind_refs(
+                    MdastNodeType::Root,
+                    &[p2, p1],
+                    REF_KIND_RELIST,
+                )),
+            },
+            Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[p1, p2])),
+                keep_children: false,
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    let new_quote = arena.get_children(0)[0];
+    assert_eq!(arena.get_children(new_quote), &[p2]);
 }

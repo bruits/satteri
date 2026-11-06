@@ -405,6 +405,17 @@ enum GraftMode {
     KeepRoot,
 }
 
+/// How a payload ref resolves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefKind {
+    /// The target node itself.
+    Node,
+    /// Whatever ends up spliced at the target's position.
+    Slot,
+    /// A node the plugin removed after listing it: nothing, the removal wins.
+    Gone,
+}
+
 /// Targets already moved by id; a removed target's node and its sibling inserts move separately.
 #[derive(Default)]
 struct Adopted {
@@ -423,10 +434,13 @@ fn resolve_target<K: ArenaKind>(
     self_removed: bool,
     slots: &FxHashMap<u32, Vec<u32>>,
     position_slots: &FxHashMap<u32, Vec<u32>>,
-    slot_ref: bool,
+    kind: RefKind,
     truly_dead: &FxHashSet<u32>,
     adopted: &mut Adopted,
 ) -> Vec<u32> {
+    if kind == RefKind::Gone {
+        return Vec::new();
+    }
     if target == anchor {
         if self_removed {
             return Vec::new();
@@ -435,7 +449,7 @@ fn resolve_target<K: ArenaKind>(
     }
     let core = slots.get(&target).filter(|core| !core.is_empty());
     let (ids, takes_node, takes_inserts) = match position_slots.get(&target) {
-        Some(position) if slot_ref => {
+        Some(position) if kind == RefKind::Slot => {
             let core_len = core.map_or(0, Vec::len);
             (position.clone(), core_len > 0, position.len() > core_len)
         }
@@ -466,7 +480,7 @@ fn resolve_target<K: ArenaKind>(
 fn resolve_grafted<K: ArenaKind>(
     arena: &mut Arena<K>,
     roots: &[u32],
-    placeholders: &[(u32, u32, bool)],
+    placeholders: &[(u32, u32, RefKind)],
     anchor: u32,
     self_removed: bool,
     slots: &FxHashMap<u32, Vec<u32>>,
@@ -478,13 +492,13 @@ fn resolve_grafted<K: ArenaKind>(
     let mut resolved_placeholders: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut placeholder_parents: Vec<u32> = Vec::new();
     let mut seen_parents: FxHashSet<u32> = FxHashSet::default();
-    let mut top_level: FxHashMap<u32, (u32, bool)> = FxHashMap::default();
-    for &(ph, target, slot_ref) in placeholders {
+    let mut top_level: FxHashMap<u32, (u32, RefKind)> = FxHashMap::default();
+    for &(ph, target, kind) in placeholders {
         // Top-level placeholders have no parent and are resolved below. Checking
         // that directly avoids scanning every root for every placeholder.
         let parent = arena.get_node(ph).parent;
         if parent == u32::MAX {
-            top_level.insert(ph, (target, slot_ref));
+            top_level.insert(ph, (target, kind));
             continue;
         }
         let ids = resolve_target(
@@ -494,7 +508,7 @@ fn resolve_grafted<K: ArenaKind>(
             self_removed,
             slots,
             position_slots,
-            slot_ref,
+            kind,
             truly_dead,
             adopted,
         );
@@ -520,7 +534,7 @@ fn resolve_grafted<K: ArenaKind>(
     }
     let mut out: Vec<u32> = Vec::with_capacity(roots.len());
     for &r in roots {
-        if let Some(&(target, slot_ref)) = top_level.get(&r) {
+        if let Some(&(target, kind)) = top_level.get(&r) {
             out.extend(resolve_target(
                 arena,
                 target,
@@ -528,7 +542,7 @@ fn resolve_grafted<K: ArenaKind>(
                 self_removed,
                 slots,
                 position_slots,
-                slot_ref,
+                kind,
                 truly_dead,
                 adopted,
             ));
@@ -762,47 +776,29 @@ fn apply_patches_impl<K: ArenaKind>(
         );
     }
 
-    // Same pre-flight errors as `rebuild`.
-    for patch in patches {
-        match patch {
-            Patch::Wrap { node_id, .. } if plans[node_id].deleted => {
-                return Err(CommandError::WrapOnRemovedNode(*node_id));
-            }
-            // A ROOT-typed wrapper only arises from a parsed raw payload;
-            // treating it as the wrapper silently degrades the wrap into
-            // sibling insertion.
-            Patch::Wrap { parent_tree, .. }
-                if match parent_tree {
-                    PatchContent::Tree(t) => {
-                        !t.is_empty() && t.get_node(0).node_type == K::ROOT_TAG
-                    }
-                    PatchContent::Grafted(roots) => roots
-                        .first()
-                        .is_some_and(|&r| arena.get_node(r).node_type == K::ROOT_TAG),
-                } =>
-            {
-                return Err(unsupported("wrap parent is a document root"));
-            }
-            Patch::PrependChild { node_id, .. } | Patch::AppendChild { node_id, .. }
-                if plans[node_id].deleted =>
-            {
-                return Err(CommandError::ChildPatchOnRemovedNode(*node_id));
-            }
-            _ => {}
-        }
-    }
-
     // Refs count only in payloads the rebuild would actually emit.
     let mut ref_uses: Vec<(u32, u32)> = Vec::new(); // (referring anchor, target)
-    let mut ref_positions: FxHashMap<usize, Vec<(u32, u32, bool)>> = FxHashMap::default(); // patch index -> [(sub_id, target, slot_ref)]
-    let mut ref_placeholders: FxHashMap<usize, Vec<(u32, u32, bool)>> = FxHashMap::default(); // patch index -> [(node_id, target, slot_ref)]
+    let mut ref_positions: FxHashMap<usize, Vec<(u32, u32, RefKind)>> = FxHashMap::default(); // patch index -> [(sub_id, target, kind)]
+    let mut ref_placeholders: FxHashMap<usize, Vec<(u32, u32, RefKind)>> = FxHashMap::default(); // patch index -> [(node_id, target, kind)]
     let mut ref_targets: FxHashSet<u32> = FxHashSet::default();
     let mut slot_referrers: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut readded: Vec<u32> = Vec::new();
+    let mut gone_targets: FxHashSet<u32> = FxHashSet::default();
+    let mut relist_refs: FxHashSet<(usize, u32)> = FxHashSet::default();
     let is_removed = |target: u32| {
         plans
             .get(&target)
             .is_some_and(|plan| plan.deleted && plan.winning_replace.is_none())
+    };
+    let is_inside = |target: u32, ancestor: u32| {
+        let mut cur = target;
+        while cur != 0 {
+            cur = arena.get_node(cur).parent;
+            if cur == ancestor {
+                return true;
+            }
+        }
+        false
     };
     for (&anchor, plan) in &plans {
         for &pi in &patch_map[&anchor] {
@@ -810,7 +806,8 @@ fn apply_patches_impl<K: ArenaKind>(
             let used = match p {
                 Patch::Replace { .. } => plan.winning_replace == Some(pi),
                 Patch::Wrap { .. } => plan.winning_wrap == Some(pi) && !plan.deleted,
-                Patch::SetChildren { .. } => plan.winning_set_children == Some(pi),
+                // A node that is itself replaced or removed never gets its new children list.
+                Patch::SetChildren { .. } => plan.winning_set_children == Some(pi) && !plan.deleted,
                 _ => true,
             };
             if !used {
@@ -843,23 +840,32 @@ fn apply_patches_impl<K: ArenaKind>(
                 continue;
             }
             // A replacement handing back the replaced node's own children passes their slots on, edits around them included.
-            let hands_back_children = matches!(p, Patch::Replace { .. });
-            let relists_children = matches!(p, Patch::Replace { .. } | Patch::SetChildren { .. });
-            let mut names_slot = |target: u32, td: &[u8]| {
-                let explicit = td.get(4) == Some(&REF_KIND_SLOT);
+            let hands_back_children = match p {
+                Patch::Replace { .. } => true,
+                // Content placed beside a node that goes away is that node's replacement too.
+                Patch::InsertBefore { .. } | Patch::InsertAfter { .. } => plan.deleted,
+                _ => false,
+            };
+            let rebuilds_subtree = hands_back_children || matches!(p, Patch::SetChildren { .. });
+            let mut ref_kind = |id: u32, target: u32, td: &[u8]| {
+                let relisted = td.get(4) == Some(&REF_KIND_RELIST);
                 let own_child = arena.get_node(target).parent == anchor;
-                let handed_back = hands_back_children && own_child;
-                if relists_children
-                    && own_child
-                    && td.get(4) == Some(&REF_KIND_RELIST)
-                    && is_removed(target)
-                {
+                if rebuilds_subtree && own_child && relisted && is_removed(target) {
                     readded.push(target);
+                    relist_refs.insert((pi, id));
                 }
-                if explicit || handed_back {
+                if td.get(4) == Some(&REF_KIND_SLOT) || (hands_back_children && own_child) {
                     slot_referrers.entry(target).or_default().push(anchor);
+                    RefKind::Slot
+                } else if rebuilds_subtree
+                    && !relisted
+                    && is_removed(target)
+                    && is_inside(target, anchor)
+                {
+                    RefKind::Gone
+                } else {
+                    RefKind::Node
                 }
-                explicit || handed_back
             };
             // A REF at wrap position 0 is the wrapper itself, copied verbatim, never resolved.
             let is_wrap = matches!(p, Patch::Wrap { .. });
@@ -881,13 +887,17 @@ fn apply_patches_impl<K: ArenaKind>(
                         if target != 0 && arena.get_node(target).parent == u32::MAX {
                             return Err(unsupported("detached ref target"));
                         }
-                        ref_uses.push((anchor, target));
-                        ref_positions.entry(pi).or_default().push((
-                            sub_id,
-                            target,
-                            names_slot(target, td),
-                        ));
-                        ref_targets.insert(target);
+                        let kind = ref_kind(sub_id, target, td);
+                        if kind == RefKind::Gone {
+                            gone_targets.insert(target);
+                        } else {
+                            ref_uses.push((anchor, target));
+                            ref_targets.insert(target);
+                        }
+                        ref_positions
+                            .entry(pi)
+                            .or_default()
+                            .push((sub_id, target, kind));
                     }
                 }
                 PatchContent::Grafted(roots) => {
@@ -912,13 +922,17 @@ fn apply_patches_impl<K: ArenaKind>(
                             if target != 0 && arena.get_node(target).parent == u32::MAX {
                                 return Err(unsupported("detached ref target"));
                             }
-                            ref_uses.push((anchor, target));
-                            ref_placeholders.entry(pi).or_default().push((
-                                id,
-                                target,
-                                names_slot(target, td),
-                            ));
-                            ref_targets.insert(target);
+                            let kind = ref_kind(id, target, td);
+                            if kind == RefKind::Gone {
+                                gone_targets.insert(target);
+                            } else {
+                                ref_uses.push((anchor, target));
+                                ref_targets.insert(target);
+                            }
+                            ref_placeholders
+                                .entry(pi)
+                                .or_default()
+                                .push((id, target, kind));
                         } else {
                             stack.extend_from_slice(arena.get_children(id));
                         }
@@ -927,11 +941,52 @@ fn apply_patches_impl<K: ArenaKind>(
             }
         }
     }
-    for target in readded {
+    for &target in &readded {
         let plan = plans.get_mut(&target).expect("a removed child has a plan");
         plan.deleted = false;
         if plan.winning_set_children.is_none() {
             discards.remove(&target);
+        }
+    }
+    // A relisted child lands where the plugin listed it again, not where an older list still names it.
+    if !readded.is_empty() {
+        let readded: FxHashSet<u32> = readded.into_iter().collect();
+        for (&pi, refs) in ref_positions.iter_mut().chain(ref_placeholders.iter_mut()) {
+            for (id, target, kind) in refs.iter_mut() {
+                if readded.contains(target) && !relist_refs.contains(&(pi, *id)) {
+                    *kind = RefKind::Gone;
+                }
+            }
+        }
+    }
+
+    // Same pre-flight errors as `rebuild`, once relisted children count as live again.
+    for patch in patches {
+        match patch {
+            Patch::Wrap { node_id, .. } if plans[node_id].deleted => {
+                return Err(CommandError::WrapOnRemovedNode(*node_id));
+            }
+            // A ROOT-typed wrapper only arises from a parsed raw payload;
+            // treating it as the wrapper silently degrades the wrap into
+            // sibling insertion.
+            Patch::Wrap { parent_tree, .. }
+                if match parent_tree {
+                    PatchContent::Tree(t) => {
+                        !t.is_empty() && t.get_node(0).node_type == K::ROOT_TAG
+                    }
+                    PatchContent::Grafted(roots) => roots
+                        .first()
+                        .is_some_and(|&r| arena.get_node(r).node_type == K::ROOT_TAG),
+                } =>
+            {
+                return Err(unsupported("wrap parent is a document root"));
+            }
+            Patch::PrependChild { node_id, .. } | Patch::AppendChild { node_id, .. }
+                if plans[node_id].deleted =>
+            {
+                return Err(CommandError::ChildPatchOnRemovedNode(*node_id));
+            }
+            _ => {}
         }
     }
 
@@ -1098,6 +1153,13 @@ fn apply_patches_impl<K: ArenaKind>(
             has_inserts && !carried && !dropped_set.contains(&target)
         }));
     }
+    // A removal that won over a ref did what it asked for, so it is not reported as lost.
+    dropped_set.retain(|anchor| {
+        !(gone_targets.contains(anchor)
+            && patch_map[anchor]
+                .iter()
+                .all(|&pi| matches!(patches[pi], Patch::Remove { .. })))
+    });
     for (&anchor, plan) in plans.iter_mut() {
         if dropped_set.contains(&anchor) {
             plan.dropped = true;
@@ -1233,13 +1295,13 @@ fn apply_patches_impl<K: ArenaKind>(
                 Patch::Replace { .. } => winning_replace == Some(pi),
                 // Wrap payloads graft in the wiring below, at their final pool base.
                 Patch::Wrap { .. } => false,
-                Patch::SetChildren { .. } => winning_set_children == Some(pi),
+                Patch::SetChildren { .. } => winning_set_children == Some(pi) && !deleted,
                 Patch::Remove { .. } => false,
                 _ => true,
             };
             if winning_wrap == Some(pi) && !deleted {
                 if let Some(positions) = ref_positions.get(&pi) {
-                    for &(sub_id, target, slot_ref) in positions {
+                    for &(sub_id, target, kind) in positions {
                         let ids = resolve_target(
                             arena,
                             target,
@@ -1247,7 +1309,7 @@ fn apply_patches_impl<K: ArenaKind>(
                             false,
                             &slots,
                             &position_slots,
-                            slot_ref,
+                            kind,
                             &truly_dead,
                             &mut adopted,
                         );
@@ -1357,7 +1419,7 @@ fn apply_patches_impl<K: ArenaKind>(
                 PatchContent::Tree(sub) => {
                     let mut resolved: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
                     if let Some(positions) = ref_positions.get(&pi) {
-                        for &(sub_id, target, slot_ref) in positions {
+                        for &(sub_id, target, kind) in positions {
                             // Self-refs mirror the rebuild's active re-entry:
                             // nothing for a removed anchor, otherwise a raw
                             // copy; adoption would splice the anchor into its
@@ -1369,7 +1431,7 @@ fn apply_patches_impl<K: ArenaKind>(
                                 self_removed,
                                 &slots,
                                 &position_slots,
-                                slot_ref,
+                                kind,
                                 &truly_dead,
                                 &mut adopted,
                             );
@@ -1379,7 +1441,7 @@ fn apply_patches_impl<K: ArenaKind>(
                     grafted.insert(pi, graft_subtree(arena, sub, &resolved, preserve_root));
                 }
                 PatchContent::Grafted(roots) => {
-                    static EMPTY: &[(u32, u32, bool)] = &[];
+                    static EMPTY: &[(u32, u32, RefKind)] = &[];
                     let placeholders = ref_placeholders
                         .get(&pi)
                         .map(Vec::as_slice)

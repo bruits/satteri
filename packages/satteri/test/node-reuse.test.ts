@@ -728,30 +728,151 @@ test("hast: a removed child stays removed when its parent returns a spread copy"
   }
 });
 
-test("a removed child stays removed when its parent's old children are passed on with a new one", () => {
-  const returned = defineMdastPlugin({
+test("moving done items to the bottom keeps them when they are already there", () => {
+  const plugin = defineMdastPlugin({
+    name: "done-items-last",
+    list(node, ctx) {
+      const done = node.children.filter((item) => item.checked);
+      for (const item of done) ctx.removeNode(item);
+      return { ...node, children: [...node.children.filter((item) => !item.checked), ...done] };
+    },
+  });
+  const { html } = markdownToHtml("- [ ] a\n- [x] b\n", { mdastPlugins: [plugin] });
+  expect(html).toContain("> a</li>");
+  expect(html).toContain("> b</li>");
+});
+
+test("a grandchild removed after its grandparent returns copies of its children stays removed", () => {
+  const plugin = defineMdastPlugin({
+    name: "copy-children-as-asides",
+    blockquote(node, ctx) {
+      if (ctx.parent(node)?.type !== "root") return;
+      return {
+        ...node,
+        children: node.children.map((child) => ({ ...child, data: { hName: "aside" } })),
+      };
+    },
+    paragraph(node, ctx) {
+      const [text] = node.children;
+      if (text?.type === "text" && text.value === "a") ctx.removeNode(node);
+    },
+  });
+  const { html } = markdownToHtml("> > a\n> >\n> > b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n<aside>\n<p>b</p>\n</aside>\n</blockquote>\n");
+});
+
+test("a child removed while its parent is wrapped in raw items stays removed", () => {
+  const plugin = defineMdastPlugin({
+    name: "wrap-in-div",
+    blockquote(node, ctx) {
+      ctx.replaceNode(node, [{ raw: "<div>" }, ...node.children, { raw: "</div>" }]);
+    },
+    paragraph(node, ctx) {
+      const [text] = node.children;
+      if (text?.type === "text" && text.value === "a") ctx.removeNode(node);
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<div>\n<p>b</p>\n</div>\n");
+});
+
+test("content inserted after a node stays after the raw items that replace it", () => {
+  const plugin = defineMdastPlugin({
+    name: "insert-then-wrap",
+    heading(node, ctx) {
+      ctx.insertAfter(node, { type: "paragraph", children: [{ type: "text", value: "after" }] });
+      ctx.replaceNode(node, [{ raw: "<div>" }, node, { raw: "</div>" }]);
+    },
+  });
+  const { html } = markdownToHtml("# h\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<div>\n<h1>h</h1>\n</div>\n<p>after</p>\n");
+});
+
+test("a kept-children replacement after other items keeps the edits among the children", () => {
+  const plugin = defineMdastPlugin({
+    name: "rule-then-section",
+    blockquote(node, ctx) {
+      ctx.replaceNode(node, [
+        { type: "thematicBreak" },
+        { ...node, data: { hName: "section" }, _keepChildren: true } as never,
+      ]);
+    },
+    paragraph(node, ctx) {
+      if (ctx.indexOf(node) === 0) ctx.insertAfter(node, { type: "html", value: "<i>x</i>" });
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<hr>\n<section>\n<p>a</p>\n<i>x</i>\n<p>b</p>\n</section>\n");
+});
+
+test("a removed child listed again keeps a child appended to it", () => {
+  const plugin = defineMdastPlugin({
+    name: "move-first-and-exclaim",
+    blockquote(node, ctx) {
+      const [first, ...rest] = node.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      return { ...node, children: [...rest, first] };
+    },
+    paragraph(node, ctx) {
+      ctx.appendChild(node, { type: "text", value: "!" });
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n<p>b!</p>\n<p>a!</p>\n</blockquote>\n");
+});
+
+test("a children list set on a node that is then replaced does not undo a removal", () => {
+  const plugin = defineMdastPlugin({
+    name: "set-children-then-spread",
+    blockquote(node, ctx) {
+      const [first, ...rest] = node.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      ctx.setProperty(node, "children", [...rest, first]);
+      return asSection(node);
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<section>\n<p>b</p>\n</section>\n");
+});
+
+test("unwrapping a node with insertBefore and removeNode keeps the edits beside its children", () => {
+  const plugin = defineMdastPlugin({
+    name: "flatten-quotes",
+    blockquote(node, ctx) {
+      ctx.insertBefore(node, node.children);
+      ctx.removeNode(node);
+    },
+    paragraph(node, ctx) {
+      ctx.insertAfter(node, { type: "thematicBreak" });
+    },
+  });
+  const { html } = markdownToHtml("> Body\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<p>Body</p>\n<hr>\n");
+});
+
+test("a node appended elsewhere moves whether it is removed before or after", () => {
+  const removeFirst = defineMdastPlugin({
     name: "remove-then-append",
-    blockquote(node, ctx) {
-      const [first] = node.children;
-      if (!first) return;
-      ctx.removeNode(first);
-      return { ...node, children: [...node.children, { type: "thematicBreak" }] };
+    heading(node, ctx) {
+      const root = ctx.parent(node);
+      ctx.removeNode(node);
+      if (root) ctx.appendChild(root, node);
     },
   });
-  const replaced = defineMdastPlugin({
-    name: "remove-then-replace-with-children",
-    blockquote(node, ctx) {
-      const [first] = node.children;
-      if (!first) return;
-      ctx.removeNode(first);
-      ctx.replaceNode(node, [{ type: "thematicBreak" }, ...node.children]);
+  const appendFirst = defineMdastPlugin({
+    name: "append-then-remove",
+    heading(node, ctx) {
+      const root = ctx.parent(node);
+      if (root) ctx.appendChild(root, node);
+      ctx.removeNode(node);
     },
   });
-  const appended = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [returned] }).html;
-  expect(appended).toBe("<blockquote>\n<p>b</p>\n<hr>\n</blockquote>\n");
-  expect(markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [replaced] }).html).toBe(
-    "<hr>\n<p>b</p>\n",
-  );
+  for (const plugin of [removeFirst, appendFirst]) {
+    const { html } = markdownToHtml("# h\n\np\n", { mdastPlugins: [plugin] });
+    expect(html, plugin.name).toBe("<p>p</p>\n<h1>h</h1>\n");
+  }
 });
 
 test("a removed child listed again inside a new wrapper keeps its place there", () => {

@@ -58,7 +58,7 @@ import {
   foreignContentError,
   makeRequireNid,
   requireRootReplacement,
-  relistIn,
+  relists,
   ROOT_NODE_ID,
   rootReplacementError,
   unencodableContentError,
@@ -235,11 +235,10 @@ function emitHastChildrenCommand(
   relist: Relist | undefined,
 ): boolean {
   if (!Array.isArray(children)) return false;
-  const childRelist = relistIn(relist, children);
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(HAST_ROOT);
     for (const c of children) {
-      if (!emitHastOp(buffer, c, false, refs, false, false, childRelist)) return false;
+      if (!emitHastOp(buffer, c, false, refs, false, false, relist, children)) return false;
     }
     buffer.close();
     return true;
@@ -254,9 +253,10 @@ function emitHastTree(
   refs: NodeRefs,
   allowRootRef = false,
   relist?: Relist,
+  siblings?: readonly unknown[],
 ): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
-    emitHastOp(buffer, node, true, refs, false, allowRootRef, relist),
+    emitHastOp(buffer, node, true, refs, false, allowRootRef, relist, siblings),
   );
   if (!ok) throw unencodableContentError(node);
 }
@@ -270,11 +270,10 @@ function emitHastMultiReplace(
   refs: NodeRefs,
   relist: Relist | undefined,
 ): void {
-  const itemRelist = relistIn(relist, nodes);
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
     buffer.open(HAST_ROOT);
     for (const n of nodes) {
-      if (!emitHastOp(buffer, n, false, refs, false, false, itemRelist)) return false;
+      if (!emitHastOp(buffer, n, false, refs, false, false, relist, nodes)) return false;
     }
     buffer.close();
     return true;
@@ -336,9 +335,8 @@ function emitHastRootOp(
   if (n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    const childRelist = relistIn(relist, children);
     for (const c of children) {
-      if (!emitHastOp(w, c, false, refs, false, false, childRelist)) return false;
+      if (!emitHastOp(w, c, false, refs, false, false, relist, children)) return false;
     }
   }
   w.close();
@@ -353,12 +351,13 @@ function emitHastOp(
   document = false,
   allowRootRef = false,
   relist?: Relist,
+  siblings?: readonly unknown[],
 ): boolean {
   if (node === null || typeof node !== "object") return false;
   const id = getNodeId(node as HastNode, refs);
   if (id === FOREIGN_REF && !document) throw foreignContentError();
   if ((!isRoot || allowRootRef) && id !== undefined && id !== FOREIGN_REF) {
-    if (relist?.removed.has(id)) w.relistRef(id);
+    if (relist !== undefined && relists(relist, id, siblings)) w.relistRef(id);
     else w.ref(id);
     return true;
   }
@@ -394,9 +393,8 @@ function emitHastOp(
   if (!document && n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    const childRelist = relist && relistIn(relist, children);
     for (const c of children) {
-      if (!emitHastOp(w, c, false, refs, document, false, childRelist)) return false;
+      if (!emitHastOp(w, c, false, refs, document, false, relist, children)) return false;
     }
   }
   w.close();
@@ -484,8 +482,18 @@ class HastVisitorContextImpl implements HastVisitorContext {
       }
       let previous: HastContent | undefined;
       for (const n of newNode) {
-        if (previous !== undefined)
-          emitHastTree(this.#commandBuffer, "insertBefore", id, previous, this.#refs);
+        if (previous !== undefined) {
+          emitHastTree(
+            this.#commandBuffer,
+            "insertBefore",
+            id,
+            previous,
+            this.#refs,
+            false,
+            relist,
+            newNode,
+          );
+        }
         previous = n;
       }
       if (previous === undefined) {
@@ -498,7 +506,16 @@ class HastVisitorContextImpl implements HastVisitorContext {
           relist,
         );
       } else {
-        emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs, true, relist);
+        emitHastTree(
+          this.#commandBuffer,
+          "replace",
+          id,
+          previous,
+          this.#refs,
+          true,
+          relist,
+          newNode,
+        );
       }
       if (previous === undefined) this.#pendingNodes.delete(id);
       else this.#pendingNodes.set(id, previous);
@@ -512,18 +529,26 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.#pendingNodes.set(id, newNode);
   }
 
-  #splice(anchorId: number, content: HastContent | HastContent[], op: StructuralOp): void {
+  #splice(
+    anchor: HastNode,
+    method: string,
+    content: HastContent | HastContent[],
+    op: StructuralOp,
+  ): void {
+    const anchorId = requireNid(anchor, method, this.#refs);
+    const relist = this.relistFor(anchor);
+    const siblings = Array.isArray(content) ? content : undefined;
     for (const n of asArray(content)) {
-      emitHastTree(this.#commandBuffer, op, anchorId, n, this.#refs, true);
+      emitHastTree(this.#commandBuffer, op, anchorId, n, this.#refs, true, relist, siblings);
     }
   }
 
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
-    this.#splice(requireNid(node, "insertBefore", this.#refs), newNode, "insertBefore");
+    this.#splice(node, "insertBefore", newNode, "insertBefore");
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
-    this.#splice(requireNid(node, "insertAfter", this.#refs), newNode, "insertAfter");
+    this.#splice(node, "insertAfter", newNode, "insertAfter");
   }
 
   wrapNode(
@@ -543,11 +568,11 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    this.#splice(requireNid(node, "prependChild", this.#refs), childNode, "prependChild");
+    this.#splice(node, "prependChild", childNode, "prependChild");
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    this.#splice(requireNid(node, "appendChild", this.#refs), childNode, "appendChild");
+    this.#splice(node, "appendChild", childNode, "appendChild");
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
@@ -558,7 +583,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
         : index >= children.length
           ? ([node, "appendChild"] as const)
           : ([children[index]!, "insertBefore"] as const);
-    this.#splice(requireNid(anchor, "insertChildAt", this.#refs), childNode, op);
+    this.#splice(anchor, "insertChildAt", childNode, op);
   }
 
   removeChildAt(node: HastNode, index: number): void {
@@ -693,8 +718,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   relistFor(target: HastNode): Relist | undefined {
     if (this.#removedIds.size === 0) return undefined;
-    const inherited = (target as { children?: unknown }).children;
-    return { removed: this.#removedIds, inherited };
+    return { removed: this.#removedIds, target };
   }
 }
 

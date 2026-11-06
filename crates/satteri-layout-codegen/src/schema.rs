@@ -1239,7 +1239,7 @@ pub const OP_CODES: WireTable = WireTable {
         wc(
             "OP_RELIST_REF",
             0x0d,
-            "[id: u32 LE] — splice an existing node the plugin removed and lists again",
+            "[id: u32 LE], splice an existing node the plugin removed and lists again",
         ),
     ],
 };
