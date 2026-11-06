@@ -1122,6 +1122,7 @@ export function visitMdastHandle(
       }[]
     | null = null;
 
+  const hasAsync = subs.some((sub) => sub.isAsync);
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
     const nodeId = ru32(matchView, indexBase);
@@ -1138,7 +1139,7 @@ export function visitMdastHandle(
       resolver,
     );
     // The result counts removals as of the call, as a sync visit's would, plus the visit's own.
-    if (sub.isAsync) {
+    if (hasAsync && sub.isAsync) {
       const removals = context.asyncVisitRemovals();
       const scoped = scopeContext(context, removals.own);
       const promise = sub.visitFn.call(plugin, node, scoped) as Promise<MdastVisitorResult>;

@@ -930,6 +930,7 @@ function dispatchMatches(
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
   let deferred: DeferredHastVisit[] | null = null;
 
+  const hasAsync = subs.some((sub) => sub.isAsync);
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
     const nodeId = matchView.getUint32(indexBase, true);
@@ -939,7 +940,7 @@ function dispatchMatches(
     const sub = subs[subIndex]!;
     const node = readMatchedNode(wire, dataOffset, nodeId, sub.nodeType);
     // The result counts removals as of the call, as a sync visit's would, plus the visit's own.
-    if (sub.isAsync) {
+    if (hasAsync && sub.isAsync) {
       const removals = ctx.asyncVisitRemovals();
       const promise = Promise.resolve(sub.visitFn(node, scopeContext(ctx, removals.own)));
       deferred ??= [];
