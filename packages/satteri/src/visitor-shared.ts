@@ -112,6 +112,17 @@ export type NodeRefs = WeakMap<object, number>;
 /** Separates "belongs to another tree" from "never had an id"; arena ids are never negative. */
 export const FOREIGN_REF = -1;
 
+/** Nodes the plugin removed, so a replacement listing one again puts it back. */
+export interface Relist {
+  readonly removed: ReadonlySet<number>;
+  /** The replaced node's own children array: a copy passing it on unchanged keeps their removals. */
+  readonly inherited: unknown;
+}
+
+export function relistIn(relist: Relist | undefined, children: unknown): Relist | undefined {
+  return children === relist?.inherited ? undefined : relist;
+}
+
 export function foreignContentError(): Error {
   return new Error(
     "satteri: content contains a node from another tree or pass; use structuredClone(node) to insert a detached copy.",

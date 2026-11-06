@@ -1236,6 +1236,11 @@ pub const OP_CODES: WireTable = WireTable {
             0x0c,
             "[start line, start column, end line, end column: u32 LE each] — source position, columns in UTF-16 units",
         ),
+        wc(
+            "OP_RELIST_REF",
+            0x0d,
+            "[id: u32 LE] — splice an existing node the plugin removed and lists again",
+        ),
     ],
 };
 

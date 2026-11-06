@@ -88,11 +88,13 @@ import {
   foreignContentError,
   makeRequireNid,
   requireRootReplacement,
+  relistIn,
   ROOT_NODE_ID,
   rootReplacementError,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
+  type Relist,
   type SettableFieldKey,
   withMdxJsxAttribute,
 } from "../visitor-shared.js";
@@ -380,12 +382,14 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     ) {
       return;
     }
+    const relist = this.relistFor(node);
     if (Array.isArray(newNode)) {
       if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
       // One command, so the node's replacement is its whole slot and a ref back
       // to it resolves to all of it rather than to the last element.
       if (id !== ROOT_NODE_ID && newNode.length > 1 && newNode.every(isPlainReplacement)) {
-        emitMdastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
+        emitMdastMultiReplace(this.#commandBuffer, id, newNode, this.#refs, relist);
+        this.#pendingNodes.delete(id);
         return;
       }
       // Only the run in the replace command itself hands the node's children back with their edits.
@@ -395,16 +399,21 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
       }
       const replacement = newNode.slice(start, end);
       if (replacement.length > 1) {
-        emitMdastMultiReplace(this.#commandBuffer, id, replacement, this.#refs);
+        emitMdastMultiReplace(this.#commandBuffer, id, replacement, this.#refs, relist);
         this.#pendingNodes.delete(id);
       } else {
         const [only] = replacement;
         if (only === undefined) {
           this.removeNode(node);
         } else if (id === ROOT_NODE_ID && !isRawMdastContent(only)) {
-          emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(only), this.#refs);
+          emitMdastRootReplace(
+            this.#commandBuffer,
+            requireRootReplacement(only),
+            this.#refs,
+            relist,
+          );
         } else {
-          emitMdastTree(this.#commandBuffer, "replace", id, only, true, this.#refs, true);
+          emitMdastTree(this.#commandBuffer, "replace", id, only, true, this.#refs, true, relist);
         }
         if (only !== undefined && !isRawMdastContent(only)) {
           this.#pendingNodes.set(id, only);
@@ -418,19 +427,26 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
       return;
     }
     if (id === ROOT_NODE_ID && !isRawMdastContent(newNode)) {
-      emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
+      emitMdastRootReplace(
+        this.#commandBuffer,
+        requireRootReplacement(newNode),
+        this.#refs,
+        relist,
+      );
       return;
     }
     if (isRawMdastContent(newNode)) this.#pendingNodes.delete(id);
     else this.#pendingNodes.set(id, newNode);
-    emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs, true);
+    emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs, true, relist);
   }
 
   setField(node: Readonly<MdastTarget>, key: string, value: unknown): void {
     const id = requireNid(node as MdastNode, "setField", this.#refs);
     if (this.#foldPendingField(node, id, key, value)) return;
     if (key === "children") {
-      if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
+      if (
+        !emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs, this.relistFor(node))
+      ) {
         throw unencodableContentError(value);
       }
       return;
@@ -491,7 +507,9 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   setProperty(node: Readonly<MdastTarget>, key: string, value: unknown): void {
     const id = requireNid(node as MdastNode, "setProperty", this.#refs);
     if (key === "children") {
-      if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
+      if (
+        !emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs, this.relistFor(node))
+      ) {
         throw unencodableContentError(value);
       }
       return;
@@ -554,16 +572,10 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     return this.#diagnostics;
   }
 
-  // Relisting a removed child is a move, so the replacement must follow the removal.
-  bufferForResult(result: MdastNode, returnBuffer: CommandBuffer): CommandBuffer {
-    if (this.#removedIds.size === 0) return returnBuffer;
-    const children = (result as { children?: unknown }).children;
-    if (!Array.isArray(children)) return returnBuffer;
-    const relists = children.some((child) => {
-      const id = reusedId(child, this.#refs);
-      return id !== undefined && this.#removedIds.has(id);
-    });
-    return relists ? this.#commandBuffer : returnBuffer;
+  relistFor(target: Readonly<MdastTarget> | undefined): Relist | undefined {
+    if (this.#removedIds.size === 0) return undefined;
+    const inherited = (target as { children?: unknown } | undefined)?.children;
+    return { removed: this.#removedIds, inherited };
   }
 }
 
@@ -709,12 +721,14 @@ function emitMdastChildrenCommand(
   id: number,
   children: unknown,
   refs: NodeRefs,
+  relist: Relist | undefined,
 ): boolean {
   if (!Array.isArray(children)) return false;
+  const childRelist = relistIn(relist, children);
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(MDAST_ROOT);
     for (const c of children) {
-      if (!emitMdastOp(buffer, c, false, false, refs)) return false;
+      if (!emitMdastOp(buffer, c, false, false, refs, false, childRelist)) return false;
     }
     buffer.close();
     return true;
@@ -751,10 +765,14 @@ function emitMdastMultiReplace(
   id: number,
   nodes: readonly MdastContent[],
   refs: NodeRefs,
+  relist: Relist | undefined,
 ): void {
+  const itemRelist = relistIn(relist, nodes);
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
     buffer.open(MDAST_ROOT);
-    for (const n of nodes) if (!emitMdastOp(buffer, n, false, true, refs)) return false;
+    for (const n of nodes) {
+      if (!emitMdastOp(buffer, n, false, true, refs, false, itemRelist)) return false;
+    }
     buffer.close();
     return true;
   });
@@ -762,14 +780,24 @@ function emitMdastMultiReplace(
 }
 
 // Root replacement needs a separate encoder because per-node encoding rejects root payloads.
-function emitMdastRootReplace(buffer: CommandBuffer, root: MdastContent, refs: NodeRefs): void {
+function emitMdastRootReplace(
+  buffer: CommandBuffer,
+  root: MdastContent,
+  refs: NodeRefs,
+  relist: Relist | undefined,
+): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
-    emitMdastRootOp(buffer, root as unknown as Record<string, unknown>, refs),
+    emitMdastRootOp(buffer, root as unknown as Record<string, unknown>, refs, relist),
   );
   if (!ok) throw unencodableContentError(root);
 }
 
-function emitMdastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs): boolean {
+function emitMdastRootOp(
+  w: OpWriter,
+  n: Record<string, unknown>,
+  refs: NodeRefs,
+  relist: Relist | undefined,
+): boolean {
   w.open(MDAST_ROOT);
   if (n.data != null) w.data(n.data);
   if (n._keepChildren === true) {
@@ -777,7 +805,10 @@ function emitMdastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs
   } else {
     const children = n.children;
     if (Array.isArray(children)) {
-      for (const c of children) if (!emitMdastOp(w, c, false, true, refs)) return false;
+      const childRelist = relistIn(relist, children);
+      for (const c of children) {
+        if (!emitMdastOp(w, c, false, true, refs, false, childRelist)) return false;
+      }
     }
   }
   w.close();
@@ -791,12 +822,14 @@ function emitMdastOp(
   forReplace: boolean,
   refs: NodeRefs,
   allowRootRef = false,
+  relist?: Relist,
 ): boolean {
   if (node === null || typeof node !== "object") return false;
   const id = getNodeId(node as MdastNode, refs);
   if (id === FOREIGN_REF) throw foreignContentError();
   if ((!isRoot || allowRootRef) && id !== undefined) {
-    w.ref(id);
+    if (relist?.removed.has(id)) w.relistRef(id);
+    else w.ref(id);
     return true;
   }
   const n = node as Record<string, unknown>;
@@ -856,7 +889,10 @@ function emitMdastOp(
     // Only replacement can reuse the target’s original children.
     const children = n.children;
     if (Array.isArray(children)) {
-      for (const c of children) if (!emitMdastOp(w, c, false, forReplace, refs)) return false;
+      const childRelist = relist && children !== relist.inherited ? relist : undefined;
+      for (const c of children) {
+        if (!emitMdastOp(w, c, false, forReplace, refs, false, childRelist)) return false;
+      }
     }
   }
   w.close();
@@ -901,6 +937,7 @@ function emitMdastTree(
   forReplace: boolean,
   refs: NodeRefs,
   allowRootRef = false,
+  relist?: Relist,
 ): void {
   if (isRawMdastContent(content)) {
     switch (op) {
@@ -919,7 +956,7 @@ function emitMdastTree(
     }
   }
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
-    emitMdastOp(buffer, content, true, forReplace, refs, allowRootRef),
+    emitMdastOp(buffer, content, true, forReplace, refs, allowRootRef, relist),
   );
   if (!ok) throw unencodableContentError(content);
 }
@@ -1001,8 +1038,17 @@ function applyMdastVisitResult(
         returnBuffer.setProperty(nodeId, "value", node.value);
         break;
       }
-      const buffer = context.bufferForResult(node, returnBuffer);
-      emitMdastTree(buffer, "replace", nodeId, node as MdastContent, true, refs, true);
+      const relist = context.relistFor(originalNode);
+      emitMdastTree(
+        returnBuffer,
+        "replace",
+        nodeId,
+        node as MdastContent,
+        true,
+        refs,
+        true,
+        relist,
+      );
       break;
     }
   }

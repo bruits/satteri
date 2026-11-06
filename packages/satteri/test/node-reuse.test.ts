@@ -1,7 +1,12 @@
 import { test, expect } from "vitest";
 import type { Blockquote } from "mdast";
 import type { Element } from "hast";
-import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
+import {
+  markdownToHtml,
+  defineMdastPlugin,
+  defineHastPlugin,
+  type HastVisitorContext,
+} from "../src/index.js";
 
 // Structural ops splice a reused tree node by id, so it resolves to whatever that node ends up as.
 
@@ -640,6 +645,168 @@ test("hast: an async visitor that removes a child and lists it again moves it", 
   });
   const { html } = await markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
   expect(html).toBe("<blockquote>\n\n<p>b</p>\n<p>a</p></blockquote>\n");
+});
+
+function asSection(node: Blockquote) {
+  return { ...node, data: { hName: "section" } };
+}
+
+test("a removed child stays removed when its parent returns a spread copy", async () => {
+  const removeFirstParagraph = defineMdastPlugin({
+    name: "remove-first-paragraph",
+    blockquote: asSection,
+    paragraph(node, ctx) {
+      if (ctx.indexOf(node) === 0) ctx.removeNode(node);
+    },
+  });
+  const removeThenSpread = defineMdastPlugin({
+    name: "remove-then-spread",
+    blockquote(node, ctx) {
+      const [first] = node.children;
+      if (first) ctx.removeNode(first);
+      return asSection(node);
+    },
+  });
+  const asyncParent = defineMdastPlugin({
+    name: "async-parent",
+    async blockquote(node) {
+      await Promise.resolve();
+      return asSection(node);
+    },
+    paragraph(node, ctx) {
+      if (ctx.indexOf(node) === 0) ctx.removeNode(node);
+    },
+  });
+  for (const plugin of [removeFirstParagraph, removeThenSpread, asyncParent]) {
+    const { html } = await markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+    expect(html, plugin.name).toBe("<section>\n<p>b</p>\n</section>\n");
+  }
+
+  const earlierVisit = defineMdastPlugin({
+    name: "earlier-visit-removes",
+    heading(node, ctx) {
+      const quote = ctx.parent(node)?.children.find((child) => child.type === "blockquote");
+      const [first] = quote?.type === "blockquote" ? quote.children : [];
+      if (first) ctx.removeNode(first);
+    },
+    blockquote: asSection,
+  });
+  const { html } = markdownToHtml("# t\n\n> a\n>\n> b\n", { mdastPlugins: [earlierVisit] });
+  expect(html).toBe("<h1>t</h1>\n<section>\n<p>b</p>\n</section>\n");
+});
+
+function removeParagraphA(node: Element, ctx: HastVisitorContext) {
+  const [text] = node.children;
+  if (text?.type === "text" && text.value === "a") ctx.removeNode(node);
+}
+
+test("hast: a removed child stays removed when its parent returns a spread copy", async () => {
+  const syncParent = defineHastPlugin({
+    name: "hast-sync-parent",
+    element: {
+      filter: ["blockquote", "p"],
+      visit(node, ctx) {
+        if (node.tagName === "blockquote") return { ...node, tagName: "section" };
+        removeParagraphA(node, ctx);
+      },
+    },
+  });
+  const asyncParent = defineHastPlugin({
+    name: "hast-async-parent",
+    element: {
+      filter: ["blockquote", "p"],
+      async visit(node, ctx) {
+        await Promise.resolve();
+        if (node.tagName === "blockquote") return { ...node, tagName: "section" };
+        removeParagraphA(node, ctx);
+      },
+    },
+  });
+  for (const plugin of [syncParent, asyncParent]) {
+    const { html } = await markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
+    expect(html, plugin.name).toBe("<section>\n\n<p>b</p>\n</section>\n");
+  }
+});
+
+test("a removed child listed again inside a new wrapper keeps its place there", () => {
+  const plugin = defineMdastPlugin({
+    name: "nest-first-paragraph",
+    blockquote(node, ctx) {
+      const [first, ...rest] = node.children;
+      if (!first || node.data?.hName) return;
+      ctx.removeNode(first);
+      return {
+        ...node,
+        children: [...rest, { type: "blockquote", data: { hName: "aside" }, children: [first] }],
+      };
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n<p>b</p>\n<aside>\n<p>a</p>\n</aside>\n</blockquote>\n");
+});
+
+test("hast: a removed child listed again inside a new wrapper keeps its place there", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-nest-first-paragraph",
+    element: {
+      filter: ["blockquote"],
+      visit(node, ctx) {
+        const first = node.children.find((child) => child.type === "element");
+        if (!first) return;
+        ctx.removeNode(first);
+        const wrapper = {
+          type: "element",
+          tagName: "div",
+          properties: {},
+          children: [first],
+        } satisfies Element;
+        return { ...node, children: [wrapper] };
+      },
+    },
+  });
+  const { html } = markdownToHtml("> a\n", { hastPlugins: [plugin] });
+  expect(html).toBe("<blockquote><div><p>a</p></div></blockquote>\n");
+});
+
+test("returning a removed child as the replacement keeps it", () => {
+  const plugin = defineMdastPlugin({
+    name: "unwrap-removed-child",
+    blockquote(node, ctx) {
+      const [first] = node.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      return first;
+    },
+  });
+  const { html } = markdownToHtml("> a\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<p>a</p>\n");
+});
+
+test("a removed child listed again through setProperty moves", () => {
+  const plugin = defineMdastPlugin({
+    name: "move-first-paragraph-last-in-place",
+    blockquote(node, ctx) {
+      const [first, ...rest] = node.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      ctx.setProperty(node, "children", [...rest, first]);
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n<p>b</p>\n<p>a</p>\n</blockquote>\n");
+});
+
+test("a field set after an array replacement does not bring back an earlier replacement", () => {
+  const plugin = defineMdastPlugin({
+    name: "replace-twice-then-set-field",
+    heading(node, ctx) {
+      ctx.replaceNode(node, { type: "paragraph", children: [{ type: "text", value: "A" }] });
+      ctx.replaceNode(node, [{ type: "thematicBreak" }, { type: "thematicBreak" }]);
+      ctx.setField(node, "data", { hProperties: { id: "x" } });
+    },
+  });
+  const { html } = markdownToHtml("# h\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<hr>\n<hr>\n");
 });
 
 test("a node replaced by its children between raw items keeps the edits queued around them", () => {

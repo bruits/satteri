@@ -58,11 +58,13 @@ import {
   foreignContentError,
   makeRequireNid,
   requireRootReplacement,
+  relistIn,
   ROOT_NODE_ID,
   rootReplacementError,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
+  type Relist,
   type SettableFieldKey,
   withMdxJsxAttribute,
 } from "../visitor-shared.js";
@@ -230,12 +232,14 @@ function emitHastChildrenCommand(
   id: number,
   children: unknown,
   refs: NodeRefs,
+  relist: Relist | undefined,
 ): boolean {
   if (!Array.isArray(children)) return false;
+  const childRelist = relistIn(relist, children);
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(HAST_ROOT);
     for (const c of children) {
-      if (!emitHastOp(buffer, c, false, refs)) return false;
+      if (!emitHastOp(buffer, c, false, refs, false, false, childRelist)) return false;
     }
     buffer.close();
     return true;
@@ -249,9 +253,10 @@ function emitHastTree(
   node: HastNode,
   refs: NodeRefs,
   allowRootRef = false,
+  relist?: Relist,
 ): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
-    emitHastOp(buffer, node, true, refs, false, allowRootRef),
+    emitHastOp(buffer, node, true, refs, false, allowRootRef, relist),
   );
   if (!ok) throw unencodableContentError(node);
 }
@@ -263,10 +268,14 @@ function emitHastMultiReplace(
   id: number,
   nodes: readonly HastContent[],
   refs: NodeRefs,
+  relist: Relist | undefined,
 ): void {
+  const itemRelist = relistIn(relist, nodes);
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
     buffer.open(HAST_ROOT);
-    for (const n of nodes) if (!emitHastOp(buffer, n, false, refs)) return false;
+    for (const n of nodes) {
+      if (!emitHastOp(buffer, n, false, refs, false, false, itemRelist)) return false;
+    }
     buffer.close();
     return true;
   });
@@ -274,9 +283,14 @@ function emitHastMultiReplace(
 }
 
 // Root replacement needs a separate encoder because per-node encoding rejects root payloads.
-function emitHastRootReplace(buffer: CommandBuffer, root: HastContent, refs: NodeRefs): void {
+function emitHastRootReplace(
+  buffer: CommandBuffer,
+  root: HastContent,
+  refs: NodeRefs,
+  relist: Relist | undefined,
+): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
-    emitHastRootOp(buffer, root as unknown as Record<string, unknown>, refs),
+    emitHastRootOp(buffer, root as unknown as Record<string, unknown>, refs, relist),
   );
   if (!ok) throw unencodableContentError(root);
 }
@@ -312,12 +326,20 @@ export function encodeHastDocument<T>(nodes: readonly HastNode[], use: (ops: Uin
   }
 }
 
-function emitHastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs): boolean {
+function emitHastRootOp(
+  w: OpWriter,
+  n: Record<string, unknown>,
+  refs: NodeRefs,
+  relist: Relist | undefined,
+): boolean {
   w.open(HAST_ROOT);
   if (n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    for (const c of children) if (!emitHastOp(w, c, false, refs)) return false;
+    const childRelist = relistIn(relist, children);
+    for (const c of children) {
+      if (!emitHastOp(w, c, false, refs, false, false, childRelist)) return false;
+    }
   }
   w.close();
   return true;
@@ -330,12 +352,14 @@ function emitHastOp(
   refs: NodeRefs,
   document = false,
   allowRootRef = false,
+  relist?: Relist,
 ): boolean {
   if (node === null || typeof node !== "object") return false;
   const id = getNodeId(node as HastNode, refs);
   if (id === FOREIGN_REF && !document) throw foreignContentError();
   if ((!isRoot || allowRootRef) && id !== undefined && id !== FOREIGN_REF) {
-    w.ref(id);
+    if (relist?.removed.has(id)) w.relistRef(id);
+    else w.ref(id);
     return true;
   }
   const n = node as Record<string, unknown>;
@@ -370,7 +394,10 @@ function emitHastOp(
   if (!document && n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    for (const c of children) if (!emitHastOp(w, c, false, refs, document)) return false;
+    const childRelist = relist && children !== relist.inherited ? relist : undefined;
+    for (const c of children) {
+      if (!emitHastOp(w, c, false, refs, document, false, childRelist)) return false;
+    }
   }
   w.close();
   return true;
@@ -445,12 +472,13 @@ class HastVisitorContextImpl implements HastVisitorContext {
     ) {
       return;
     }
+    const relist = this.relistFor(node);
     if (Array.isArray(newNode)) {
       if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
       // One command, so the node's replacement is its whole slot and a ref back
       // to it resolves to all of it rather than to the last element.
       if (id !== ROOT_NODE_ID && newNode.length > 1) {
-        emitHastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
+        emitHastMultiReplace(this.#commandBuffer, id, newNode, this.#refs, relist);
         this.#pendingNodes.delete(id);
         return;
       }
@@ -463,19 +491,24 @@ class HastVisitorContextImpl implements HastVisitorContext {
       if (previous === undefined) {
         this.removeNode(node);
       } else if (id === ROOT_NODE_ID) {
-        emitHastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
+        emitHastRootReplace(
+          this.#commandBuffer,
+          requireRootReplacement(previous),
+          this.#refs,
+          relist,
+        );
       } else {
-        emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs, true);
+        emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs, true, relist);
       }
       if (previous === undefined) this.#pendingNodes.delete(id);
       else this.#pendingNodes.set(id, previous);
       return;
     }
     if (id === ROOT_NODE_ID) {
-      emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
+      emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs, relist);
       return;
     }
-    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs, true);
+    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs, true, relist);
     this.#pendingNodes.set(id, newNode);
   }
 
@@ -536,7 +569,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
   setProperty(node: HastNode, key: string, value: unknown): void {
     const id = requireNid(node, "setProperty", this.#refs);
     if (key === "children") {
-      if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
+      if (
+        !emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs, this.relistFor(node))
+      ) {
         throw unencodableContentError(value);
       }
       return;
@@ -567,7 +602,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
     const id = requireNid(node, "setField", this.#refs);
     if (this.#foldPendingField(node, id, key, value)) return;
     if (key === "children") {
-      if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
+      if (
+        !emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs, this.relistFor(node))
+      ) {
         throw unencodableContentError(value);
       }
       return;
@@ -654,16 +691,10 @@ class HastVisitorContextImpl implements HastVisitorContext {
     return this.#diagnostics;
   }
 
-  // Relisting a removed child is a move, so the replacement must follow the removal.
-  bufferForResult(result: HastNode, returnBuffer: CommandBuffer): CommandBuffer {
-    if (this.#removedIds.size === 0) return returnBuffer;
-    const children = (result as { children?: unknown }).children;
-    if (!Array.isArray(children)) return returnBuffer;
-    const relists = children.some((child) => {
-      const id = hastReusedId(child, this.#refs);
-      return id !== undefined && this.#removedIds.has(id);
-    });
-    return relists ? this.#commandBuffer : returnBuffer;
+  relistFor(target: HastNode): Relist | undefined {
+    if (this.#removedIds.size === 0) return undefined;
+    const inherited = (target as { children?: unknown }).children;
+    return { removed: this.#removedIds, inherited };
   }
 }
 
@@ -807,7 +838,7 @@ function applyHastVisitResult(
     returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
     return;
   }
-  emitHastTree(ctx.bufferForResult(result, returnBuffer), "replace", nodeId, result, refs, true);
+  emitHastTree(returnBuffer, "replace", nodeId, result, refs, true, ctx.relistFor(originalNode));
 }
 
 // Explicit field checks avoid allocating Object.keys on the per-text-node hot path.

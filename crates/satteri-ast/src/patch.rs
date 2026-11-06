@@ -21,9 +21,13 @@ pub const REF_NODE_TYPE: u8 = 0xFF;
 /// (whatever ends up spliced there) rather than the target node itself.
 ///
 /// A plain ref in a `Replace` payload to one of the replaced node's own children
-/// is a slot ref too, except that it undoes a removal of that child queued
-/// before the `Replace`; a removal queued after it still empties the position.
+/// is a slot ref too, and a removal of that child empties the position.
 pub const REF_KIND_SLOT: u8 = 1;
+
+/// Fifth byte of a ref node's type_data: the plugin removed the target and lists
+/// it again, so a `Replace` or `SetChildren` payload naming one of its anchor's
+/// own children undoes that removal. Elsewhere it is a plain ref.
+pub const REF_KIND_RELIST: u8 = 2;
 
 #[derive(Debug, Clone)]
 /// Payload of a structural patch: a free-standing tree copied in at apply
@@ -795,15 +799,10 @@ fn apply_patches_impl<K: ArenaKind>(
     let mut ref_targets: FxHashSet<u32> = FxHashSet::default();
     let mut slot_referrers: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut readded: Vec<u32> = Vec::new();
-    let removed_before = |target: u32, pi: usize| {
+    let is_removed = |target: u32| {
         plans
             .get(&target)
-            .is_some_and(|plan| plan.winning_replace.is_none())
-            && patch_map[&target]
-                .iter()
-                .rev()
-                .find(|&&i| matches!(patches[i], Patch::Remove { .. }))
-                .is_some_and(|&i| i < pi)
+            .is_some_and(|plan| plan.deleted && plan.winning_replace.is_none())
     };
     for (&anchor, plan) in &plans {
         for &pi in &patch_map[&anchor] {
@@ -845,11 +844,16 @@ fn apply_patches_impl<K: ArenaKind>(
             }
             // A replacement handing back the replaced node's own children passes their slots on, edits around them included.
             let hands_back_children = matches!(p, Patch::Replace { .. });
+            let relists_children = matches!(p, Patch::Replace { .. } | Patch::SetChildren { .. });
             let mut names_slot = |target: u32, td: &[u8]| {
                 let explicit = td.get(4) == Some(&REF_KIND_SLOT);
-                let handed_back = hands_back_children && arena.get_node(target).parent == anchor;
-                // Listing a child the plugin had already removed puts it back.
-                if handed_back && !explicit && removed_before(target, pi) {
+                let own_child = arena.get_node(target).parent == anchor;
+                let handed_back = hands_back_children && own_child;
+                if relists_children
+                    && own_child
+                    && td.get(4) == Some(&REF_KIND_RELIST)
+                    && is_removed(target)
+                {
                     readded.push(target);
                 }
                 if explicit || handed_back {

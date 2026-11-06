@@ -26,7 +26,7 @@ use satteri_ast::hast::codec::decode_element_tag;
 use satteri_ast::hast::{HastNodeType, is_void_element};
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::mdast::codec::*;
-use satteri_ast::patch::{Patch, PatchContent, REF_NODE_TYPE};
+use satteri_ast::patch::{Patch, PatchContent, REF_KIND_RELIST, REF_KIND_SLOT, REF_NODE_TYPE};
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
 use satteri_ast::shared::{
@@ -344,12 +344,11 @@ fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u3
     id
 }
 
-/// A `keep_children` expansion names each child's *position*, so it must carry
-/// whatever else was spliced there rather than the child alone.
-fn emit_slot_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u32 {
+/// A ref whose kind byte (`REF_KIND_*`) says how the apply resolves its target.
+fn emit_kind_ref_node<K: ArenaKind>(ref_id: u32, kind: u8, builder: &mut ArenaBuilder<K>) -> u32 {
     let id = builder.open_node(REF_NODE_TYPE);
     let mut data = ref_id.to_le_bytes().to_vec();
-    data.push(satteri_ast::patch::REF_KIND_SLOT);
+    data.push(kind);
     builder.set_data_current(&data);
     builder.close_node();
     id
@@ -820,7 +819,8 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
     let mut roots: Vec<u32> = Vec::new();
 
     while reader.remaining() > 0 {
-        match reader.read_u8()? {
+        let op = reader.read_u8()?;
+        match op {
             OP_OPEN => {
                 if let Some(c) = stack.last_mut() {
                     c.finalize(builder);
@@ -849,7 +849,7 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                 c.finalize(builder);
                 builder.close_node();
             }
-            OP_REF => {
+            OP_REF | OP_RELIST_REF => {
                 if let Some(c) = stack.last_mut() {
                     c.finalize(builder);
                 }
@@ -859,7 +859,11 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                 if id >= original_len {
                     return Err(CommandError::InvalidNodeId(id));
                 }
-                let ref_id = emit_ref_node(id, builder);
+                let ref_id = if op == OP_RELIST_REF {
+                    emit_kind_ref_node(id, REF_KIND_RELIST, builder)
+                } else {
+                    emit_ref_node(id, builder)
+                };
                 if stack.is_empty() {
                     roots.push(ref_id);
                 }
@@ -873,7 +877,8 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                 }
                 let children = builder.arena_ref().get_children(anchor).to_vec();
                 for child in children {
-                    let ref_id = emit_slot_ref_node(child, builder);
+                    // A kept child's position, so whatever else was spliced there comes along.
+                    let ref_id = emit_kind_ref_node(child, REF_KIND_SLOT, builder);
                     if stack.is_empty() {
                         roots.push(ref_id);
                     }
