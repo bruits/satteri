@@ -1021,6 +1021,7 @@ fn apply_patches_impl<K: ArenaKind>(
     let mut truly_dead: FxHashSet<u32> = FxHashSet::default();
     let mut dropped_set: FxHashSet<u32> = FxHashSet::default();
     let mut moved_out: FxHashSet<u32> = FxHashSet::default();
+    let mut moved_removed: FxHashSet<u32> = FxHashSet::default();
     let mut lost_inserts: Vec<u32> = Vec::new();
     if ref_uses.is_empty() {
         if !discards.is_empty() {
@@ -1146,10 +1147,13 @@ fn apply_patches_impl<K: ArenaKind>(
         for (&pi, refs) in ref_positions.iter_mut().chain(ref_placeholders.iter_mut()) {
             let referrer = patch_anchor(&patches[pi]);
             for (_, target, kind) in refs.iter_mut() {
-                let removed = plans
-                    .get(target)
-                    .is_some_and(|plan| plan.deleted && plan.winning_replace.is_none());
-                if *kind == RefKind::Node && moved_out.contains(target) && !removed {
+                if *kind == RefKind::Node && moved_out.contains(target) {
+                    if plans
+                        .get(target)
+                        .is_some_and(|plan| plan.deleted && plan.winning_replace.is_none())
+                    {
+                        moved_removed.insert(*target);
+                    }
                     *kind = RefKind::Slot;
                     slot_referrers.entry(*target).or_default().push(referrer);
                 }
@@ -1546,6 +1550,9 @@ fn apply_patches_impl<K: ArenaKind>(
         if deleted {
             if let Some(wi) = winning_replace {
                 core.extend_from_slice(&grafted[&wi]);
+            } else if moved_removed.contains(&anchor) {
+                // Listed elsewhere, so the removal moves it rather than leaving its inserts behind.
+                core.push(anchor);
             }
         } else if let (Some(wi), false) = (winning_wrap, empty_wrap) {
             let Patch::Wrap { parent_tree, .. } = &patches[wi] else {

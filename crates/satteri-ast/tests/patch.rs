@@ -3287,12 +3287,11 @@ fn an_insert_beside_a_child_moved_out_of_a_removed_parent_comes_along_on_both_sp
 }
 
 #[test]
-fn strict_apply_rejects_an_insert_left_behind_by_a_removed_grandchild_listed_elsewhere() {
+fn a_removed_grandchild_listed_elsewhere_takes_its_inserts_along() {
     let (orig, quote, [item, _]) = build_quote_of_a_list_of_two_items();
-    let mut arena = orig.clone();
-    let err = apply_patches_strict(
-        &mut arena,
-        &[
+    for strict in [false, true] {
+        let mut arena = orig.clone();
+        let patches = [
             Patch::Remove { node_id: quote },
             Patch::Remove { node_id: item },
             Patch::InsertAfter {
@@ -3303,16 +3302,25 @@ fn strict_apply_rejects_an_insert_left_behind_by_a_removed_grandchild_listed_els
                 node_id: item,
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
             },
-        ],
-    )
-    .unwrap_err();
+        ];
+        let dropped = if strict {
+            apply_patches_strict(&mut arena, &patches).map(|()| Vec::new())
+        } else {
+            apply_patches_in_place(&mut arena, &patches)
+        }
+        .expect("apply failed");
 
-    match err {
-        CommandError::PatchOnRemovedSubtree(id) => assert_eq!(id, item),
-        other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
+        assert!(dropped.is_empty(), "strict: {strict}: {dropped:?}");
+        assert_eq!(arena.get_children(0)[0], item);
+        assert_eq!(
+            child_types(&arena, 0),
+            vec![
+                MdastNodeType::ListItem as u8,
+                MdastNodeType::ThematicBreak as u8
+            ]
+        );
+        assert_children_point_back(&arena, 0);
     }
-    assert_eq!(arena.len(), orig.len());
-    assert_eq!(arena.get_children(0), &[quote]);
 }
 
 #[test]

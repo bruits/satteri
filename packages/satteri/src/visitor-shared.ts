@@ -140,15 +140,16 @@ export function isAsyncFunction(fn: unknown): boolean {
   return fn instanceof AsyncFunction;
 }
 
-/** The removals an async visit's result counts as earlier: those made before it ran, and its own. */
+/** The removals an async visit's content counts as earlier: those made before it ran, and its own. */
 export class AsyncVisitRemovals {
-  readonly own = new Set<number>();
+  readonly own: Set<number>;
   readonly #order: ReadonlyMap<number, number>;
   readonly #start: number;
 
-  constructor(order: ReadonlyMap<number, number>) {
+  constructor(order: ReadonlyMap<number, number>, own = new Set<number>()) {
     this.#order = order;
     this.#start = order.size;
+    this.own = own;
   }
 
   has(id: number): boolean {
@@ -158,11 +159,11 @@ export class AsyncVisitRemovals {
 }
 
 interface ScopableContext {
-  runInRemovalScope<T>(scope: Set<number>, run: () => T): T;
+  runInRemovalScope<T>(removals: AsyncVisitRemovals, run: () => T): T;
 }
 
-/** A context for one async visit: removals made through it, even after an `await`, are recorded as its own. */
-export function scopeContext<C extends ScopableContext>(ctx: C, own: Set<number>): C {
+/** A context for one async visit, so its calls after an `await` still see the removals as of its own call. */
+export function scopeContext<C extends ScopableContext>(ctx: C, removals: AsyncVisitRemovals): C {
   const wrapped = new Map<PropertyKey, unknown>();
   return new Proxy(ctx, {
     get(target, key) {
@@ -171,7 +172,7 @@ export function scopeContext<C extends ScopableContext>(ctx: C, own: Set<number>
       let method = wrapped.get(key);
       if (method === undefined) {
         method = (...args: unknown[]) =>
-          target.runInRemovalScope(own, () => (value as Function).apply(target, args));
+          target.runInRemovalScope(removals, () => (value as Function).apply(target, args));
         wrapped.set(key, method);
       }
       return method;

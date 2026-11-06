@@ -269,7 +269,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   readonly #pendingNodes: Map<number, MdastTarget> = new Map();
   /** Each removed id with its removal order. */
   readonly #removedIds = new Map<number, number>();
-  #removalScope: Set<number> | undefined;
+  #visitRemovals: AsyncVisitRemovals | undefined;
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
@@ -308,7 +308,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
     if (!this.#removedIds.has(id)) this.#removedIds.set(id, this.#removedIds.size);
-    this.#removalScope?.add(id);
+    this.#visitRemovals?.own.add(id);
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
@@ -601,21 +601,30 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     removals?: AsyncVisitRemovals,
   ): Relist | undefined {
     if (this.#removedIds.size === 0) return undefined;
-    return { removed: removals ?? this.#removedIds, target, resolver: this.#resolver };
+    return {
+      removed: removals ?? this.#visitRemovals ?? this.#removedIds,
+      target,
+      resolver: this.#resolver,
+    };
   }
 
-  runInRemovalScope<T>(scope: Set<number>, run: () => T): T {
-    const outer = this.#removalScope;
-    this.#removalScope = scope;
+  runInRemovalScope<T>(removals: AsyncVisitRemovals, run: () => T): T {
+    const outer = this.#visitRemovals;
+    this.#visitRemovals = removals;
     try {
       return run();
     } finally {
-      this.#removalScope = outer;
+      this.#visitRemovals = outer;
     }
   }
 
-  asyncVisitRemovals(): AsyncVisitRemovals {
-    return new AsyncVisitRemovals(this.#removedIds);
+  asyncVisitRemovals(own?: Set<number>): AsyncVisitRemovals {
+    return new AsyncVisitRemovals(this.#removedIds, own);
+  }
+
+  /** After the walk, a call outside any async scope comes from a promise-returning visit that is not an `async` function. */
+  claimUnscopedCalls(removals: AsyncVisitRemovals): void {
+    this.#visitRemovals = removals;
   }
 }
 
@@ -1122,6 +1131,7 @@ export function visitMdastHandle(
       }[]
     | null = null;
 
+  let unscoped: AsyncVisitRemovals | undefined;
   const hasAsync = subs.some((sub) => sub.isAsync);
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -1141,7 +1151,7 @@ export function visitMdastHandle(
     // The result counts removals as of the call, as a sync visit's would, plus the visit's own.
     if (hasAsync && sub.isAsync) {
       const removals = context.asyncVisitRemovals();
-      const scoped = scopeContext(context, removals.own);
+      const scoped = scopeContext(context, removals);
       const promise = sub.visitFn.call(plugin, node, scoped) as Promise<MdastVisitorResult>;
       deferred ??= [];
       deferred.push({ nodeId, promise, originalNode: node, removals });
@@ -1150,14 +1160,22 @@ export function visitMdastHandle(
     const result = sub.visitFn.call(plugin, node, context);
 
     if (result instanceof Promise) {
+      // No scope follows this visit past an `await`, so what such visits remove later counts for each of them.
+      unscoped ??= context.asyncVisitRemovals();
       deferred ??= [];
-      deferred.push({ nodeId, promise: result, originalNode: node });
+      deferred.push({
+        nodeId,
+        promise: result,
+        originalNode: node,
+        removals: context.asyncVisitRemovals(unscoped.own),
+      });
     } else {
       applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, context, node);
     }
   }
 
   if (deferred) {
+    if (unscoped) context.claimUnscopedCalls(unscoped);
     const visits = deferred;
     return Promise.all(visits.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < visits.length; i++) {

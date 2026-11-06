@@ -1,11 +1,12 @@
 import { test, expect } from "vitest";
-import type { Blockquote } from "mdast";
+import type { Blockquote, Paragraph } from "mdast";
 import type { Element } from "hast";
 import {
   markdownToHtml,
   defineMdastPlugin,
   defineHastPlugin,
   type HastVisitorContext,
+  type MdastVisitorContext,
 } from "../src/index.js";
 
 // Structural ops splice a reused tree node by id, so it resolves to whatever that node ends up as.
@@ -614,19 +615,31 @@ test("hast: a child removed and listed again in its parent's replacement is move
   expect(html).toBe("<blockquote>\n\n<p>b</p>\n<p>a</p></blockquote>\n");
 });
 
+function moveFirstChildLast(node: Blockquote, ctx: MdastVisitorContext) {
+  const [first, ...rest] = node.children;
+  if (!first) return;
+  ctx.removeNode(first);
+  return { ...node, children: [...rest, first] };
+}
+
 test("an async visitor that removes a child and lists it again moves it", async () => {
-  const plugin = defineMdastPlugin({
+  const asyncVisit = defineMdastPlugin({
     name: "async-move-first-paragraph-last",
     async blockquote(node, ctx) {
       await Promise.resolve();
-      const [first, ...rest] = node.children;
-      if (!first) return;
-      ctx.removeNode(first);
-      return { ...node, children: [...rest, first] };
+      return moveFirstChildLast(node, ctx);
     },
   });
-  const { html } = await markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
-  expect(html).toBe("<blockquote>\n<p>b</p>\n<p>a</p>\n</blockquote>\n");
+  const promiseVisit = defineMdastPlugin({
+    name: "promise-move-first-paragraph-last",
+    blockquote(node, ctx) {
+      return Promise.resolve().then(() => moveFirstChildLast(node, ctx));
+    },
+  });
+  for (const plugin of [asyncVisit, promiseVisit]) {
+    const { html } = await markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+    expect(html, plugin.name).toBe("<blockquote>\n<p>b</p>\n<p>a</p>\n</blockquote>\n");
+  }
 });
 
 test("hast: an async visitor that removes a child and lists it again moves it", async () => {
@@ -728,36 +741,82 @@ test("hast: a removed child stays removed when its parent returns a spread copy"
   }
 });
 
+function removeMdastParagraphA(node: Paragraph, ctx: MdastVisitorContext) {
+  const [text] = node.children;
+  if (text?.type === "text" && text.value === "a") ctx.removeNode(node);
+}
+
 test("an async parent's new list does not undo a removal another visitor makes meanwhile", async () => {
-  const plugin = defineMdastPlugin({
+  const asyncReturn = defineMdastPlugin({
     name: "async-reverse",
     async blockquote(node) {
       await Promise.resolve();
       return { ...node, children: node.children.toReversed() };
     },
-    paragraph(node, ctx) {
-      const [text] = node.children;
-      if (text?.type === "text" && text.value === "a") ctx.removeNode(node);
-    },
+    paragraph: removeMdastParagraphA,
   });
-  const { html } = await markdownToHtml("> a\n>\n> b\n>\n> c\n", { mdastPlugins: [plugin] });
-  expect(html).toBe("<blockquote>\n<p>c</p>\n<p>b</p>\n</blockquote>\n");
+  const promiseReturn = defineMdastPlugin({
+    name: "promise-reverse",
+    blockquote(node) {
+      return Promise.resolve().then(() => ({ ...node, children: node.children.toReversed() }));
+    },
+    paragraph: removeMdastParagraphA,
+  });
+  const asyncSetProperty = defineMdastPlugin({
+    name: "async-set-reversed-children",
+    async blockquote(node, ctx) {
+      await Promise.resolve();
+      ctx.setProperty(node, "children", node.children.toReversed());
+    },
+    paragraph: removeMdastParagraphA,
+  });
+  for (const plugin of [asyncReturn, promiseReturn, asyncSetProperty]) {
+    const { html } = await markdownToHtml("> a\n>\n> b\n>\n> c\n", { mdastPlugins: [plugin] });
+    expect(html, plugin.name).toBe("<blockquote>\n<p>c</p>\n<p>b</p>\n</blockquote>\n");
+  }
 });
 
+function elementsOnly(node: Element) {
+  return { ...node, children: node.children.filter((child) => child.type === "element") };
+}
+
 test("hast: an async parent's new list does not undo a removal another visitor makes meanwhile", async () => {
-  const plugin = defineHastPlugin({
+  const asyncReturn = defineHastPlugin({
     name: "hast-async-elements-only",
     element: {
       filter: ["blockquote", "p"],
       async visit(node, ctx) {
         if (node.tagName === "p") return removeParagraphA(node, ctx);
         await Promise.resolve();
-        return { ...node, children: node.children.filter((child) => child.type === "element") };
+        return elementsOnly(node);
       },
     },
   });
-  const { html } = await markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
-  expect(html).toBe("<blockquote><p>b</p></blockquote>\n");
+  const promiseReturn = defineHastPlugin({
+    name: "hast-promise-elements-only",
+    element: {
+      filter: ["blockquote", "p"],
+      visit(node, ctx) {
+        if (node.tagName === "p") return removeParagraphA(node, ctx);
+        return Promise.resolve().then(() => elementsOnly(node));
+      },
+    },
+  });
+  const asyncSetProperty = defineHastPlugin({
+    name: "hast-async-set-elements-only",
+    element: {
+      filter: ["blockquote", "p"],
+      async visit(node, ctx) {
+        if (node.tagName === "p") return removeParagraphA(node, ctx);
+        await Promise.resolve();
+        ctx.setProperty(node, "children", elementsOnly(node).children);
+      },
+    },
+  });
+  for (const plugin of [asyncReturn, promiseReturn, asyncSetProperty]) {
+    const { html } = await markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
+    expect(html, plugin.name).toBe("<blockquote><p>b</p></blockquote>\n");
+  }
 });
 
 test("an async grandparent's copies of its children keep a grandchild removed meanwhile", async () => {
@@ -778,6 +837,26 @@ test("an async grandparent's copies of its children keep a grandchild removed me
   });
   const { html } = await markdownToHtml("> > a\n> >\n> > b\n", { mdastPlugins: [plugin] });
   expect(html).toBe("<blockquote>\n<aside>\n<p>b</p>\n</aside>\n</blockquote>\n");
+});
+
+test("a removed grandchild moved out of a removed parent takes the content queued beside it", () => {
+  const plugin = defineMdastPlugin({
+    name: "hoist-first-paragraph",
+    blockquote(node, ctx) {
+      const [inner] = node.children;
+      if (ctx.parent(node)?.type !== "root" || inner?.type !== "blockquote") return;
+      const [first] = inner.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      ctx.insertAfter(node, first);
+      ctx.removeNode(node);
+    },
+    paragraph(node, ctx) {
+      ctx.insertAfter(node, { type: "thematicBreak" });
+    },
+  });
+  const { html } = markdownToHtml("> > a\n", { mdastPlugins: [plugin] });
+  expect(html).toBe("<p>a</p>\n<hr>\n");
 });
 
 test("a removed child moved by editing the children array in place is kept", () => {
