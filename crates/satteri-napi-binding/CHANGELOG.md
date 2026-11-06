@@ -1,5 +1,12 @@
 # satteri-napi
 
+## 0.5.8 — 2026-11-06
+
+### Patch changes
+
+- [ba787dd](https://github.com/bruits/satteri/commit/ba787dd0558e81f9af55eb11b97c3d943318abd5) Added a `byteOffsets` option to `serializeHandle`, for buffers read back in Rust with `Arena::from_raw_buffer`. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.4.3, satteri-ast (Cargo)@0.6.3, satteri-mdxjs (Cargo)@0.3.17, satteri-plugin-api (Cargo)@0.6.3, satteri-pulldown-cmark (Cargo)@0.6.7
+
 ## 0.5.7 — 2026-10-27
 
 ### Patch changes
