@@ -394,7 +394,7 @@ function emitHastOp(
   if (!document && n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    const childRelist = relist && children !== relist.inherited ? relist : undefined;
+    const childRelist = relist && relistIn(relist, children);
     for (const c of children) {
       if (!emitHastOp(w, c, false, refs, document, false, childRelist)) return false;
     }

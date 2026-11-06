@@ -115,12 +115,22 @@ export const FOREIGN_REF = -1;
 /** Nodes the plugin removed, so a replacement listing one again puts it back. */
 export interface Relist {
   readonly removed: ReadonlySet<number>;
-  /** The replaced node's own children array: a copy passing it on unchanged keeps their removals. */
+  /** The replaced node's own children array, as the plugin read it before its removals. */
   readonly inherited: unknown;
 }
 
-export function relistIn(relist: Relist | undefined, children: unknown): Relist | undefined {
-  return children === relist?.inherited ? undefined : relist;
+/** A list keeping every inherited child in its original order passes the old list on, so its removals stand. */
+export function relistIn(
+  relist: Relist | undefined,
+  children: readonly unknown[],
+): Relist | undefined {
+  if (relist === undefined) return undefined;
+  const { inherited } = relist;
+  if (children === inherited) return undefined;
+  if (!Array.isArray(inherited)) return relist;
+  let kept = 0;
+  for (const child of children) if (child === inherited[kept]) kept++;
+  return kept === inherited.length ? undefined : relist;
 }
 
 export function foreignContentError(): Error {

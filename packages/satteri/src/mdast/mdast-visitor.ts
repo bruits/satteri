@@ -889,7 +889,7 @@ function emitMdastOp(
     // Only replacement can reuse the target’s original children.
     const children = n.children;
     if (Array.isArray(children)) {
-      const childRelist = relist && children !== relist.inherited ? relist : undefined;
+      const childRelist = relist && relistIn(relist, children);
       for (const c of children) {
         if (!emitMdastOp(w, c, false, forReplace, refs, false, childRelist)) return false;
       }

@@ -728,6 +728,32 @@ test("hast: a removed child stays removed when its parent returns a spread copy"
   }
 });
 
+test("a removed child stays removed when its parent's old children are passed on with a new one", () => {
+  const returned = defineMdastPlugin({
+    name: "remove-then-append",
+    blockquote(node, ctx) {
+      const [first] = node.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      return { ...node, children: [...node.children, { type: "thematicBreak" }] };
+    },
+  });
+  const replaced = defineMdastPlugin({
+    name: "remove-then-replace-with-children",
+    blockquote(node, ctx) {
+      const [first] = node.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      ctx.replaceNode(node, [{ type: "thematicBreak" }, ...node.children]);
+    },
+  });
+  const appended = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [returned] }).html;
+  expect(appended).toBe("<blockquote>\n<p>b</p>\n<hr>\n</blockquote>\n");
+  expect(markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [replaced] }).html).toBe(
+    "<hr>\n<p>b</p>\n",
+  );
+});
+
 test("a removed child listed again inside a new wrapper keeps its place there", () => {
   const plugin = defineMdastPlugin({
     name: "nest-first-paragraph",
