@@ -6,23 +6,30 @@
 
 use crate::kind::{ArenaKind, Hast, Mdast};
 use crate::node::ArenaNode;
+use crate::raw_buffer::OffsetUnit;
+
+/// Raw-buffer wire format version, written to and checked against the header's `format_version` field.
+pub const FORMAT_VERSION: u32 = 1;
 
 /// Raw-buffer header byte offsets (4-byte fields, in write order).
 pub(crate) mod header {
     pub(crate) const MAGIC: usize = 0;
     pub(crate) const KIND: usize = 4;
-    pub(crate) const NODE_STRUCT_SIZE: usize = 8;
-    pub(crate) const NODE_COUNT: usize = 12;
-    pub(crate) const NODES_OFFSET: usize = 16;
-    pub(crate) const CHILDREN_COUNT: usize = 20;
-    pub(crate) const CHILDREN_OFFSET: usize = 24;
-    pub(crate) const TYPE_DATA_LEN: usize = 28;
-    pub(crate) const TYPE_DATA_OFFSET: usize = 32;
-    pub(crate) const STRING_POOL_LEN: usize = 36;
-    pub(crate) const STRING_POOL_OFFSET: usize = 40;
-    pub(crate) const NODE_DATA_COUNT: usize = 44;
-    pub(crate) const NODE_DATA_OFFSET: usize = 48;
-    pub(crate) const SIZE: usize = 52;
+    pub(crate) const FORMAT_VERSION: usize = 8;
+    pub(crate) const OFFSET_UNIT: usize = 12;
+    pub(crate) const NODE_STRUCT_SIZE: usize = 16;
+    pub(crate) const NODE_COUNT: usize = 20;
+    pub(crate) const NODES_OFFSET: usize = 24;
+    pub(crate) const CHILDREN_COUNT: usize = 28;
+    pub(crate) const CHILDREN_OFFSET: usize = 32;
+    pub(crate) const TYPE_DATA_LEN: usize = 36;
+    pub(crate) const TYPE_DATA_OFFSET: usize = 40;
+    pub(crate) const STRING_POOL_LEN: usize = 44;
+    pub(crate) const STRING_POOL_OFFSET: usize = 48;
+    pub(crate) const SOURCE_LEN: usize = 52;
+    pub(crate) const NODE_DATA_COUNT: usize = 56;
+    pub(crate) const NODE_DATA_OFFSET: usize = 60;
+    pub(crate) const SIZE: usize = 64;
 }
 
 const _: () = {
@@ -43,4 +50,6 @@ const _: () = {
     assert!(u32::from_le_bytes(crate::raw_buffer::BUFFER_MAGIC) == 0x5241444d);
     assert!(<Mdast as ArenaKind>::KIND_TAG == 1);
     assert!(<Hast as ArenaKind>::KIND_TAG == 2);
+    assert!(OffsetUnit::Utf16 as u32 == 0);
+    assert!(OffsetUnit::Byte as u32 == 1);
 };

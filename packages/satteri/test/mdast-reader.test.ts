@@ -1,4 +1,5 @@
 import { test, expect } from "vitest";
+import { ARENA_FORMAT_VERSION, HEADER, OFFSET_UNIT_BYTE } from "../src/generated/arena-layout.js";
 import { MdastReader, NodeType, NodeTypeName } from "../src/mdast/mdast-reader.js";
 import { buildHelloWorldBuffer, buildTestBuffer } from "./fixtures.js";
 
@@ -27,6 +28,18 @@ test("MdastReader rejects wrong kind", () => {
   view.setUint32(0, 0x5241444d, true);
   view.setUint32(4, 2, true);
   expect(() => new MdastReader(buf)).toThrow(/kind/);
+});
+
+test("MdastReader rejects another wire format version", () => {
+  const buf = buildHelloWorldBuffer();
+  new DataView(buf).setUint32(HEADER.format_version, ARENA_FORMAT_VERSION + 1, true);
+  expect(() => new MdastReader(buf)).toThrow(/wire format version/);
+});
+
+test("MdastReader rejects byte offsets", () => {
+  const buf = buildHelloWorldBuffer();
+  new DataView(buf).setUint32(HEADER.offset_unit, OFFSET_UNIT_BYTE, true);
+  expect(() => new MdastReader(buf)).toThrow(/byteOffsets/);
 });
 
 test("MdastReader reads node count", () => {

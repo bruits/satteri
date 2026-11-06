@@ -1,4 +1,5 @@
 import { test, expect, describe } from "vitest";
+import { HEADER, OFFSET_UNIT_BYTE } from "../src/generated/arena-layout.js";
 import { MdastReader } from "../src/mdast/mdast-reader.js";
 import { materializeMdastTree, materializeNode } from "../src/mdast/mdast-materializer.js";
 import type { MdastNode, MdastNodeInternal } from "../src/types.js";
@@ -142,6 +143,17 @@ test("a deeply nested document materializes without overflowing the stack", () =
   }
   expect(seen).toBeGreaterThanOrEqual(depth);
 }, 30_000);
+
+test("serializeHandle with byteOffsets writes a buffer the JS readers refuse", () => {
+  const handle = createMdastHandle("# Héllo 😀\n");
+  const bytes = serializeHandle(handle, { byteOffsets: true }) as Uint8Array;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  expect(view.getUint32(HEADER.offset_unit, true)).toBe(OFFSET_UNIT_BYTE);
+  expect(() => new MdastReader(bytes)).toThrow(/byteOffsets/);
+
+  const tree = materializeMdastTree(new MdastReader(serializeHandle(handle) as Uint8Array));
+  expect(findNode(tree, "text").value).toBe("Héllo 😀");
+});
 
 function mdxSetup(source: string) {
   const buf = serializeHandle(createMdxMdastHandle(source)) as Uint8Array;

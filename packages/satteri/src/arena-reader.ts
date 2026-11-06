@@ -1,4 +1,10 @@
-import { ARENA_MAGIC, HEADER, KIND_MDAST } from "./generated/arena-layout.js";
+import {
+  ARENA_FORMAT_VERSION,
+  ARENA_MAGIC,
+  HEADER,
+  KIND_MDAST,
+  OFFSET_UNIT_UTF16,
+} from "./generated/arena-layout.js";
 import type { ArenaWire, BufferHeader } from "./types.js";
 
 export class ArenaReader {
@@ -95,11 +101,23 @@ function readHeader(view: DataView, expectedKind: number): BufferHeader {
         : `Invalid HAST buffer: bad magic 0x${magic.toString(16)}`,
     );
   }
+  const reader = expectedKind === KIND_MDAST ? "MdastReader" : "HastReader";
   const kind = view.getUint32(HEADER.kind, true);
   if (kind !== expectedKind) {
     throw new Error(
-      `${expectedKind === KIND_MDAST ? "MdastReader" : "HastReader"} was handed a buffer of kind ${kind} (expected ${expectedKind}). ` +
+      `${reader} was handed a buffer of kind ${kind} (expected ${expectedKind}). ` +
         `MDAST and HAST node types overlap; reading the wrong kind decodes garbage.`,
+    );
+  }
+  const version = view.getUint32(HEADER.format_version, true);
+  if (version !== ARENA_FORMAT_VERSION) {
+    throw new Error(
+      `${reader} was handed a buffer in wire format version ${version} (expected ${ARENA_FORMAT_VERSION}), written by another satteri version.`,
+    );
+  }
+  if (view.getUint32(HEADER.offset_unit, true) !== OFFSET_UNIT_UTF16) {
+    throw new Error(
+      `${reader} was handed a buffer serialized with \`byteOffsets\`, which only Rust readers accept.`,
     );
   }
   return {

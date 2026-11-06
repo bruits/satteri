@@ -1,5 +1,13 @@
 // Pure-JS wire fixtures let reader tests run without a native binding.
 
+import {
+  ARENA_FORMAT_VERSION,
+  ARENA_MAGIC,
+  HEADER,
+  KIND_MDAST,
+  OFFSET_UNIT_UTF16,
+} from "../src/generated/arena-layout.js";
+
 export interface TreeNode {
   type: string;
   children?: TreeNode[];
@@ -24,10 +32,8 @@ export function collect<T extends TreeNode>(
   return out;
 }
 
-const MAGIC = 0x5241444d;
 const NODE_STRUCT_SIZE = 52;
-const HEADER_SIZE = 44;
-const KIND_MDAST = 1;
+const HEADER_SIZE = Object.keys(HEADER).length * 4;
 
 interface NodeSpec {
   id?: number;
@@ -71,17 +77,21 @@ export function buildTestBuffer({
   const view = new DataView(buf);
   const u8 = new Uint8Array(buf);
 
-  view.setUint32(0, MAGIC, true);
-  view.setUint32(4, KIND_MDAST, true);
-  view.setUint32(8, NODE_STRUCT_SIZE, true);
-  view.setUint32(12, nodes.length, true);
-  view.setUint32(16, nodesOffset, true);
-  view.setUint32(20, children.length, true);
-  view.setUint32(24, childrenOffset, true);
-  view.setUint32(28, typeData.length, true);
-  view.setUint32(32, typeDataOffset, true);
-  view.setUint32(36, stringPoolBytes.length, true);
-  view.setUint32(40, stringPoolOffset, true);
+  view.setUint32(HEADER.magic, ARENA_MAGIC, true);
+  view.setUint32(HEADER.kind, KIND_MDAST, true);
+  view.setUint32(HEADER.format_version, ARENA_FORMAT_VERSION, true);
+  view.setUint32(HEADER.offset_unit, OFFSET_UNIT_UTF16, true);
+  view.setUint32(HEADER.node_struct_size, NODE_STRUCT_SIZE, true);
+  view.setUint32(HEADER.node_count, nodes.length, true);
+  view.setUint32(HEADER.nodes_offset, nodesOffset, true);
+  view.setUint32(HEADER.children_count, children.length, true);
+  view.setUint32(HEADER.children_offset, childrenOffset, true);
+  view.setUint32(HEADER.type_data_len, typeData.length, true);
+  view.setUint32(HEADER.type_data_offset, typeDataOffset, true);
+  view.setUint32(HEADER.string_pool_len, stringPoolBytes.length, true);
+  view.setUint32(HEADER.string_pool_offset, stringPoolOffset, true);
+  view.setUint32(HEADER.source_len, source.length, true);
+  view.setUint32(HEADER.node_data_offset, totalSize, true);
 
   for (let i = 0; i < nodes.length; i++) {
     const base = nodesOffset + i * NODE_STRUCT_SIZE;

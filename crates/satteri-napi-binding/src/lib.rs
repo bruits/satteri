@@ -9,7 +9,7 @@ use std::result::Result as StdResult;
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use satteri_arena::{Arena, ArenaKind, Document};
+use satteri_arena::{Arena, ArenaKind, Document, OffsetUnit};
 use satteri_ast::hast::mdast_arena_to_hast_arena_into;
 #[cfg(feature = "mdx")]
 use satteri_mdxjs::{compile_hast_arena, parse_error_to_message, simplify_plain_mdx_nodes};
@@ -537,6 +537,13 @@ fn wire_out<'env>(env: &'env Env, buf: Vec<u8>) -> Result<Either<BufferSlice<'en
     Ok(Either::B(Uint8Array::new(buf)))
 }
 
+#[napi(object)]
+pub struct JsSerializeOptions {
+    /// Write offsets in UTF-8 bytes for `Arena::from_raw_buffer` in Rust, which
+    /// `MdastReader` and `HastReader` refuse. Default: `false`.
+    pub byte_offsets: Option<bool>,
+}
+
 /// Serialize a handle's arena to the wire-format buffer JS instantiates a
 /// reader from. The kind tag in the header tells the JS side whether to
 /// pick `MdastReader` or `HastReader`.
@@ -544,16 +551,22 @@ fn wire_out<'env>(env: &'env Env, buf: Vec<u8>) -> Result<Either<BufferSlice<'en
 pub fn serialize_handle<'env>(
     env: &'env Env,
     handle: AnyHandle,
+    options: Option<JsSerializeOptions>,
 ) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    let unit = if options.and_then(|o| o.byte_offsets).unwrap_or(false) {
+        OffsetUnit::Byte
+    } else {
+        OffsetUnit::Utf16
+    };
     let buf = match handle {
         Either::A(h) => h
             .lock()
             .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
-            .to_raw_buffer(),
+            .to_raw_buffer_in(unit),
         Either::B(h) => h
             .lock()
             .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
-            .to_raw_buffer(),
+            .to_raw_buffer_in(unit),
     };
     wire_out(env, buf)
 }
