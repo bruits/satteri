@@ -19,31 +19,15 @@ Sätteri ships native binaries for:
 - Linux (x86_64, glibc)
 - Windows (x86_64)
 
-Anything else (Linux arm64 or musl, browsers, edge runtimes) falls back to a WASI build.
+Anything else, such as browsers and edge runtimes, uses the [WebAssembly build](#webassembly-build).
 
-## Browser usage
+## WebAssembly build
 
-In a browser bundle, the WASI build replaces the native binding. It ships as a separate optional package, `@bruits/satteri-wasm32-wasi`, marked `cpu: wasm32` so native installs stay lean. Package managers skip mismatched architectures by default, so you have to opt in.
+Browsers, Cloudflare Workers, and platforms without a native binary run Sätteri as WebAssembly. That build ships as a separate package to keep native installs small, so install it next to `satteri` and keep both on the same version:
 
-With pnpm, add the `wasm32` architecture in `pnpm-workspace.yaml`:
+{{ install pkg="satteri @bruits/satteri-wasm32-wasip1" /}}
 
-```yaml
-supportedArchitectures:
-  cpu:
-    - current
-    - wasm32
-```
-
-Yarn exposes the same `supportedArchitectures` setting in `.yarnrc.yml`. For other package managers, see [napi-rs's WebAssembly guide](https://napi.rs/docs/concepts/webassembly).
-
-The WASI runtime also needs `SharedArrayBuffer`, so the page must be cross-origin isolated, using the following headers:
-
-```
-Cross-Origin-Opener-Policy: same-origin
-Cross-Origin-Embedder-Policy: require-corp
-```
-
-See [napi-rs's server configuration guide](https://napi.rs/docs/concepts/webassembly#server-configuration) for more information.
+Then import `satteri` as usual. In a Worker, Wrangler picks the WebAssembly build on its own, so you don't need the `nodejs_compat` flag or any setup call.
 
 ## Using with Vite
 
