@@ -150,6 +150,21 @@ hastToHtml(htmlToHast("<!doctype html><p>hi</p>"));
 
 It is the renderer `markdownToHtml` uses, so `raw` nodes are emitted verbatim and MDX nodes, which have no HTML representation, are skipped. The result is the tree's exact serialization, with no trailing newline (the one `markdownToHtml` ends a document with).
 
+### Reading serialized trees
+
+`serializeHandle` returns a parsed tree as bytes, which `MdastReader` and `materializeMdastTree` (or `HastReader` and `materializeHastTree`) turn into plain objects. To do that where the parser isn't needed, such as a page whose worker did the parsing, import them from their own entry points, which don't load the native or WASI binding:
+
+```js
+import { MdastReader } from "satteri/mdast-reader";
+import { materializeMdastTree } from "satteri/mdast-materializer";
+
+const tree = materializeMdastTree(new MdastReader(bytes));
+```
+
+`satteri/hast-reader` and `satteri/hast-materializer` do the same for HAST.
+
+To read only a few nodes of a parsed tree, such as the root's children and their positions, `walkMdastHandle(handle, subscriptions)` returns the nodes of the subscribed types without serializing the whole tree. Its result is the buffer the visitors read.
+
 ## Reparsing raw HTML (`rawHtml`)
 
 By default, inline and block HTML in Markdown is preserved as opaque `raw` nodes and re-emitted verbatim. Pass `features: { rawHtml: true }` to reparse it into structured HAST:

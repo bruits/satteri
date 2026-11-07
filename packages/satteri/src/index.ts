@@ -122,7 +122,13 @@ export { materializeMdastTree } from "./mdast/mdast-materializer.js";
 export { HastReader } from "./hast/hast-reader.js";
 export { materializeHastTree } from "./hast/hast-materializer.js";
 
-export { serializeHandle, renderHandle, compileHandle, getHandleSource } from "#binding";
+export {
+  serializeHandle,
+  renderHandle,
+  compileHandle,
+  getHandleSource,
+  walkMdastHandle,
+} from "#binding";
 
 import {
   applyCommandsToMdastHandle as napiApplyCommandsToMdastHandle,
