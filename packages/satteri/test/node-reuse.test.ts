@@ -1696,3 +1696,218 @@ test("replaceNode moves a node the same way whatever form it is passed in", () =
     expect((html.match(/<blockquote>/g) ?? []).length).toBe(1);
   }
 });
+
+test("a field set before a node is replaced lands on its replacement too", () => {
+  const sameVisitor = (replace: "context" | "return") =>
+    defineMdastPlugin({
+      name: `set-field-then-${replace}`,
+      heading(node, ctx) {
+        ctx.setField(node, "depth", 3);
+        const replacement = {
+          ...node,
+          children: [...node.children, { type: "text" as const, value: "!" }],
+        };
+        if (replace === "return") return replacement;
+        ctx.replaceNode(node, replacement);
+      },
+    });
+  const earlierVisitor = (replace: "context" | "return") =>
+    defineMdastPlugin({
+      name: `earlier-visitor-then-${replace}`,
+      paragraph(node, ctx) {
+        const heading = ctx.parent(node).children[1];
+        if (heading?.type === "heading") ctx.setField(heading, "depth", 3);
+      },
+      heading(node, ctx) {
+        const replacement = { ...node, children: [{ type: "text" as const, value: "a!" }] };
+        if (replace === "return") return replacement;
+        ctx.replaceNode(node, replacement);
+      },
+    });
+  for (const plugin of [sameVisitor("context"), sameVisitor("return")]) {
+    expect(markdownToHtml("# a\n", { mdastPlugins: [plugin] }).html, plugin.name).toBe(
+      "<h3>a!</h3>\n",
+    );
+  }
+  for (const plugin of [earlierVisitor("context"), earlierVisitor("return")]) {
+    expect(markdownToHtml("p\n\n# a\n", { mdastPlugins: [plugin] }).html, plugin.name).toBe(
+      "<p>p</p>\n<h3>a!</h3>\n",
+    );
+  }
+  const hast = defineHastPlugin({
+    name: "hast-set-property-then-return",
+    element: {
+      filter: ["p"],
+      visit(node, ctx) {
+        ctx.setProperty(node, "title", "t");
+        return { ...node, tagName: "div" };
+      },
+    },
+  });
+  expect(markdownToHtml("a\n", { hastPlugins: [hast] }).html).toBe('<div title="t">a</div>\n');
+});
+
+test("a node wrapped by its own replacement keeps the edits made inside it", () => {
+  const strong = { type: "strong" as const, children: [{ type: "text" as const, value: "B" }] };
+  const viaReturn = defineMdastPlugin({
+    name: "return-wrapper-around-node",
+    paragraph(node) {
+      return { type: "blockquote", children: [node] };
+    },
+    emphasis() {
+      return strong;
+    },
+  });
+  const betweenTagHalves = defineMdastPlugin({
+    name: "node-between-tag-halves",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, [
+        { type: "html", value: "<div>" },
+        node,
+        { type: "html", value: "</div>" },
+      ]);
+    },
+    emphasis() {
+      return strong;
+    },
+  });
+  const hast = defineHastPlugin({
+    name: "hast-return-wrapper-around-element",
+    element: {
+      filter: ["p", "em"],
+      visit(node) {
+        if (node.tagName === "em") return { ...node, tagName: "strong" };
+        return { type: "element", tagName: "div", properties: {}, children: [node] };
+      },
+    },
+  });
+  expect(markdownToHtml("a *b*\n", { mdastPlugins: [viaReturn] }).html).toBe(
+    "<blockquote>\n<p>a <strong>B</strong></p>\n</blockquote>\n",
+  );
+  expect(markdownToHtml("a *b*\n", { mdastPlugins: [betweenTagHalves] }).html).toBe(
+    "<div>\n<p>a <strong>B</strong></p>\n</div>\n",
+  );
+  expect(markdownToHtml("a *b*\n", { hastPlugins: [hast] }).html).toBe(
+    "<div><p>a <strong>b</strong></p></div>\n",
+  );
+});
+
+test("a field set on a node wrapped by its own replacement stays on the node", () => {
+  const plugin = defineMdastPlugin({
+    name: "set-field-then-wrap-in-replacement",
+    heading(node, ctx) {
+      ctx.setField(node, "depth", 3);
+      return { type: "blockquote", children: [node] };
+    },
+  });
+  expect(markdownToHtml("# a\n", { mdastPlugins: [plugin] }).html).toBe(
+    "<blockquote>\n<h3>a</h3>\n</blockquote>\n",
+  );
+});
+
+test("children added to a replaced node land in its replacement", () => {
+  const added = {
+    type: "paragraph" as const,
+    children: [{ type: "text" as const, value: "added" }],
+  };
+  const mdast = defineMdastPlugin({
+    name: "append-into-returned-copy",
+    blockquote(node) {
+      return { ...node, data: { hProperties: { className: ["q"] } } };
+    },
+    paragraph(node, ctx) {
+      const parent = ctx.parent(node);
+      if (parent.type === "root") ctx.appendChild(parent.children[0]!, added);
+    },
+  });
+  const hast = defineHastPlugin({
+    name: "hast-move-into-replaced-parent",
+    element: {
+      filter: ["blockquote", "p"],
+      visit(node, ctx) {
+        if (node.tagName === "blockquote") {
+          return {
+            type: "element",
+            tagName: "aside",
+            properties: {},
+            children: [...node.children],
+          };
+        }
+        const parent = ctx.parent(node);
+        const blockquote = parent?.children.find((c) => c.type === "element");
+        if (parent?.type === "root" && blockquote) ctx.appendChild(blockquote, node);
+      },
+    },
+  });
+  expect(markdownToHtml("> a\n\nb\n", { mdastPlugins: [mdast] }).html).toBe(
+    '<blockquote class="q">\n<p>a</p>\n<p>added</p>\n</blockquote>\n<p>b</p>\n',
+  );
+  expect(markdownToHtml("> a\n\nb\n", { hastPlugins: [hast] }).html).toBe(
+    "<aside>\n<p>a</p>\n<p>b</p></aside>\n",
+  );
+});
+
+test("a wrap applies to what replaced the node, and two wraps nest", () => {
+  const wrapThenReturn = defineMdastPlugin({
+    name: "wrap-then-return",
+    paragraph(node, ctx) {
+      ctx.wrapNode(node, { type: "blockquote", children: [] });
+      return { type: "heading", depth: 1, children: [...node.children] };
+    },
+  });
+  const wrapTwice = defineMdastPlugin({
+    name: "wrap-twice",
+    paragraph(node, ctx) {
+      ctx.wrapNode(node, {
+        type: "blockquote",
+        data: { hProperties: { className: ["inner"] } },
+        children: [],
+      });
+      ctx.wrapNode(node, {
+        type: "blockquote",
+        data: { hProperties: { className: ["outer"] } },
+        children: [],
+      });
+    },
+  });
+  expect(markdownToHtml("a\n", { mdastPlugins: [wrapThenReturn] }).html).toBe(
+    "<blockquote>\n<h1>a</h1>\n</blockquote>\n",
+  );
+  expect(markdownToHtml("a\n", { mdastPlugins: [wrapTwice] }).html).toBe(
+    '<blockquote class="outer">\n<blockquote class="inner">\n<p>a</p>\n</blockquote>\n</blockquote>\n',
+  );
+});
+
+test("an edit on a removed node is dropped with a warning instead of failing", () => {
+  const wrapRemoved = defineMdastPlugin({
+    name: "wrap-removed",
+    paragraph(node, ctx) {
+      if (ctx.indexOf(node) !== 0) return;
+      ctx.wrapNode(node, { type: "blockquote", children: [] });
+      ctx.removeNode(node);
+    },
+  });
+  const appendIntoRemoved = defineMdastPlugin({
+    name: "append-into-removed",
+    blockquote(node, ctx) {
+      ctx.removeNode(node);
+    },
+    paragraph(node, ctx) {
+      const parent = ctx.parent(node);
+      if (parent.type === "root") ctx.appendChild(parent.children[0]!, node);
+    },
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(markdownToHtml("a\n\nb\n", { mdastPlugins: [wrapRemoved] }).html).toBe("<p>b</p>\n");
+    expect(markdownToHtml("> a\n\nb\n", { mdastPlugins: [appendIntoRemoved] }).html).toBe(
+      "<p>b</p>\n",
+    );
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]?.[0]).toContain(
+      'plugin "append-into-removed" queued 1 mdast transform on node(s) that a plugin had already removed or replaced',
+    );
+  } finally {
+    warn.mockRestore();
+  }
+});
