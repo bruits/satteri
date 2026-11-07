@@ -20,8 +20,9 @@ pub const REF_NODE_TYPE: u8 = 0xFF;
 /// Fifth byte of a ref node's type_data: the ref names its target's position
 /// (whatever ends up spliced there) rather than the target node itself.
 ///
-/// A plain ref in a `Replace` payload to one of the replaced node's own children
-/// is a slot ref too, and a removal of that child empties the position.
+/// A plain ref to one of a node's own children, in that node's `Replace` payload
+/// or in content inserted beside it once it is removed, is a slot ref too, and a
+/// removal of that child empties the position.
 pub const REF_KIND_SLOT: u8 = 1;
 
 #[derive(Debug, Clone)]
@@ -370,12 +371,20 @@ fn graft_subtree<K: ArenaKind>(
     out
 }
 
+/// Copy a free-standing tree with no ref nodes into `arena` as orphans, returning
+/// the ids to splice; a root-wrapped tree contributes its root's children.
+pub fn graft_tree<K: ArenaKind>(arena: &mut Arena<K>, tree: &Arena<K>) -> Vec<u32> {
+    graft_subtree(arena, tree, &FxHashMap::default(), false)
+}
+
 /// Per-anchor plan derived from its patch group on the pristine tree.
 /// Winning patches are stored as indices into the input `patches` slice.
 struct AnchorPlan {
+    /// Remove present: the anchor node goes away and no replacement takes its place.
+    removed: bool,
     /// Remove/Replace present: the anchor node itself goes away.
     deleted: bool,
-    /// Last-wins Replace, if any.
+    /// Last-wins Replace, if any; never set on a removed anchor.
     winning_replace: Option<usize>,
     /// Last-wins Wrap, if any (ignored when deleted, mirroring the rebuild).
     winning_wrap: Option<usize>,
@@ -687,8 +696,9 @@ fn copy_root_shallow<K: ArenaKind>(arena: &mut Arena<K>) -> u32 {
 ///
 /// Returns the anchors whose patch could not be applied: those inside a subtree
 /// that an ancestor's `Remove`/`Replace` genuinely discarded (moot, since the
-/// plugin chose to drop that subtree), and those an earlier apply already
-/// detached from their parent, whose sibling splice has nowhere to land. A
+/// plugin chose to drop that subtree), those an earlier apply already
+/// detached from their parent, whose sibling splice has nowhere to land, and
+/// nodes moved out of a discarded list whose sibling inserts stayed in it. A
 /// *passed-through* child is not dropped this way: it is spliced back by a
 /// `REF_NODE_TYPE` node (see [`REF_NODE_TYPE`]), keeping its id so a patch
 /// queued on it still applies.
@@ -760,6 +770,10 @@ fn apply_patches_impl<K: ArenaKind>(
                 _ => {}
             }
         }
+        // A removal is final, so it beats any replacement of the same node.
+        if removed {
+            winning_replace = None;
+        }
         let deleted = removed || winning_replace.is_some();
         if deleted {
             let discard_children = match winning_replace.map(|pi| &patches[pi]) {
@@ -773,6 +787,7 @@ fn apply_patches_impl<K: ArenaKind>(
         plans.insert(
             anchor,
             AnchorPlan {
+                removed,
                 deleted,
                 winning_replace,
                 winning_wrap,
@@ -819,11 +834,7 @@ fn apply_patches_impl<K: ArenaKind>(
     let mut ref_targets: FxHashSet<u32> = FxHashSet::default();
     let mut slot_referrers: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut gone_targets: FxHashSet<u32> = FxHashSet::default();
-    let is_removed = |target: u32| {
-        plans
-            .get(&target)
-            .is_some_and(|plan| plan.deleted && plan.winning_replace.is_none())
-    };
+    let is_removed = |target: u32| plans.get(&target).is_some_and(|plan| plan.removed);
     let is_inside = |target: u32, ancestor: u32| {
         let mut cur = target;
         while cur != 0 {
@@ -876,17 +887,22 @@ fn apply_patches_impl<K: ArenaKind>(
             // A replacement handing back the replaced node's own children passes their slots on, edits around them included.
             let hands_back_children = match p {
                 Patch::Replace { .. } => true,
-                // Content placed beside a node that goes away is that node's replacement too.
-                Patch::InsertBefore { .. } | Patch::InsertAfter { .. } => plan.deleted,
+                // Content placed beside a removed node is that node's replacement too.
+                Patch::InsertBefore { .. } | Patch::InsertAfter { .. } => plan.removed,
                 _ => false,
             };
             let rebuilds_subtree = hands_back_children || matches!(p, Patch::SetChildren { .. });
             let mut ref_kind = |target: u32, td: &[u8]| {
+                // Own children are never `Gone`: a set-children list keeps each as the marker its pending splice swaps out.
                 let own_child = arena.get_node(target).parent == anchor;
                 if td.get(4) == Some(&REF_KIND_SLOT) || (hands_back_children && own_child) {
                     slot_referrers.entry(target).or_default().push(anchor);
                     RefKind::Slot
-                } else if rebuilds_subtree && is_removed(target) && is_inside(target, anchor) {
+                } else if rebuilds_subtree
+                    && !own_child
+                    && is_removed(target)
+                    && is_inside(target, anchor)
+                {
                     RefKind::Gone
                 } else {
                     RefKind::Node
@@ -966,6 +982,7 @@ fn apply_patches_impl<K: ArenaKind>(
             }
         }
     }
+
     // A child edit cannot splice its own anchor into the payload. Replacing a
     // non-root node with a wrapper around itself is different: it copies the
     // original subtree before the replacement is spliced in.
@@ -1117,10 +1134,7 @@ fn apply_patches_impl<K: ArenaKind>(
         for (&pi, refs) in ref_positions.iter_mut().chain(ref_placeholders.iter_mut()) {
             let referrer = patch_anchor(&patches[pi]);
             for (_, target, kind) in refs.iter_mut() {
-                let removed = plans
-                    .get(target)
-                    .is_some_and(|plan| plan.deleted && plan.winning_replace.is_none());
-                if *kind == RefKind::Node && moved_out.contains(target) && !removed {
+                if *kind == RefKind::Node && moved_out.contains(target) && !is_removed(*target) {
                     *kind = RefKind::Slot;
                     slot_referrers.entry(*target).or_default().push(referrer);
                 }
@@ -1402,7 +1416,7 @@ fn apply_patches_impl<K: ArenaKind>(
             let Some(content) = patch_payload(p) else {
                 continue;
             };
-            let self_removed = deleted && winning_replace.is_none();
+            let self_removed = plan.removed;
             let preserve_root = anchor == 0 && matches!(p, Patch::Replace { .. });
             match content {
                 PatchContent::Tree(sub) => {
