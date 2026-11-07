@@ -26,7 +26,7 @@ use satteri_ast::hast::codec::decode_element_tag;
 use satteri_ast::hast::{HastNodeType, is_void_element};
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::mdast::codec::*;
-use satteri_ast::patch::{Patch, PatchContent, REF_NODE_TYPE};
+use satteri_ast::patch::{Patch, PatchContent, REF_NODE_TYPE, graft_tree};
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
 use satteri_ast::shared::{
@@ -48,6 +48,10 @@ impl<'a> BufReader<'a> {
 
     fn remaining(&self) -> usize {
         self.data.len() - self.pos
+    }
+
+    fn peek_u8(&self) -> Option<u8> {
+        self.data.get(self.pos).copied()
     }
 
     fn read_u8(&mut self) -> Result<u8, CommandError> {
@@ -1180,6 +1184,58 @@ fn read_mdast_payload(
     }
 }
 
+/// A replacement payload, normalized for a slot under `parent_type`. A sequence of
+/// several nodes becomes one grafted slot, its raw items parsed in place.
+fn read_mdast_replacement(
+    reader: &mut BufReader<'_>,
+    parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
+    builder: &mut ArenaBuilder<Mdast>,
+    original_len: u32,
+    anchor: u32,
+    options: MdastCommandOptions,
+    parent_type: u8,
+) -> Result<(PatchContent<Mdast>, bool), CommandError> {
+    if reader.peek_u8() != Some(PAYLOAD_SEQUENCE) {
+        let (mut content, keep_children) = read_mdast_payload(
+            reader,
+            parse_markdown,
+            builder,
+            original_len,
+            anchor,
+            options,
+        )?;
+        normalize_mdast_raw_payload_for_parent(&mut content, parent_type);
+        return Ok((content, keep_children));
+    }
+    reader.read_u8()?;
+    let count = reader.read_u32()?;
+    let mut roots: Vec<u32> = Vec::new();
+    for _ in 0..count {
+        let (mut item, _) = read_mdast_payload(
+            reader,
+            parse_markdown,
+            builder,
+            original_len,
+            anchor,
+            options,
+        )?;
+        normalize_mdast_raw_payload_for_parent(&mut item, parent_type);
+        match item {
+            PatchContent::Tree(tree) => roots.extend(graft_tree(builder.arena_mut(), &tree)),
+            PatchContent::Grafted(ids) => {
+                // A root item would land as a node; the single-payload form rejects it too.
+                if ids.iter().any(|&id| {
+                    builder.arena_ref().get_node(id).node_type == MdastNodeType::Root as u8
+                }) {
+                    return Err(CommandError::UnencodableNodeType("root"));
+                }
+                roots.extend(ids);
+            }
+        }
+    }
+    Ok((PatchContent::Grafted(roots), false))
+}
+
 fn mdast_sibling_slot_parent_type(arena: &Arena<Mdast>, node_id: u32) -> u8 {
     let node = arena.get_node(node_id);
     if node_id == 0 {
@@ -1723,15 +1779,15 @@ pub fn apply_mdast_commands_lenient_with_options(
             CMD_REPLACE => {
                 let node_id = reader.read_anchor(original_len)?;
                 let parent_type = mdast_sibling_slot_parent_type(builder.arena_ref(), node_id);
-                let (mut new_tree, keep_children) = read_mdast_payload(
+                let (new_tree, keep_children) = read_mdast_replacement(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
                     original_len,
                     node_id,
                     options,
+                    parent_type,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -2676,6 +2732,62 @@ mod tests {
         let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         let root_children = result.get_children(0);
         assert!(root_children.len() >= 2);
+    }
+
+    fn push_sequence_replace(buf: &mut Vec<u8>, node_id: u32, raw: &str, ops: &[u8]) {
+        buf.push(CMD_REPLACE);
+        push_u32(buf, node_id);
+        buf.push(PAYLOAD_SEQUENCE);
+        push_u32(buf, 2);
+        buf.push(PAYLOAD_RAW);
+        buf.push(0); // flags
+        push_u32(buf, raw.len() as u32);
+        buf.extend_from_slice(raw.as_bytes());
+        buf.push(PAYLOAD_OPSTREAM);
+        push_u32(buf, ops.len() as u32);
+        buf.extend_from_slice(ops);
+    }
+
+    #[test]
+    fn replace_with_a_sequence_splices_raw_and_opstream_items_in_order() {
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+        let mut ops = vec![OP_REF];
+        push_u32(&mut ops, heading_id);
+        let mut buf = Vec::new();
+        push_sequence_replace(&mut buf, heading_id, "---", &ops);
+
+        let result = apply_mdast_commands(arena, &buf, &parse_leaf_block).unwrap();
+        let types: Vec<u8> = result
+            .get_children(0)
+            .iter()
+            .map(|&id| result.get_node(id).node_type)
+            .collect();
+        assert_eq!(
+            types,
+            [
+                MdastNodeType::ThematicBreak as u8,
+                MdastNodeType::Heading as u8,
+                MdastNodeType::Paragraph as u8,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_root_item_in_a_replacement_sequence_errors() {
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Root);
+        op_close(&mut ops);
+        let mut buf = Vec::new();
+        push_sequence_replace(&mut buf, heading_id, "---", &ops);
+
+        let err = apply_mdast_commands(arena, &buf, &parse_leaf_block).unwrap_err();
+        assert!(
+            matches!(err, CommandError::UnencodableNodeType("root")),
+            "{err:?}"
+        );
     }
 
     #[test]

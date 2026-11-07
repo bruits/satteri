@@ -56,6 +56,7 @@ pub const CMD_SET_ATTRIBUTE: u8 = 0x0f; // [valueType: u8][name str][value str],
 // Structural-command payload types (0x10+, a range distinct from commands).
 pub const PAYLOAD_RAW: u8 = 0x10; // [flags: u8][len: u32 LE][utf8] — re-parsed as markdown; see RAW_* flags
 pub const PAYLOAD_OPSTREAM: u8 = 0x14; // [len: u32 LE][op bytes] — replayed straight into the arena
+pub const PAYLOAD_SEQUENCE: u8 = 0x15; // [count: u32 LE] then count × [PAYLOAD_RAW or PAYLOAD_OPSTREAM payload] — one replacement, spliced in order
 
 // Flag bits for the `PAYLOAD_RAW` payload.
 pub const RAW_LITERAL_BRACES: u8 = 0x01; // keep MDX `{…}` as literal text (only affects MDX output)
