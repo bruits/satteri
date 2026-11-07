@@ -392,7 +392,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: HastDiagnostic[];
   readonly #pendingNodes: Map<number, HastNode> = new Map();
-  readonly #removedIds = new Set<number>();
+  #removedIds: Set<number> | undefined;
   #listedRemovals = 0;
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
@@ -431,7 +431,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     const id = requireNid(node, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
-    this.#removedIds.add(id);
+    (this.#removedIds ??= new Set()).add(id);
   }
 
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
@@ -492,13 +492,13 @@ class HastVisitorContextImpl implements HastVisitorContext {
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "insertBefore", this.#refs);
     // Content beside a removed node takes its place.
-    if (this.#removedIds.has(id)) this.noteListedRemovals(node, id, newNode);
+    if (this.#removedIds?.has(id)) this.noteListedRemovals(node, id, newNode);
     this.#splice(id, newNode, "insertBefore");
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "insertAfter", this.#refs);
-    if (this.#removedIds.has(id)) this.noteListedRemovals(node, id, newNode);
+    if (this.#removedIds?.has(id)) this.noteListedRemovals(node, id, newNode);
     this.#splice(id, newNode, "insertAfter");
   }
 
@@ -667,9 +667,20 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   /** Content rebuilding `target` cannot bring back a node removed inside it, so listing one is counted for a warning. */
   noteListedRemovals(target: object, targetId: number, content: unknown): void {
-    if (this.#removedIds.size === 0) return;
+    // Kept tiny so the common no-removal case inlines into every replacement.
+    if (this.#removedIds !== undefined) {
+      this.#countListedRemovals(this.#removedIds, target, targetId, content);
+    }
+  }
+
+  #countListedRemovals(
+    removed: ReadonlySet<number>,
+    target: object,
+    targetId: number,
+    content: unknown,
+  ): void {
     const scan = {
-      removed: this.#removedIds,
+      removed,
       nodeId: getNodeId,
       refs: this.#refs,
       resolver: this.#resolver,
@@ -869,7 +880,7 @@ function dispatchMatches(
     if (result instanceof Promise) {
       deferred ??= [];
       deferred.push({ nodeId, promise: result, originalNode: node });
-    } else {
+    } else if (result !== undefined) {
       applyHastVisitResult(result, nodeId, returnBuffer, node, resolver.refs, ctx);
     }
   }

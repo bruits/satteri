@@ -264,7 +264,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: MdastDiagnostic[];
   readonly #pendingNodes: Map<number, MdastTarget> = new Map();
-  readonly #removedIds = new Set<number>();
+  #removedIds: Set<number> | undefined;
   #listedRemovals = 0;
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
@@ -303,19 +303,19 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     const id = requireNid(node as MdastNode, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
-    this.#removedIds.add(id);
+    (this.#removedIds ??= new Set()).add(id);
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "insertBefore", this.#refs);
     // Content beside a removed node takes its place.
-    if (this.#removedIds.has(id)) this.noteListedRemovals(node, id, newNode);
+    if (this.#removedIds?.has(id)) this.noteListedRemovals(node, id, newNode);
     this.#splice(id, newNode, "insertBefore");
   }
 
   insertAfter(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "insertAfter", this.#refs);
-    if (this.#removedIds.has(id)) this.noteListedRemovals(node, id, newNode);
+    if (this.#removedIds?.has(id)) this.noteListedRemovals(node, id, newNode);
     this.#splice(id, newNode, "insertAfter");
   }
 
@@ -556,9 +556,20 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
 
   /** Content rebuilding `target` cannot bring back a node removed inside it, so listing one is counted for a warning. */
   noteListedRemovals(target: object, targetId: number, content: unknown): void {
-    if (this.#removedIds.size === 0) return;
+    // Kept tiny so the common no-removal case inlines into every replacement.
+    if (this.#removedIds !== undefined) {
+      this.#countListedRemovals(this.#removedIds, target, targetId, content);
+    }
+  }
+
+  #countListedRemovals(
+    removed: ReadonlySet<number>,
+    target: object,
+    targetId: number,
+    content: unknown,
+  ): void {
     const scan = {
-      removed: this.#removedIds,
+      removed,
       nodeId: getNodeId,
       refs: this.#refs,
       resolver: this.#resolver,
@@ -1054,7 +1065,7 @@ export function visitMdastHandle(
     if (result instanceof Promise) {
       deferred ??= [];
       deferred.push({ nodeId, promise: result, originalNode: node });
-    } else {
+    } else if (result !== undefined) {
       applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, context, node);
     }
   }
