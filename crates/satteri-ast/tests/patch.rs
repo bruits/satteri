@@ -2034,11 +2034,10 @@ fn root_replace_grafted_payload() {
 }
 
 #[test]
-fn ref_to_linked_target_copies() {
+fn a_replacement_naming_another_node_moves_it() {
     let orig = build_hello_world();
     let heading = orig.get_children(0)[0];
     let paragraph = orig.get_children(0)[1];
-    // Replace the heading with a ref to the (surviving) paragraph.
     let rebuilt = rebuild(
         &orig,
         &[Patch::Replace {
@@ -2047,22 +2046,12 @@ fn ref_to_linked_target_copies() {
             keep_children: false,
         }],
     );
-    let kids = rebuilt.get_children(0);
-    assert_eq!(kids.len(), 2);
-    assert_eq!(
-        rebuilt.get_node(kids[0]).node_type,
-        MdastNodeType::Paragraph as u8
-    );
-    assert_eq!(
-        rebuilt.get_node(kids[1]).node_type,
-        MdastNodeType::Paragraph as u8
-    );
-    assert_eq!(rebuilt.get_children(kids[0]).len(), 1);
-    assert_eq!(rebuilt.get_children(kids[1]).len(), 1);
+    assert_eq!(rebuilt.get_children(0), &[paragraph]);
+    assert_eq!(rebuilt.get_children(paragraph).len(), 1);
 }
 
 #[test]
-fn ref_used_twice_duplicates_target() {
+fn a_node_arranged_twice_errors() {
     use satteri_ast::patch::REF_NODE_TYPE;
     let orig = build_hello_world();
     let heading = orig.get_children(0)[0];
@@ -2077,16 +2066,21 @@ fn ref_used_twice_duplicates_target() {
     sub.set_data_current(&text_in_heading.to_le_bytes());
     sub.close_node();
     sub.close_node();
-    let rebuilt = rebuild(
-        &orig,
+    let mut arena = orig.clone();
+    let err = apply_patches_in_place(
+        &mut arena,
         &[Patch::Replace {
             node_id: heading,
             new_tree: PatchContent::Tree(sub.finish()),
             keep_children: false,
         }],
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, CommandError::NodePlacedTwice(id) if id == text_in_heading),
+        "{err:?}"
     );
-    let para = rebuilt.get_children(0)[0];
-    assert_eq!(rebuilt.get_children(para).len(), 2);
+    assert_eq!(arena.len(), orig.len());
 }
 
 #[test]
@@ -2661,97 +2655,83 @@ fn stranded_splice_is_dropped_on_the_immediate_path() {
 /// A ref to a node that is itself removed resolves through the empty slot the
 /// removal leaves behind, so without adoption the moved content disappears.
 #[test]
-fn ref_to_a_removed_node_moves_it() {
+fn a_removed_node_an_insert_names_stays_removed() {
     let orig = build_hello_world();
     let heading = orig.get_children(0)[0];
     let paragraph = orig.get_children(0)[1];
-
-    let mut arena = orig.clone();
-    apply_patches_in_place(
-        &mut arena,
-        &[
-            Patch::InsertAfter {
-                node_id: paragraph,
-                new_tree: PatchContent::Tree(ref_payload_mdast(heading)),
-            },
-            Patch::Remove { node_id: heading },
-        ],
-    )
-    .expect("apply failed");
-
-    let kids = arena.get_children(0).to_vec();
-    assert_eq!(kids.len(), 2, "the paragraph, then the moved heading");
-    assert_eq!(
-        arena.get_node(kids[0]).node_type,
-        MdastNodeType::Paragraph as u8
-    );
-    assert_eq!(
-        arena.get_node(kids[1]).node_type,
-        MdastNodeType::Heading as u8
-    );
-    assert_eq!(
-        arena.get_children(kids[1]).len(),
-        1,
-        "the moved heading keeps its text"
-    );
+    for remove_first in [true, false] {
+        let mut patches = vec![Patch::InsertAfter {
+            node_id: paragraph,
+            new_tree: PatchContent::Tree(ref_payload_mdast(heading)),
+        }];
+        let removal = Patch::Remove { node_id: heading };
+        if remove_first {
+            patches.insert(0, removal);
+        } else {
+            patches.push(removal);
+        }
+        let arena = rebuild(&orig, &patches);
+        assert_eq!(
+            arena.get_children(0),
+            &[paragraph],
+            "remove first: {remove_first}"
+        );
+    }
 }
 
 /// A ref names the node, not the siblings spliced around it: the slot for an
 /// anchor with sibling inserts holds those inserts too.
 #[test]
-fn ref_to_a_node_with_sibling_inserts_resolves_to_the_node_alone() {
+fn a_node_an_insert_names_moves_with_the_content_beside_it() {
     let orig = build_hello_world();
     let heading = orig.get_children(0)[0];
     let paragraph = orig.get_children(0)[1];
     let text_in_paragraph = orig.get_children(paragraph)[0];
-
-    let mut arena = orig.clone();
-    apply_patches_in_place(
-        &mut arena,
-        &[
-            Patch::InsertAfter {
+    for ungrouped in [false, true] {
+        let mut patches = vec![
+            Patch::InsertBefore {
                 node_id: paragraph,
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
             },
-            Patch::InsertAfter {
+            Patch::InsertBefore {
                 node_id: heading,
                 new_tree: PatchContent::Tree(ref_payload_mdast(paragraph)),
             },
-            // Pins the ungrouped path, where the slot is observable.
-            Patch::Replace {
+        ];
+        if ungrouped {
+            patches.push(Patch::Replace {
                 node_id: text_in_paragraph,
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::InlineCode)),
                 keep_children: false,
-            },
-        ],
-    )
-    .expect("apply failed");
+            });
+        }
+        let arena = rebuild(&orig, &patches);
 
-    let kids = arena.get_children(0).to_vec();
-    let types: Vec<u8> = kids.iter().map(|&k| arena.get_node(k).node_type).collect();
-    assert_eq!(
-        types,
-        vec![
-            MdastNodeType::Heading as u8,
-            MdastNodeType::Paragraph as u8,
-            MdastNodeType::Paragraph as u8,
-            MdastNodeType::ThematicBreak as u8,
-        ],
-        "the reused paragraph must not drag the break inserted after it"
-    );
+        let kids = arena.get_children(0).to_vec();
+        let types: Vec<u8> = kids.iter().map(|&k| arena.get_node(k).node_type).collect();
+        assert_eq!(
+            types,
+            vec![
+                MdastNodeType::ThematicBreak as u8,
+                MdastNodeType::Paragraph as u8,
+                MdastNodeType::Heading as u8,
+            ],
+            "ungrouped: {ungrouped}"
+        );
+        assert_eq!(kids[1], paragraph);
+        assert_children_point_back(&arena, 0);
+    }
 }
 
 /// A removed node's slot holds whatever replaced its position, so a ref to it
 /// must resolve to the node itself rather than to that content.
 #[test]
-fn ref_to_a_removed_node_ignores_what_took_its_place() {
+fn content_beside_a_removed_node_an_insert_names_stays_in_its_place() {
     let orig = build_hello_world();
     let heading = orig.get_children(0)[0];
     let paragraph = orig.get_children(0)[1];
-
-    let mut arena = orig.clone();
-    apply_patches_in_place(
-        &mut arena,
+    let arena = rebuild(
+        &orig,
         &[
             Patch::InsertAfter {
                 node_id: paragraph,
@@ -2763,19 +2743,19 @@ fn ref_to_a_removed_node_ignores_what_took_its_place() {
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
             },
         ],
-    )
-    .expect("apply failed");
+    );
 
-    let kids = arena.get_children(0).to_vec();
-    let types: Vec<u8> = kids.iter().map(|&k| arena.get_node(k).node_type).collect();
+    let types: Vec<u8> = arena
+        .get_children(0)
+        .iter()
+        .map(|&k| arena.get_node(k).node_type)
+        .collect();
     assert_eq!(
         types,
         vec![
             MdastNodeType::ThematicBreak as u8,
-            MdastNodeType::Paragraph as u8,
-            MdastNodeType::Heading as u8,
-        ],
-        "the moved heading must land, not a second copy of the break"
+            MdastNodeType::Paragraph as u8
+        ]
     );
 }
 
@@ -2877,7 +2857,9 @@ fn node_with_refs(node_type: MdastNodeType, targets: &[u32]) -> Arena<Mdast> {
     b.finish()
 }
 
+/// Every reachable node names its parent and sits in one place only.
 fn assert_parents_consistent(arena: &Arena<Mdast>, round: u64) {
+    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut stack = vec![0u32];
     while let Some(parent) = stack.pop() {
         for &child in arena.get_children(parent) {
@@ -2885,6 +2867,10 @@ fn assert_parents_consistent(arena: &Arena<Mdast>, round: u64) {
                 arena.get_node(child).parent,
                 parent,
                 "round {round}: child {child} must name its parent"
+            );
+            assert!(
+                seen.insert(child),
+                "round {round}: node {child} is in two places"
             );
             stack.push(child);
         }
@@ -3142,16 +3128,16 @@ fn a_removed_child_its_rebuilt_parent_lists_again_stays_removed() {
 }
 
 #[test]
-fn a_removed_node_inserted_beside_its_replaced_ancestor_moves_there() {
+fn a_removed_node_inserted_beside_its_replaced_ancestor_stays_removed() {
     let (quote_of_two, quote, [p1, p2]) = build_quote_of_two_paragraphs();
     let (quote_of_list, outer, [item, other]) = build_quote_of_a_list_of_two_items();
     let list = quote_of_list.get_children(outer)[0];
-    // (tree, replaced ancestor, its replacement's refs, moved node, the moved node's parent, what stays there)
+    // (tree, replaced ancestor, its replacement's refs, removed node, the removed node's parent, what stays there)
     let shapes = [
         (&quote_of_two, quote, vec![p1, p2], p1, None, p2),
         (&quote_of_list, outer, vec![list], item, Some(list), other),
     ];
-    for (orig, ancestor, refs, moved, parent, kept) in shapes {
+    for (orig, ancestor, refs, removed, parent, kept) in shapes {
         for remove_first in [true, false] {
             let mut patches = vec![
                 Patch::Replace {
@@ -3161,31 +3147,107 @@ fn a_removed_node_inserted_beside_its_replaced_ancestor_moves_there() {
                 },
                 Patch::InsertAfter {
                     node_id: ancestor,
-                    new_tree: PatchContent::Tree(ref_payload_mdast(moved)),
+                    new_tree: PatchContent::Tree(ref_payload_mdast(removed)),
                 },
             ];
-            let removal = Patch::Remove { node_id: moved };
+            let removal = Patch::Remove { node_id: removed };
             if remove_first {
                 patches.insert(0, removal);
             } else {
                 patches.push(removal);
             }
-            let mut strict = orig.clone();
-            apply_patches_strict(&mut strict, &patches).expect("apply failed");
-            let mut arena = orig.clone();
-            let dropped = apply_patches_in_place(&mut arena, &patches).expect("apply failed");
+            let arena = rebuild(orig, &patches);
 
-            assert!(dropped.is_empty(), "{dropped:?}");
             let kids = arena.get_children(0).to_vec();
-            assert_eq!(kids.len(), 2, "remove first: {remove_first}");
-            assert_eq!(
-                arena.get_node(kids[1]).node_type,
-                orig.get_node(moved).node_type
-            );
+            assert_eq!(kids.len(), 1, "remove first: {remove_first}");
             assert_eq!(arena.get_children(parent.unwrap_or(kids[0])), &[kept]);
-            assert_children_point_back(&arena, 0);
         }
     }
+}
+
+#[test]
+fn a_node_inserted_beside_its_rebuilt_parent_leaves_the_rebuild() {
+    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
+    let arena = rebuild(
+        &orig,
+        &[
+            Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[p1, p2])),
+                keep_children: false,
+            },
+            Patch::InsertAfter {
+                node_id: quote,
+                new_tree: PatchContent::Tree(ref_payload_mdast(p1)),
+            },
+        ],
+    );
+
+    let kids = arena.get_children(0).to_vec();
+    assert_eq!(kids.len(), 2);
+    assert_eq!(arena.get_children(kids[0]), &[p2]);
+    assert_eq!(kids[1], p1);
+    assert_parents_consistent(&arena, 0);
+}
+
+#[test]
+fn a_node_placed_twice_errors() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+    let text_in_heading = orig.get_children(heading)[0];
+    let mut arena = orig.clone();
+    let err = apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::AppendChild {
+                node_id: paragraph,
+                child_tree: PatchContent::Tree(ref_payload_mdast(text_in_heading)),
+            },
+            Patch::InsertAfter {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(ref_payload_mdast(text_in_heading)),
+            },
+        ],
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, CommandError::NodePlacedTwice(id) if id == text_in_heading),
+        "{err:?}"
+    );
+    assert_eq!(arena.len(), orig.len());
+}
+
+#[test]
+fn appending_a_child_to_its_own_parent_moves_it_last() {
+    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
+    let arena = rebuild(
+        &orig,
+        &[Patch::AppendChild {
+            node_id: quote,
+            child_tree: PatchContent::Tree(ref_payload_mdast(p1)),
+        }],
+    );
+    assert_eq!(arena.get_children(quote), &[p2, p1]);
+    assert_children_point_back(&arena, quote);
+}
+
+#[test]
+fn inserting_a_node_beside_itself_errors() {
+    let (orig, _, [p1, _]) = build_quote_of_two_paragraphs();
+    let mut arena = orig.clone();
+    let err = apply_patches_in_place(
+        &mut arena,
+        &[Patch::InsertAfter {
+            node_id: p1,
+            new_tree: PatchContent::Tree(ref_payload_mdast(p1)),
+        }],
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, CommandError::UnsupportedPatchShape(_)),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -3244,7 +3306,7 @@ fn a_removal_beats_a_replacement_of_the_same_node() {
 }
 
 #[test]
-fn a_removed_child_inserted_beside_its_removed_parent_moves_there() {
+fn a_removed_child_inserted_beside_its_removed_parent_stays_removed() {
     let (orig, quote, [p1, _]) = build_quote_of_two_paragraphs();
     for remove_first in [true, false] {
         let mut patches = vec![
@@ -3260,11 +3322,11 @@ fn a_removed_child_inserted_beside_its_removed_parent_moves_there() {
         } else {
             patches.push(removal);
         }
-        let mut arena = orig.clone();
-        apply_patches_strict(&mut arena, &patches).expect("apply failed");
-
-        assert_eq!(arena.get_children(0), &[p1], "remove first: {remove_first}");
-        assert_children_point_back(&arena, 0);
+        let arena = rebuild(&orig, &patches);
+        assert!(
+            arena.get_children(0).is_empty(),
+            "remove first: {remove_first}"
+        );
     }
 }
 
@@ -3365,7 +3427,7 @@ fn an_insert_beside_a_child_moved_out_of_a_removed_parent_comes_along_on_both_sp
 }
 
 #[test]
-fn a_removed_grandchild_inserted_beside_its_removed_grandparent_moves_without_its_inserts() {
+fn a_removed_grandchild_inserted_beside_its_removed_grandparent_stays_removed() {
     let (orig, quote, [item, _]) = build_quote_of_a_list_of_two_items();
     let patches = [
         Patch::Remove { node_id: quote },
@@ -3381,16 +3443,12 @@ fn a_removed_grandchild_inserted_beside_its_removed_grandparent_moves_without_it
     ];
     let mut arena = orig.clone();
     let dropped = apply_patches_in_place(&mut arena, &patches).expect("apply failed");
-    assert_eq!(arena.get_children(0), &[item]);
-    assert_eq!(dropped, vec![item]);
-
-    let mut arena = orig.clone();
-    match apply_patches_strict(&mut arena, &patches).unwrap_err() {
-        CommandError::PatchOnRemovedSubtree(id) => assert_eq!(id, item),
-        other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
-    }
-    assert_eq!(arena.len(), orig.len());
-    assert_eq!(arena.get_children(0), &[quote]);
+    assert!(arena.get_children(0).is_empty());
+    assert_eq!(
+        dropped,
+        vec![item],
+        "the break beside the removed item went with its grandparent"
+    );
 }
 #[test]
 fn a_single_grafted_child_handed_back_keeps_its_sibling_inserts() {
@@ -3485,38 +3543,20 @@ fn a_children_list_on_a_node_that_is_replaced_keeps_a_removal() {
 }
 
 #[test]
-fn a_child_listed_twice_keeps_the_insert_beside_it_once() {
+fn a_child_listed_twice_in_its_parents_replacement_errors() {
     let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
     let mut arena = orig.clone();
-    apply_patches_strict(
+    let err = apply_patches_in_place(
         &mut arena,
-        &[
-            Patch::Replace {
-                node_id: quote,
-                new_tree: PatchContent::Tree(node_with_refs(
-                    MdastNodeType::Blockquote,
-                    &[p1, p1, p2],
-                )),
-                keep_children: false,
-            },
-            Patch::InsertAfter {
-                node_id: p1,
-                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
-            },
-        ],
+        &[Patch::Replace {
+            node_id: quote,
+            new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[p1, p1, p2])),
+            keep_children: false,
+        }],
     )
-    .expect("apply failed");
-
-    let new_quote = arena.get_children(0)[0];
-    assert_eq!(
-        child_types(&arena, new_quote),
-        vec![
-            MdastNodeType::Paragraph as u8,
-            MdastNodeType::ThematicBreak as u8,
-            MdastNodeType::Paragraph as u8,
-            MdastNodeType::Paragraph as u8,
-        ]
+    .unwrap_err();
+    assert!(
+        matches!(err, CommandError::NodePlacedTwice(id) if id == p1),
+        "{err:?}"
     );
-    assert_eq!(arena.get_children(new_quote)[0], p1);
-    assert_children_point_back(&arena, new_quote);
 }

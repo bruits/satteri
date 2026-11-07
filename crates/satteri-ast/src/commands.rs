@@ -46,6 +46,8 @@ pub enum CommandError {
     /// A patch's anchor lives inside a subtree whose root was removed, so
     /// the patch can never apply.
     PatchOnRemovedSubtree(u32),
+    /// Payloads place or arrange the same node twice; a node can only be in one place.
+    NodePlacedTwice(u32),
     /// An op-stream's `OP_OPEN`s and `OP_CLOSE`s did not pair up.
     UnbalancedOpstream,
     /// A document op-stream is not the one `root` wrapping the tree that
@@ -105,7 +107,10 @@ impl std::fmt::Display for CommandError {
                 write!(f, "content nests deeper than {max} levels")
             }
             Self::WrapOnRemovedNode(id) => {
-                write!(f, "wrapNode targets node {id} which is also removed")
+                write!(
+                    f,
+                    "wrapNode targets node {id}, which this pass removes or replaces"
+                )
             }
             Self::UnbalancedOpstream => {
                 write!(f, "unbalanced op-stream: OPEN and CLOSE ops do not pair up")
@@ -127,7 +132,11 @@ impl std::fmt::Display for CommandError {
             }
             Self::ChildPatchOnRemovedNode(id) => write!(
                 f,
-                "prependChild/appendChild targets node {id} which is also removed"
+                "prependChild/appendChild targets node {id}, which this pass removes or replaces; add the child to its replacement instead"
+            ),
+            Self::NodePlacedTwice(id) => write!(
+                f,
+                "node {id} is listed in two places, but a node can only be in one; list structuredClone(node) where you want a copy"
             ),
             Self::PatchOnRemovedSubtree(id) => {
                 write!(f, "patch targets node {id} inside a removed subtree")

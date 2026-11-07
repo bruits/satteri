@@ -9,19 +9,20 @@ use crate::stack::with_headroom;
 /// Sentinel `node_type` for a *reference* node inside a replacement sub-tree:
 /// "splice the existing original node whose id is stored in this node's
 /// type_data (u32 LE) here." Higher than any real MDAST (≤104) or HAST (≤14)
-/// type. Resolving it copies the original subtree *and applies any pending
-/// patch on it*, so a nested transform queued on a passed-through child still
-/// lands (no stranding, no re-visit). One exception: a discarding self-ref
-/// whose subtree contains other patched anchors errors with
+/// type. Resolving it moves the original node there, *with any pending patch
+/// on it applied*, so a nested transform queued on a passed-through child still
+/// lands (no stranding, no re-visit). A node can be named by one live ref only;
+/// a second fails with [`CommandError::NodePlacedTwice`]. A self-ref, the anchor
+/// named inside its own replacement, copies the anchor's subtree instead; a
+/// discarding one over other patched anchors errors with
 /// [`CommandError::UnsupportedPatchShape`] instead of re-entering (see
 /// [`apply_patches_in_place`]).
 pub const REF_NODE_TYPE: u8 = 0xFF;
 
-/// Fifth byte of a ref node's type_data: the ref names its target's position
-/// (whatever ends up spliced there) rather than the target node itself.
-///
-/// A plain ref in a `Replace` payload to one of the replaced node's own children
-/// is a slot ref too, and a removal of that child empties the position.
+/// Fifth byte of a ref node's type_data: the ref arranges its target in place, as
+/// a plain ref in a `Replace` or set-children payload to a descendant of the
+/// rebuilt node does, so a removal of the target empties it rather than winning
+/// over a placement.
 pub const REF_KIND_SLOT: u8 = 1;
 
 #[derive(Debug, Clone)]
@@ -411,35 +412,23 @@ enum GraftMode {
 /// How a payload ref resolves.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RefKind {
-    /// The target node itself.
-    Node,
-    /// Whatever ends up spliced at the target's position.
-    Slot,
-    /// A removed node listed inside the subtree being rebuilt: nothing, the removal wins.
+    /// A descendant of the node being rebuilt, arranged in the rebuild unless placed elsewhere.
+    Arranged,
+    /// Any other existing node, moved here.
+    Placed,
+    /// Nothing: a removed node placed, or one placed elsewhere and so not arranged here.
     Gone,
 }
 
-/// Targets already moved by id; a removed target's node and its sibling inserts move separately.
-#[derive(Default)]
-struct Adopted {
-    nodes: FxHashSet<u32>,
-    inserts: FxHashSet<u32>,
-}
-
-/// Resolve one ref occurrence given the self-ref parity rules: nothing for
-/// a removed anchor, a raw copy for any other self-ref, else the shared
-/// adoption/copy logic.
-#[allow(clippy::too_many_arguments)]
+/// A ref takes its target's whole position, edits spliced beside it included; a
+/// self-ref is the exception, a copy of the anchor's subtree inside its own replacement.
 fn resolve_target<K: ArenaKind>(
     arena: &mut Arena<K>,
     target: u32,
     anchor: u32,
     self_removed: bool,
-    slots: &FxHashMap<u32, Vec<u32>>,
     position_slots: &FxHashMap<u32, Vec<u32>>,
     kind: RefKind,
-    truly_dead: &FxHashSet<u32>,
-    adopted: &mut Adopted,
 ) -> Vec<u32> {
     if kind == RefKind::Gone {
         return Vec::new();
@@ -450,36 +439,10 @@ fn resolve_target<K: ArenaKind>(
         }
         return vec![copy_subtree(arena, anchor, 0)];
     }
-    let core = slots.get(&target).filter(|core| !core.is_empty());
-    let dead = truly_dead.contains(&target);
-    if kind == RefKind::Slot
-        && let Some(position) = position_slots.get(&target)
-    {
-        let core: &[u32] = core.map_or(&[], Vec::as_slice);
-        // Inserts land once, with the first ref to move the position; a copy is the node alone.
-        let takes_node = dead && !core.is_empty() && adopted.nodes.insert(target);
-        let takes_inserts = dead && position.len() > core.len() && adopted.inserts.insert(target);
-        return position
-            .iter()
-            .filter_map(|&id| {
-                if core.contains(&id) {
-                    Some(if takes_node {
-                        id
-                    } else {
-                        copy_subtree(arena, id, 0)
-                    })
-                } else {
-                    takes_inserts.then_some(id)
-                }
-            })
-            .collect();
-    }
-    // An emptied slot is a removal, whose node a node ref still names.
-    let ids = core.cloned().unwrap_or_else(|| vec![target]);
-    if dead && adopted.nodes.insert(target) {
-        return ids;
-    }
-    ids.iter().map(|&id| copy_subtree(arena, id, 0)).collect()
+    position_slots
+        .get(&target)
+        .cloned()
+        .unwrap_or_else(|| vec![target])
 }
 
 /// Resolve a grafted payload's placeholder refs in place and return the final
@@ -491,10 +454,7 @@ fn resolve_grafted<K: ArenaKind>(
     placeholders: &[(u32, u32, RefKind)],
     anchor: u32,
     self_removed: bool,
-    slots: &FxHashMap<u32, Vec<u32>>,
     position_slots: &FxHashMap<u32, Vec<u32>>,
-    truly_dead: &FxHashSet<u32>,
-    adopted: &mut Adopted,
     mode: GraftMode,
 ) -> Vec<u32> {
     let mut resolved_placeholders: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
@@ -509,17 +469,7 @@ fn resolve_grafted<K: ArenaKind>(
             top_level.insert(ph, (target, kind));
             continue;
         }
-        let ids = resolve_target(
-            arena,
-            target,
-            anchor,
-            self_removed,
-            slots,
-            position_slots,
-            kind,
-            truly_dead,
-            adopted,
-        );
+        let ids = resolve_target(arena, target, anchor, self_removed, position_slots, kind);
         resolved_placeholders.insert(ph, ids);
         if seen_parents.insert(parent) {
             placeholder_parents.push(parent);
@@ -548,11 +498,8 @@ fn resolve_grafted<K: ArenaKind>(
                 target,
                 anchor,
                 self_removed,
-                slots,
                 position_slots,
                 kind,
-                truly_dead,
-                adopted,
             ));
         } else {
             out.push(r);
@@ -679,8 +626,8 @@ fn copy_root_shallow<K: ArenaKind>(arena: &mut Arena<K>) -> u32 {
 
 /// Apply structural patches by editing the arena in place; detached nodes
 /// stay behind as unreachable garbage (every consumer traverses from root).
-/// Anchors are processed in ref-dependency order so subtree copies always
-/// observe post-patch state. Pathological re-entrant shapes (refs targeting
+/// Anchors are processed in ref-dependency order so a ref always takes its
+/// target's post-patch state. Pathological re-entrant shapes (refs targeting
 /// an anchor's own ancestors, ref-dependency cycles, discarding self-refs
 /// over patched descendants) and sibling inserts on the root error with
 /// [`CommandError::UnsupportedPatchShape`].
@@ -696,8 +643,7 @@ fn copy_root_shallow<K: ArenaKind>(arena: &mut Arena<K>) -> u32 {
 /// Returns the anchors whose patch could not be applied: those inside a subtree
 /// that an ancestor's `Remove`/`Replace` genuinely discarded (moot, since the
 /// plugin chose to drop that subtree), those an earlier apply already
-/// detached from their parent, whose sibling splice has nowhere to land, and
-/// nodes moved out of a discarded list whose sibling inserts stayed in it. A
+/// detached from their parent, whose sibling splice has nowhere to land. A
 /// *passed-through* child is not dropped this way: it is spliced back by a
 /// `REF_NODE_TYPE` node (see [`REF_NODE_TYPE`]), keeping its id so a patch
 /// queued on it still applies.
@@ -831,7 +777,6 @@ fn apply_patches_impl<K: ArenaKind>(
     let mut ref_positions: FxHashMap<usize, Vec<(u32, u32, RefKind)>> = FxHashMap::default(); // patch index -> [(sub_id, target, kind)]
     let mut ref_placeholders: FxHashMap<usize, Vec<(u32, u32, RefKind)>> = FxHashMap::default(); // patch index -> [(node_id, target, kind)]
     let mut ref_targets: FxHashSet<u32> = FxHashSet::default();
-    let mut slot_referrers: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut gone_targets: FxHashSet<u32> = FxHashSet::default();
     let is_removed = |target: u32| plans.get(&target).is_some_and(|plan| plan.removed);
     let is_inside = |target: u32, ancestor: u32| {
@@ -883,23 +828,14 @@ fn apply_patches_impl<K: ArenaKind>(
                 // Payload children are never emitted for keep_children.
                 continue;
             }
-            // A replacement handing back the replaced node's own children passes their slots on, edits around them included.
-            let hands_back_children = matches!(p, Patch::Replace { .. });
-            let rebuilds_subtree = hands_back_children || matches!(p, Patch::SetChildren { .. });
-            let mut ref_kind = |target: u32, td: &[u8]| {
-                // Own children are never `Gone`: a set-children list keeps each as the marker its pending splice swaps out.
-                let own_child = arena.get_node(target).parent == anchor;
-                if td.get(4) == Some(&REF_KIND_SLOT) || (hands_back_children && own_child) {
-                    slot_referrers.entry(target).or_default().push(anchor);
-                    RefKind::Slot
-                } else if rebuilds_subtree
-                    && !own_child
-                    && is_removed(target)
-                    && is_inside(target, anchor)
-                {
+            let rebuilds = matches!(p, Patch::Replace { .. } | Patch::SetChildren { .. });
+            let ref_kind = |target: u32, td: &[u8]| {
+                if td.get(4) == Some(&REF_KIND_SLOT) || (rebuilds && is_inside(target, anchor)) {
+                    RefKind::Arranged
+                } else if is_removed(target) {
                     RefKind::Gone
                 } else {
-                    RefKind::Node
+                    RefKind::Placed
                 }
             };
             // A REF at wrap position 0 is the wrapper itself, copied verbatim, never resolved.
@@ -983,11 +919,7 @@ fn apply_patches_impl<K: ArenaKind>(
     for (&pi, refs) in ref_positions.iter().chain(&ref_placeholders) {
         let patch = &patches[pi];
         let anchor = patch_anchor(patch);
-        if (anchor == 0
-            || matches!(
-                patch,
-                Patch::PrependChild { .. } | Patch::AppendChild { .. } | Patch::SetChildren { .. }
-            ))
+        if (anchor == 0 || !matches!(patch, Patch::Replace { .. }))
             && refs.iter().any(|&(_, target, _)| target == anchor)
         {
             return Err(unsupported("payload ref would contain its anchor"));
@@ -1000,10 +932,8 @@ fn apply_patches_impl<K: ArenaKind>(
     // nothing to rescue or splice: the first discarding ancestor decides.
     let mut target_inner_patched: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut deciders: FxHashMap<u32, (Vec<u32>, bool)> = FxHashMap::default();
-    let mut truly_dead: FxHashSet<u32> = FxHashSet::default();
     let mut dropped_set: FxHashSet<u32> = FxHashSet::default();
-    let mut moved_out: FxHashSet<u32> = FxHashSet::default();
-    let mut lost_inserts: Vec<u32> = Vec::new();
+    let mut claimed: FxHashSet<u32> = FxHashSet::default();
     if ref_uses.is_empty() {
         if !discards.is_empty() {
             for &anchor in &anchor_order {
@@ -1104,51 +1034,41 @@ fn apply_patches_impl<K: ArenaKind>(
                 break;
             }
         }
-        // A target may be adopted by id only when its old location is truly dead;
-        // a live-spliced enclosing region would otherwise copy it a second time.
-        for &target in &ref_targets {
-            let (chain, ends_in_discard) = &deciders[&target];
-            let live_spliced = |t: u32| {
-                referrers
-                    .get(&t)
-                    .is_some_and(|rs| rs.iter().any(|r| !dropped_set.contains(r)))
-            };
-            if *ends_in_discard && !chain.iter().skip(1).any(|&t| live_spliced(t)) {
-                truly_dead.insert(target);
-            }
-        }
-        // Only a live set-children parent relists a truly dead child; any other parent's list is discarded with it.
-        moved_out.extend(truly_dead.iter().copied().filter(|&target| {
-            let parent = arena.get_node(target).parent;
-            !(discards.get(&parent) == Some(&true)
-                && plans.get(&parent).is_some_and(|plan| !plan.deleted)
-                && !dropped_set.contains(&parent))
-        }));
-        // Its old list is gone, so a node moved out of it takes the inserts queued beside it along.
-        for (&pi, refs) in ref_positions.iter_mut().chain(ref_placeholders.iter_mut()) {
+        // A node is in one place: placed at most once, arranged at most once, and a placement wins.
+        let mut claims: FxHashMap<u32, (u32, u32, u32)> = FxHashMap::default(); // target -> (placed, self-refs, arranged)
+        for (&pi, refs) in ref_positions.iter().chain(&ref_placeholders) {
             let referrer = patch_anchor(&patches[pi]);
-            for (_, target, kind) in refs.iter_mut() {
-                if *kind == RefKind::Node && moved_out.contains(target) && !is_removed(*target) {
-                    *kind = RefKind::Slot;
-                    slot_referrers.entry(*target).or_default().push(referrer);
+            if dropped_set.contains(&referrer) {
+                continue;
+            }
+            for &(_, target, kind) in refs {
+                let count = claims.entry(target).or_default();
+                match kind {
+                    RefKind::Placed if target == referrer => count.1 += 1,
+                    RefKind::Placed => count.0 += 1,
+                    RefKind::Arranged => count.2 += 1,
+                    RefKind::Gone => {}
                 }
             }
         }
-        // A node moved out of a discarded list leaves its sibling inserts there unless a slot ref carries them.
-        lost_inserts.extend(moved_out.iter().copied().filter(|&target| {
-            let carried = slot_referrers
-                .get(&target)
-                .is_some_and(|rs| rs.iter().any(|r| !dropped_set.contains(r)));
-            let has_inserts = patch_map.get(&target).is_some_and(|group| {
-                group.iter().any(|&pi| {
-                    matches!(
-                        patches[pi],
-                        Patch::InsertBefore { .. } | Patch::InsertAfter { .. }
-                    )
-                })
-            });
-            has_inserts && !carried && !dropped_set.contains(&target)
-        }));
+        for (&target, &(placed, self_refs, arranged)) in &claims {
+            if placed + self_refs > 1 || arranged > 1 {
+                return Err(CommandError::NodePlacedTwice(target));
+            }
+            if placed + arranged > 0 {
+                claimed.insert(target);
+            }
+        }
+        for refs in ref_positions
+            .values_mut()
+            .chain(ref_placeholders.values_mut())
+        {
+            for (_, target, kind) in refs.iter_mut() {
+                if *kind == RefKind::Arranged && claims.get(target).is_some_and(|c| c.0 > 0) {
+                    *kind = RefKind::Gone;
+                }
+            }
+        }
     }
     // A removal that won over a ref did what it asked for, so it is not reported as lost.
     dropped_set.retain(|anchor| {
@@ -1164,7 +1084,7 @@ fn apply_patches_impl<K: ArenaKind>(
     }
     // Strict callers reject stranded patches here, before the first arena
     // mutation, so the arena survives the error untouched.
-    if strict && let Some(&anchor) = dropped_set.iter().chain(&lost_inserts).min() {
+    if strict && let Some(&anchor) = dropped_set.iter().min() {
         return Err(CommandError::PatchOnRemovedSubtree(anchor));
     }
 
@@ -1240,11 +1160,9 @@ fn apply_patches_impl<K: ArenaKind>(
                 })
             }));
     let mut pending_splices: FxHashMap<u32, FxHashMap<u32, Vec<u32>>> = FxHashMap::default();
-    let mut slots: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut position_slots: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut grafted: FxHashMap<usize, Vec<u32>> = FxHashMap::default();
     let mut wrap_resolved: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
-    let mut adopted = Adopted::default();
     let mut redirect: FxHashMap<u32, u32> = FxHashMap::default();
     let mut stranded: Vec<u32> = Vec::new();
 
@@ -1271,6 +1189,18 @@ fn apply_patches_impl<K: ArenaKind>(
         })
         .map(|(i, &a)| (a, i))
         .collect();
+
+    // A claimed node leaves its old list before anything is spliced, so it lands only where it is claimed.
+    for &target in &claimed {
+        let parent = arena.get_node(target).parent;
+        let rest: Vec<u32> = arena
+            .get_children(parent)
+            .iter()
+            .copied()
+            .filter(|&child| child != target)
+            .collect();
+        arena.set_children(parent, &rest);
+    }
 
     for (anchor_index, anchor) in order.into_iter().enumerate() {
         let plan = &plans[&anchor];
@@ -1299,17 +1229,8 @@ fn apply_patches_impl<K: ArenaKind>(
             if winning_wrap == Some(pi) && !deleted {
                 if let Some(positions) = ref_positions.get(&pi) {
                     for &(sub_id, target, kind) in positions {
-                        let ids = resolve_target(
-                            arena,
-                            target,
-                            anchor,
-                            false,
-                            &slots,
-                            &position_slots,
-                            kind,
-                            &truly_dead,
-                            &mut adopted,
-                        );
+                        let ids =
+                            resolve_target(arena, target, anchor, false, &position_slots, kind);
                         wrap_resolved.insert(sub_id, ids);
                     }
                 }
@@ -1322,10 +1243,7 @@ fn apply_patches_impl<K: ArenaKind>(
                         placeholders,
                         anchor,
                         false,
-                        &slots,
                         &position_slots,
-                        &truly_dead,
-                        &mut adopted,
                         GraftMode::Wrap,
                     );
                 }
@@ -1426,11 +1344,8 @@ fn apply_patches_impl<K: ArenaKind>(
                                 target,
                                 anchor,
                                 self_removed,
-                                &slots,
                                 &position_slots,
                                 kind,
-                                &truly_dead,
-                                &mut adopted,
                             );
                             resolved.insert(sub_id, ids);
                         }
@@ -1449,10 +1364,7 @@ fn apply_patches_impl<K: ArenaKind>(
                         placeholders,
                         anchor,
                         self_removed,
-                        &slots,
                         &position_slots,
-                        &truly_dead,
-                        &mut adopted,
                         if preserve_root {
                             GraftMode::KeepRoot
                         } else {
@@ -1705,7 +1617,7 @@ fn apply_patches_impl<K: ArenaKind>(
                     }
                 }
             }
-        } else if slot.as_slice() != [anchor] {
+        } else if !claimed.contains(&anchor) && slot.as_slice() != [anchor] {
             let parent = redirect
                 .get(&splice_parent)
                 .copied()
@@ -1715,7 +1627,6 @@ fn apply_patches_impl<K: ArenaKind>(
                 // to know what this anchor became.
                 if !ref_uses.is_empty() {
                     position_slots.insert(anchor, slot.clone());
-                    slots.insert(anchor, core);
                 }
                 pending_splices
                     .entry(parent)
@@ -1723,39 +1634,29 @@ fn apply_patches_impl<K: ArenaKind>(
                     .insert(anchor, slot);
                 continue;
             }
-            if !moved_out.contains(&anchor) {
-                let current = arena.get_children(parent).to_vec();
-                let mut new_list: Vec<u32> = Vec::with_capacity(current.len() + slot.len());
-                let mut found = false;
-                for &child in &current {
-                    if child == anchor {
-                        new_list.extend_from_slice(&slot);
-                        found = true;
-                    } else {
-                        new_list.push(child);
-                    }
+            let current = arena.get_children(parent).to_vec();
+            let mut new_list: Vec<u32> = Vec::with_capacity(current.len() + slot.len());
+            let mut found = false;
+            for &child in &current {
+                if child == anchor {
+                    new_list.extend_from_slice(&slot);
+                    found = true;
+                } else {
+                    new_list.push(child);
                 }
-                if !found && !slot.is_empty() {
-                    stranded.push(anchor);
-                }
-                arena.set_children(parent, &new_list);
             }
+            if !found && !slot.is_empty() {
+                stranded.push(anchor);
+            }
+            arena.set_children(parent, &new_list);
         }
         if !ref_uses.is_empty() {
-            // `core` and not `slot`: a ref names the node, not the siblings spliced around it.
-            position_slots.insert(anchor, slot.clone());
-            slots.insert(anchor, core);
+            position_slots.insert(anchor, slot);
         }
     }
 
     let parents: Vec<u32> = pending_splices.keys().copied().collect();
     for parent in parents {
-        if pending_splices[&parent]
-            .keys()
-            .any(|anchor| moved_out.contains(anchor))
-        {
-            continue;
-        }
         flush_pending_splices(arena, &mut pending_splices, parent, &mut stranded);
     }
 
@@ -1768,7 +1669,6 @@ fn apply_patches_impl<K: ArenaKind>(
         .map(|(&a, _)| a)
         .collect();
     dropped.extend(stranded);
-    dropped.extend(lost_inserts);
     dropped.sort_unstable();
     dropped.dedup();
 
