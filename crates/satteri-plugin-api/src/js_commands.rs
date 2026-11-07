@@ -27,7 +27,9 @@ use satteri_ast::hast::codec::decode_element_tag;
 use satteri_ast::hast::{HastNodeType, is_void_element};
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::mdast::codec::*;
-use satteri_ast::patch::{Patch, PatchContent, REF_NODE_TYPE, graft_tree};
+use satteri_ast::patch::{
+    EditTarget, Patch, PatchContent, REF_NODE_TYPE, graft_tree, replacement_edit_target,
+};
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
 use satteri_ast::shared::{
@@ -1185,105 +1187,187 @@ fn read_mdast_payload(
     }
 }
 
-/// Where field edits on existing nodes land. A visitor's returned replacement
-/// precedes the context's commands in the buffer, so it is usually known by the
-/// time an edit names the node it replaced.
-#[derive(Default)]
-struct FieldEdits {
-    /// The one node that took each replaced node's place, `None` when none did.
-    replaced: FxHashMap<u32, Option<u32>>,
-    removed: FxHashSet<u32>,
-    /// Nodes edited in place, lost if a later command replaces or removes them.
-    edited: Vec<u32>,
-    lost: Vec<u32>,
+fn apply_mdast_field(
+    arena: &mut Arena<Mdast>,
+    cmd: u8,
+    node_id: u32,
+    name: &str,
+    value_type: u8,
+    value: &str,
+) -> Result<(), CommandError> {
+    if cmd == CMD_SET_ATTRIBUTE {
+        apply_mdast_set_attribute(arena, node_id, name, value_type, value)
+    } else {
+        apply_mdast_set_field(arena, node_id, name, value_type, value)
+    }
 }
 
-impl FieldEdits {
-    fn replace<K: ArenaKind>(&mut self, arena: &Arena<K>, node_id: u32, content: &PatchContent<K>) {
-        let ref_target = |id: u32| {
-            let node = arena.get_node(id);
-            (node.node_type == REF_NODE_TYPE).then(|| {
-                let td = arena.get_type_data(id);
-                u32::from_le_bytes([td[0], td[1], td[2], td[3]])
-            })
-        };
-        let items: &[u32] = match content {
-            PatchContent::Grafted(roots) => match roots.as_slice() {
-                &[root] if arena.get_node(root).node_type == K::ROOT_TAG => {
-                    arena.get_children(root)
-                }
-                roots => roots,
-            },
-            PatchContent::Tree(_) => &[],
-        };
-        // Listing the node itself carries it, and its edited fields, into the replacement.
-        let one = if items.iter().any(|&id| ref_target(id) == Some(node_id)) {
-            Some(node_id)
-        } else {
-            match items {
-                &[only] => Some(ref_target(only).unwrap_or(only)),
-                _ => None,
-            }
-        };
-        self.replaced.insert(node_id, one);
+fn apply_hast_field(
+    arena: &mut Arena<Hast>,
+    cmd: u8,
+    node_id: u32,
+    name: &str,
+    value_type: u8,
+    value: &str,
+) -> Result<(), CommandError> {
+    match cmd {
+        CMD_SET_PROPERTY => apply_hast_set_property(arena, node_id, name, value_type, value),
+        CMD_SET_FIELD => apply_hast_set_field(arena, node_id, name, value_type, value),
+        _ => apply_hast_set_attribute(arena, node_id, name, value_type, value),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FieldEditAt {
+    node_id: u32,
+    offset: u32,
+    /// Landed in place on `node_id` as it was read.
+    applied: bool,
+}
+
+/// Decides where edits on existing nodes land once every command is read, so their order does not matter.
+struct EditLanding<K: ArenaKind> {
+    original_len: u32,
+    /// The index of the last replacement of each replaced node.
+    replaced: FxHashMap<u32, usize>,
+    removed: FxHashSet<u32>,
+    fields: Vec<FieldEditAt>,
+    kind: std::marker::PhantomData<K>,
+}
+
+fn read_field_command(buf: &[u8], offset: u32) -> Result<(u8, u8, &str, &str), CommandError> {
+    let mut reader = BufReader {
+        data: buf,
+        pos: offset as usize,
+    };
+    let cmd = reader.read_u8()?;
+    reader.read_u32()?;
+    let value_type = reader.read_u8()?;
+    let name_len = reader.read_u32()? as usize;
+    let name = reader.read_str(name_len)?;
+    let value_len = reader.read_u32()? as usize;
+    let value = reader.read_str(value_len)?;
+    Ok((cmd, value_type, name, value))
+}
+
+impl<K: ArenaKind> EditLanding<K> {
+    fn new(original_len: u32) -> Self {
+        Self {
+            original_len,
+            replaced: FxHashMap::default(),
+            removed: FxHashSet::default(),
+            fields: Vec::new(),
+            kind: std::marker::PhantomData,
+        }
+    }
+
+    fn replace(&mut self, node_id: u32, patch_index: usize) {
+        self.replaced.insert(node_id, patch_index);
     }
 
     fn remove(&mut self, node_id: u32) {
         self.removed.insert(node_id);
     }
 
-    /// The node an edit naming `node_id` applies to, `None` when it has nowhere to land.
-    fn target(&mut self, node_id: u32) -> Option<u32> {
-        if self.removed.contains(&node_id) {
-            self.lost.push(node_id);
-            return None;
-        }
-        match self.replaced.get(&node_id) {
-            Some(&Some(target)) => Some(target),
-            Some(None) => {
-                self.lost.push(node_id);
-                None
-            }
-            None => {
-                self.edited.push(node_id);
-                Some(node_id)
-            }
-        }
-    }
-
-    /// An edit redirected onto a replacement of another type that lacks the field is lost, not an error.
-    fn apply(
+    fn field(
         &mut self,
         node_id: u32,
-        edit: impl FnOnce(u32) -> Result<(), CommandError>,
+        offset: usize,
+        apply: impl FnOnce() -> Result<(), CommandError>,
     ) -> Result<(), CommandError> {
-        let Some(target) = self.target(node_id) else {
-            return Ok(());
-        };
-        match edit(target) {
-            Err(CommandError::UnknownField { .. } | CommandError::InvalidPropertyValue { .. })
-                if target != node_id =>
-            {
-                self.lost.push(node_id);
-                Ok(())
-            }
-            result => result,
+        let applied = !self.removed.contains(&node_id) && !self.replaced.contains_key(&node_id);
+        if applied {
+            apply()?;
         }
+        self.fields.push(FieldEditAt {
+            node_id,
+            offset: offset as u32,
+            applied,
+        });
+        Ok(())
     }
 
-    /// Edits that cannot land; reported with the patches the apply dropped.
-    fn finish(mut self) -> Vec<u32> {
-        for node_id in std::mem::take(&mut self.edited) {
-            let kept = !self.removed.contains(&node_id)
-                && self
-                    .replaced
-                    .get(&node_id)
-                    .is_none_or(|&one| one == Some(node_id));
-            if !kept {
-                self.lost.push(node_id);
+    /// Follows replacements through the existing nodes they move in; a chain longer than the replacements is a cycle the apply rejects.
+    fn follow(
+        &self,
+        arena: &Arena<K>,
+        patches: &[Patch<K>],
+        node_id: u32,
+    ) -> (u32, Option<EditTarget>) {
+        let mut id = node_id;
+        for _ in 0..=self.replaced.len() {
+            if self.removed.contains(&id) {
+                return (id, Some(EditTarget::Nowhere));
+            }
+            let Some(&pi) = self.replaced.get(&id) else {
+                return (id, None);
+            };
+            let Patch::Replace { new_tree, .. } = &patches[pi] else {
+                return (id, None);
+            };
+            match replacement_edit_target(arena, id, new_tree) {
+                EditTarget::Node(next) if next < self.original_len => id = next,
+                target => return (id, Some(target)),
             }
         }
-        self.lost
+        (id, Some(EditTarget::Nowhere))
+    }
+
+    /// Redoes field edits whose node was replaced or removed and re-anchors child edits; returns the edits with nowhere to land.
+    fn finish(
+        self,
+        arena: &mut Arena<K>,
+        patches: &mut [Patch<K>],
+        buf: &[u8],
+        apply: impl Fn(&mut Arena<K>, u8, u32, &str, u8, &str) -> Result<(), CommandError>,
+    ) -> Result<Vec<u32>, CommandError> {
+        if self.replaced.is_empty() && self.removed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let anchors: Vec<(usize, u32)> = patches
+            .iter()
+            .enumerate()
+            .filter_map(|(pi, patch)| match patch {
+                Patch::PrependChild { node_id, .. }
+                | Patch::AppendChild { node_id, .. }
+                | Patch::SetChildren { node_id, .. } => {
+                    Some((pi, self.follow(arena, patches, *node_id).0))
+                }
+                _ => None,
+            })
+            .collect();
+        for (pi, anchor) in anchors {
+            if let Patch::PrependChild { node_id, .. }
+            | Patch::AppendChild { node_id, .. }
+            | Patch::SetChildren { node_id, .. } = &mut patches[pi]
+            {
+                *node_id = anchor;
+            }
+        }
+        let mut lost = Vec::new();
+        for edit in &self.fields {
+            let target = match self.follow(arena, patches, edit.node_id) {
+                (_, Some(EditTarget::Nowhere)) => {
+                    lost.push(edit.node_id);
+                    continue;
+                }
+                (_, Some(EditTarget::Node(new_node))) => new_node,
+                (id, _) => id,
+            };
+            if edit.applied && target == edit.node_id {
+                continue;
+            }
+            let (cmd, value_type, name, value) = read_field_command(buf, edit.offset)?;
+            match apply(arena, cmd, target, name, value_type, value) {
+                Err(
+                    CommandError::UnknownField { .. } | CommandError::InvalidPropertyValue { .. },
+                ) if target != edit.node_id => {
+                    lost.push(edit.node_id);
+                }
+                result => result?,
+            }
+        }
+        Ok(lost)
     }
 }
 
@@ -1760,7 +1844,7 @@ pub fn apply_mdast_commands_lenient_with_options(
     let mut builder =
         ArenaBuilder::from_arena(std::mem::replace(&mut arena, Arena::new(String::new())));
     let mut patches: Vec<Patch<Mdast>> = Vec::new();
-    let mut fields = FieldEdits::default();
+    let mut fields = EditLanding::new(original_len);
     let mut reader = BufReader::new(command_buf);
 
     while reader.remaining() > 0 {
@@ -1773,27 +1857,16 @@ pub fn apply_mdast_commands_lenient_with_options(
                 patches.push(Patch::Remove { node_id });
             }
 
-            CMD_SET_PROPERTY | CMD_SET_FIELD => {
+            CMD_SET_PROPERTY | CMD_SET_FIELD | CMD_SET_ATTRIBUTE => {
+                let offset = reader.pos - 1;
                 let node_id = reader.read_anchor(original_len)?;
                 let value_type = reader.read_u8()?;
                 let name_len = reader.read_u32()? as usize;
                 let name = reader.read_str(name_len)?;
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
-                fields.apply(node_id, |target| {
-                    apply_mdast_set_field(builder.arena_mut(), target, name, value_type, value)
-                })?;
-            }
-
-            CMD_SET_ATTRIBUTE => {
-                let node_id = reader.read_anchor(original_len)?;
-                let value_type = reader.read_u8()?;
-                let name_len = reader.read_u32()? as usize;
-                let name = reader.read_str(name_len)?;
-                let value_len = reader.read_u32()? as usize;
-                let value = reader.read_str(value_len)?;
-                fields.apply(node_id, |target| {
-                    apply_mdast_set_attribute(builder.arena_mut(), target, name, value_type, value)
+                fields.field(node_id, offset, || {
+                    apply_mdast_field(builder.arena_mut(), cmd, node_id, name, value_type, value)
                 })?;
             }
 
@@ -1897,7 +1970,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                     parent_type,
                 )?;
-                fields.replace(builder.arena_ref(), node_id, &new_tree);
+                fields.replace(node_id, patches.len());
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -1927,13 +2000,19 @@ pub fn apply_mdast_commands_lenient_with_options(
         }
     }
 
+    let lost = fields.finish(
+        builder.arena_mut(),
+        &mut patches,
+        command_buf,
+        apply_mdast_field,
+    )?;
     let mut arena = builder.finish();
     let mut dropped = if patches.is_empty() {
         Vec::new()
     } else {
         satteri_ast::patch::apply_patches_in_place(&mut arena, &patches)?
     };
-    dropped.extend(fields.finish());
+    dropped.extend(lost);
     Ok((arena, dropped))
 }
 
@@ -1984,7 +2063,7 @@ pub fn apply_hast_commands_lenient(
     let mut builder =
         ArenaBuilder::from_arena(std::mem::replace(&mut arena, Arena::new(String::new())));
     let mut patches: Vec<Patch<Hast>> = Vec::new();
-    let mut fields = FieldEdits::default();
+    let mut fields = EditLanding::new(original_len);
     let mut reader = BufReader::new(command_buf);
 
     while reader.remaining() > 0 {
@@ -1997,39 +2076,16 @@ pub fn apply_hast_commands_lenient(
                 patches.push(Patch::Remove { node_id });
             }
 
-            CMD_SET_PROPERTY => {
+            CMD_SET_PROPERTY | CMD_SET_FIELD | CMD_SET_ATTRIBUTE => {
+                let offset = reader.pos - 1;
                 let node_id = reader.read_anchor(original_len)?;
                 let value_type = reader.read_u8()?;
                 let name_len = reader.read_u32()? as usize;
                 let name = reader.read_str(name_len)?;
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
-                fields.apply(node_id, |target| {
-                    apply_hast_set_property(builder.arena_mut(), target, name, value_type, value)
-                })?;
-            }
-
-            CMD_SET_FIELD => {
-                let node_id = reader.read_anchor(original_len)?;
-                let value_type = reader.read_u8()?;
-                let name_len = reader.read_u32()? as usize;
-                let name = reader.read_str(name_len)?;
-                let value_len = reader.read_u32()? as usize;
-                let value = reader.read_str(value_len)?;
-                fields.apply(node_id, |target| {
-                    apply_hast_set_field(builder.arena_mut(), target, name, value_type, value)
-                })?;
-            }
-
-            CMD_SET_ATTRIBUTE => {
-                let node_id = reader.read_anchor(original_len)?;
-                let value_type = reader.read_u8()?;
-                let name_len = reader.read_u32()? as usize;
-                let name = reader.read_str(name_len)?;
-                let value_len = reader.read_u32()? as usize;
-                let value = reader.read_str(value_len)?;
-                fields.apply(node_id, |target| {
-                    apply_hast_set_attribute(builder.arena_mut(), target, name, value_type, value)
+                fields.field(node_id, offset, || {
+                    apply_hast_field(builder.arena_mut(), cmd, node_id, name, value_type, value)
                 })?;
             }
 
@@ -2082,7 +2138,7 @@ pub fn apply_hast_commands_lenient(
                 let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, keep_children) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                fields.replace(builder.arena_ref(), node_id, &new_tree);
+                fields.replace(node_id, patches.len());
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -2104,13 +2160,19 @@ pub fn apply_hast_commands_lenient(
         }
     }
 
+    let lost = fields.finish(
+        builder.arena_mut(),
+        &mut patches,
+        command_buf,
+        apply_hast_field,
+    )?;
     let mut arena = builder.finish();
     let mut dropped = if patches.is_empty() {
         Vec::new()
     } else {
         satteri_ast::patch::apply_patches_in_place(&mut arena, &patches)?
     };
-    dropped.extend(fields.finish());
+    dropped.extend(lost);
     Ok((arena, dropped))
 }
 
@@ -2949,36 +3011,41 @@ mod tests {
     const DATA: &str = r#"{"hName":"aside"}"#;
 
     #[test]
-    fn a_field_edit_after_a_replacement_lands_on_the_replacement() {
+    fn a_field_edit_lands_on_a_one_node_replacement_whichever_came_first() {
         let arena = build_hello_world();
         let heading = arena.get_children(0)[0];
-        let mut buf = Vec::new();
-        push_opstream_replace(&mut buf, heading, &one_paragraph_ops());
-        push_set_property(&mut buf, heading, PROP_STRING, "data", DATA);
+        let mut after = Vec::new();
+        push_opstream_replace(&mut after, heading, &one_paragraph_ops());
+        push_set_property(&mut after, heading, PROP_STRING, "data", DATA);
+        let mut before = Vec::new();
+        push_set_property(&mut before, heading, PROP_STRING, "data", DATA);
+        push_opstream_replace(&mut before, heading, &one_paragraph_ops());
 
-        let (result, dropped) =
-            apply_mdast_commands_lenient(arena, &buf, &test_parse_markdown).unwrap();
-        assert!(dropped.is_empty(), "{dropped:?}");
-        let replacement = result.get_children(0)[0];
-        assert_eq!(
-            result.get_node(replacement).node_type,
-            MdastNodeType::Paragraph as u8
-        );
-        assert!(result.get_node_data(replacement).is_some());
+        for buf in [after, before] {
+            let (result, dropped) =
+                apply_mdast_commands_lenient(arena.clone(), &buf, &test_parse_markdown).unwrap();
+            assert!(dropped.is_empty(), "{dropped:?}");
+            let replacement = result.get_children(0)[0];
+            assert_eq!(
+                result.get_node(replacement).node_type,
+                MdastNodeType::Paragraph as u8
+            );
+            assert!(result.get_node_data(replacement).is_some());
+        }
     }
 
     #[test]
     fn a_field_edit_with_no_one_node_to_land_on_is_dropped() {
         let arena = build_hello_world();
         let heading = arena.get_children(0)[0];
-        let mut after_many = Vec::new();
-        push_opstream_replace(&mut after_many, heading, &two_item_ops(None));
-        push_set_property(&mut after_many, heading, PROP_STRING, "data", DATA);
-        let mut before_one = Vec::new();
-        push_set_property(&mut before_one, heading, PROP_STRING, "data", DATA);
-        push_opstream_replace(&mut before_one, heading, &one_paragraph_ops());
+        let mut after = Vec::new();
+        push_opstream_replace(&mut after, heading, &two_item_ops(None));
+        push_set_property(&mut after, heading, PROP_STRING, "data", DATA);
+        let mut before = Vec::new();
+        push_set_property(&mut before, heading, PROP_STRING, "data", DATA);
+        push_opstream_replace(&mut before, heading, &two_item_ops(None));
 
-        for buf in [after_many, before_one] {
+        for buf in [after, before] {
             let (_, dropped) =
                 apply_mdast_commands_lenient(arena.clone(), &buf, &test_parse_markdown).unwrap();
             assert_eq!(dropped, vec![heading]);
@@ -2996,12 +3063,59 @@ mod tests {
         let (result, dropped) =
             apply_mdast_commands_lenient(arena, &buf, &test_parse_markdown).unwrap();
         assert!(dropped.is_empty(), "{dropped:?}");
-        let copy = result.get_children(0)[1];
-        assert_eq!(
-            result.get_node(copy).node_type,
-            MdastNodeType::Heading as u8
-        );
-        assert!(result.get_node_data(copy).is_some());
+        assert_eq!(result.get_children(0)[1], heading);
+        assert!(result.get_node_data(heading).is_some());
+    }
+
+    #[test]
+    fn a_field_edit_on_a_node_wrapped_by_its_own_replacement_lands_on_it() {
+        let arena = build_hello_world();
+        let heading = arena.get_children(0)[0];
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Blockquote);
+        ops.push(OP_REF);
+        push_u32(&mut ops, heading);
+        op_close(&mut ops);
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading, PROP_STRING, "data", DATA);
+        push_opstream_replace(&mut buf, heading, &ops);
+
+        let (result, dropped) =
+            apply_mdast_commands_lenient(arena, &buf, &test_parse_markdown).unwrap();
+        assert!(dropped.is_empty(), "{dropped:?}");
+        let blockquote = result.get_children(0)[0];
+        assert_eq!(result.get_children(blockquote), &[heading]);
+        assert!(result.get_node_data(heading).is_some());
+    }
+
+    #[test]
+    fn a_child_edit_follows_its_node_replaced_by_an_existing_one() {
+        let arena = build_hello_world();
+        let heading = arena.get_children(0)[0];
+        let paragraph = arena.get_children(0)[1];
+        let mut ref_ops = Vec::new();
+        ref_ops.push(OP_REF);
+        push_u32(&mut ref_ops, paragraph);
+        let mut buf = Vec::new();
+        buf.push(CMD_APPEND_CHILD);
+        push_u32(&mut buf, heading);
+        buf.push(PAYLOAD_OPSTREAM);
+        let break_ops = {
+            let mut ops = Vec::new();
+            op_open(&mut ops, MdastNodeType::Break);
+            op_close(&mut ops);
+            ops
+        };
+        push_u32(&mut buf, break_ops.len() as u32);
+        buf.extend_from_slice(&break_ops);
+        push_opstream_replace(&mut buf, heading, &ref_ops);
+
+        let (result, dropped) =
+            apply_mdast_commands_lenient(arena, &buf, &test_parse_markdown).unwrap();
+        assert!(dropped.is_empty(), "{dropped:?}");
+        assert_eq!(result.get_children(0), &[paragraph]);
+        let last = *result.get_children(paragraph).last().unwrap();
+        assert_eq!(result.get_node(last).node_type, MdastNodeType::Break as u8);
     }
 
     #[test]
