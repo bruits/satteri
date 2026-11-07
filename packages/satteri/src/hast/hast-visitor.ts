@@ -59,10 +59,11 @@ import {
   makeRequireNid,
   requireRootReplacement,
   RemovalTracker,
+  existingWrapperError,
   ROOT_NODE_ID,
   rootReplacementError,
+  selfInsertError,
   unencodableContentError,
-  warnIfRemovalsListed,
   type NodeRefs,
   type PluginOptions,
   type SettableFieldKey,
@@ -470,8 +471,21 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.#pendingNodes.set(id, onlyReplacement);
   }
 
+  /** A queued replacement of new content takes later field edits; a node from the tree takes them as it is. */
+  #foldablePending(id: number): HastNode | undefined {
+    const pending = this.#pendingNodes.get(id);
+    return pending !== undefined && getNodeId(pending, this.#refs) === undefined
+      ? pending
+      : undefined;
+  }
+
   #splice(anchorId: number, content: HastContent | HastContent[], op: StructuralOp): void {
-    for (const n of asArray(content)) {
+    const nodes = asArray(content);
+    for (const n of nodes) {
+      if (getNodeId(n, this.#refs) === anchorId) throw selfInsertError(op);
+    }
+    this.removals.inserted(anchorId, content);
+    for (const n of nodes) {
       emitHastTree(this.#commandBuffer, op, anchorId, n, this.#refs, true);
     }
   }
@@ -497,6 +511,10 @@ class HastVisitorContextImpl implements HastVisitorContext {
       return;
     }
     assertHastWrapParent(parentNode as HastContent);
+    const wrapperId = getNodeId(parentNode as HastNode, this.#refs);
+    if (wrapperId === FOREIGN_REF) throw foreignContentError();
+    if (wrapperId !== undefined) throw existingWrapperError();
+    this.removals.inserted(id, parentNode);
     emitHastTree(this.#commandBuffer, "wrapNode", id, parentNode as HastContent, this.#refs);
   }
 
@@ -534,6 +552,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
       return;
     }
     if (key === "data") {
+      if (this.#foldPendingField(node, id, key, value)) return;
       this.#commandBuffer.setProperty(id, key, value != null ? JSON.stringify(value) : null);
       return;
     }
@@ -589,7 +608,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   /** A queued replacement would discard the field, so fold it into a fresh replacement. */
   #foldPendingField(node: HastNode, id: number, key: string, value: unknown): boolean {
-    const pending = this.#pendingNodes.get(id);
+    const pending = this.#foldablePending(id);
     if (pending === undefined) return false;
     this.replaceNode(node, { ...pending, [key]: value } as HastNode);
     return true;
@@ -597,7 +616,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   /** A queued replacement would discard the attribute, so fold it in instead. */
   #foldPendingJsxAttribute(node: HastNode, id: number, name: string, value: unknown): boolean {
-    const pending = this.#pendingNodes.get(id);
+    const pending = this.#foldablePending(id);
     if (pending?.type !== "mdxJsxFlowElement" && pending?.type !== "mdxJsxTextElement") {
       return false;
     }
@@ -930,7 +949,7 @@ function finishHastVisit(
   returnBuffer: CommandBuffer,
   plugin: HastVisitorInstance,
 ): Uint8Array {
-  warnIfRemovalsListed(ctx.removals.listedCount(), plugin, "hast");
+  ctx.removals.warn(plugin, "hast");
   return collectCommands(returnBuffer, ctx.getCommandBuffer());
 }
 

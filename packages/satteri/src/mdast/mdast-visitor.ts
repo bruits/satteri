@@ -89,10 +89,11 @@ import {
   makeRequireNid,
   requireRootReplacement,
   RemovalTracker,
+  existingWrapperError,
   ROOT_NODE_ID,
   rootReplacementError,
+  selfInsertError,
   unencodableContentError,
-  warnIfRemovalsListed,
   type NodeRefs,
   type PluginOptions,
   type SettableFieldKey,
@@ -319,7 +320,12 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   }
 
   #splice(anchorId: number, content: MdastContent | MdastContent[], op: StructuralOp): void {
-    for (const n of asArray(content)) {
+    const nodes = asArray(content);
+    for (const n of nodes) {
+      if (getNodeId(n as MdastNode, this.#refs) === anchorId) throw selfInsertError(op);
+    }
+    this.removals.inserted(anchorId, content);
+    for (const n of nodes) {
       emitMdastTree(this.#commandBuffer, op, anchorId, n, false, this.#refs, true);
     }
   }
@@ -330,6 +336,10 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   ): void {
     const id = requireNid(node as MdastNode, "wrapNode", this.#refs);
     assertMdastWrapParent(parentNode);
+    const wrapperId = getNodeId(parentNode as MdastNode, this.#refs);
+    if (wrapperId === FOREIGN_REF) throw foreignContentError();
+    if (wrapperId !== undefined) throw existingWrapperError();
+    this.removals.inserted(id, parentNode);
     emitMdastTree(this.#commandBuffer, "wrapNode", id, parentNode, false, this.#refs);
   }
 
@@ -411,6 +421,14 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     else this.#pendingNodes.set(id, onlyReplacement);
   }
 
+  /** A queued replacement of new content takes later field edits; a node from the tree takes them as it is. */
+  #foldablePending(id: number): MdastTarget | undefined {
+    const pending = this.#pendingNodes.get(id);
+    return pending !== undefined && getNodeId(pending as MdastNode, this.#refs) === undefined
+      ? pending
+      : undefined;
+  }
+
   setField(node: Readonly<MdastTarget>, key: string, value: unknown): void {
     const id = requireNid(node as MdastNode, "setField", this.#refs);
     if (key === "children") this.removals.rebuilt(id, value);
@@ -445,7 +463,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
 
   /** A queued replacement would discard the field, so fold it into a fresh replacement. */
   #foldPendingField(node: Readonly<MdastTarget>, id: number, key: string, value: unknown): boolean {
-    const pending = this.#pendingNodes.get(id);
+    const pending = this.#foldablePending(id);
     if (pending === undefined) return false;
     this.replaceNode(node, { ...pending, [key]: value } as MdastTarget);
     return true;
@@ -458,7 +476,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     name: string,
     value: unknown,
   ): boolean {
-    const pending = this.#pendingNodes.get(id);
+    const pending = this.#foldablePending(id);
     if (pending === undefined) return false;
     if (isDirective(pending)) {
       this.replaceNode(node, {
@@ -1101,7 +1119,7 @@ function finalizeMdastVisit(
   returnBuffer: CommandBuffer,
   plugin: MdastPluginInstance,
 ): MdastVisitResult {
-  warnIfRemovalsListed(context.removals.listedCount(), plugin, "mdast");
+  context.removals.warn(plugin, "mdast");
   const commandBuffer = collectCommands(returnBuffer, context.getCommandBuffer());
   return {
     commandBuffer,

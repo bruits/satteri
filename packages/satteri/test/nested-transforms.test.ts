@@ -251,7 +251,7 @@ test("an inlineMath node survives a round-trip", () => {
   const dup = defineMdastPlugin({
     name: "dup-inline-math",
     inlineMath(node, ctx) {
-      ctx.insertAfter(node, node);
+      ctx.insertAfter(node, structuredClone(node));
     },
   });
   const { html } = markdownToHtml("hi $x$ end", { features: { math: true }, mdastPlugins: [dup] });
@@ -262,7 +262,7 @@ test("an imageReference keeps its alt through a round-trip", () => {
   const dup = defineMdastPlugin({
     name: "dup-image-ref",
     imageReference(node, ctx) {
-      ctx.insertAfter(node, node);
+      ctx.insertAfter(node, structuredClone(node));
     },
   });
   const md = '![alt text][logo]\n\n[logo]: /logo.png "Logo"';

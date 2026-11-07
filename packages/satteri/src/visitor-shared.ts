@@ -118,10 +118,12 @@ interface ChildResolver {
   childIdsOf(id: number): readonly number[];
 }
 
-/** A pass's removals, to warn when a plugin lists a node it removed; listing one never brings it back. */
+/** A pass's removals, to warn once it ends when a plugin listed a node it removed, which stays removed. */
 export class RemovalTracker<TNode> {
   #removed: Set<number> | undefined;
   #listed: Set<number> | undefined;
+  /** Anchor id, then content, per insert. */
+  #inserted: unknown[] | undefined;
   readonly #nodeId: (node: TNode, refs: NodeRefs) => number | undefined;
   readonly #refs: NodeRefs;
   readonly #resolver: ChildResolver;
@@ -140,7 +142,12 @@ export class RemovalTracker<TNode> {
     (this.#removed ??= new Set()).add(id);
   }
 
-  /** Notes the removed nodes inside `targetId` that content rebuilding it lists. */
+  /** An insert places what it names, so a removal of any of it wins whichever came first. */
+  inserted(anchorId: number, content: unknown): void {
+    (this.#inserted ??= []).push(anchorId, content);
+  }
+
+  /** A replacement or children list naming a node already removed cannot bring it back. */
   rebuilt(targetId: number, content: unknown): void {
     // Kept tiny so the common no-removal case inlines into every replacement.
     if (this.#removed !== undefined) this.#collect(this.#removed, targetId, content);
@@ -154,11 +161,26 @@ export class RemovalTracker<TNode> {
     });
   }
 
-  listedCount(): number {
-    return this.#listed?.size ?? 0;
+  warn(plugin: object, kind: "mdast" | "hast"): void {
+    const removed = this.#removed;
+    const inserted = this.#inserted;
+    if (removed !== undefined && inserted !== undefined) {
+      for (let i = 0; i < inserted.length; i += 2) {
+        this.#collect(removed, inserted[i] as number, inserted[i + 1]);
+      }
+    }
+    const name = (plugin as { name?: unknown }).name;
+    const label = `satteri: plugin "${typeof name === "string" ? name : "<anonymous>"}"`;
+    const listed = this.#listed?.size ?? 0;
+    if (listed > 0) {
+      console.warn(
+        `${label} listed ${listed} ${kind} node(s) it also removed, and a removed node stays ` +
+          "removed. To move a node, insert it without calling removeNode.",
+      );
+    }
   }
 
-  #collect(removed: ReadonlySet<number>, targetId: number, content: unknown): void {
+  #collect(removed: ReadonlySet<number>, editedId: number, content: unknown): void {
     const listed = (this.#listed ??= new Set());
     const visit = (
       node: unknown,
@@ -171,8 +193,7 @@ export class RemovalTracker<TNode> {
         if (
           id !== FOREIGN_REF &&
           removed.has(id) &&
-          !this.#passesOnWholeList(id, siblings, index) &&
-          isInside(this.#resolver, id, targetId)
+          !this.#passesOnWholeList(id, editedId, siblings, index)
         ) {
           listed.add(id);
         }
@@ -185,11 +206,17 @@ export class RemovalTracker<TNode> {
     else visit(content, undefined, 0);
   }
 
-  /** A list holding its parent's original children whole and in order, as `{ ...node }` does, only passes a removed one on. */
-  #passesOnWholeList(id: number, siblings: readonly unknown[] | undefined, index: number): boolean {
+  /** Content for the edited node that holds a parent's original children whole and in order, as `{ ...node }` does, only passes a removed one on. */
+  #passesOnWholeList(
+    id: number,
+    editedId: number,
+    siblings: readonly unknown[] | undefined,
+    index: number,
+  ): boolean {
     const parentId = this.#resolver.parentIdOf(id);
     const ownIndex = this.#resolver.indexInParent(id);
     if (siblings === undefined || parentId === undefined || ownIndex === undefined) return false;
+    if (parentId !== editedId && !this.#isInside(parentId, editedId)) return false;
     const original = this.#resolver.childIdsOf(parentId);
     const start = index - ownIndex;
     if (start < 0 || start + original.length > siblings.length) return false;
@@ -202,22 +229,27 @@ export class RemovalTracker<TNode> {
       );
     });
   }
-}
 
-function isInside(resolver: ChildResolver, id: number, ancestorId: number): boolean {
-  for (let cur = resolver.parentIdOf(id); cur !== undefined; cur = resolver.parentIdOf(cur)) {
-    if (cur === ancestorId) return true;
+  #isInside(id: number, ancestorId: number): boolean {
+    for (let cur = this.#resolver.parentIdOf(id); cur !== undefined; ) {
+      if (cur === ancestorId) return true;
+      cur = this.#resolver.parentIdOf(cur);
+    }
+    return false;
   }
-  return false;
 }
 
-export function warnIfRemovalsListed(count: number, plugin: object, kind: "mdast" | "hast"): void {
-  if (count === 0) return;
-  const name = (plugin as { name?: unknown }).name;
-  console.warn(
-    `satteri: plugin "${typeof name === "string" ? name : "<anonymous>"}" listed ${count} ` +
-      `${kind} node(s) it removed, and a removed node stays removed. Leave ` +
-      `${count === 1 ? "it" : "them"} out of the list, or do not remove a node you want to keep.`,
+/** Inserting a node next to or into itself would leave it in two places. */
+export function selfInsertError(method: string): Error {
+  return new Error(
+    `${method}: a node cannot be inserted next to or into itself. Pass structuredClone(node) to insert a copy.`,
+  );
+}
+
+/** The wrapper becomes a new parent, so an existing node would end up in two places. */
+export function existingWrapperError(): Error {
+  return new Error(
+    "wrapNode: the wrapper must be a new node, not one from the tree. Pass structuredClone(node) to wrap in a copy of an existing one.",
   );
 }
 
