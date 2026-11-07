@@ -74,6 +74,7 @@ import { materializeHastTree } from "./hast/hast-materializer.js";
 import { HastReader } from "./hast/hast-reader.js";
 import { materializeMdastTree } from "./mdast/mdast-materializer.js";
 import { MdastReader } from "./mdast/mdast-reader.js";
+import { withPluginErrors } from "./visitor-shared.js";
 import { normalizePlugins } from "./plugin.js";
 import type { HastNode, SourceFormat } from "./types.js";
 
@@ -133,10 +134,8 @@ export function markdownToHtml(
       const finishMdast = (r: MdastPipelineResult): MarkdownToHtmlResult => {
         try {
           const commands = r.pendingCommands ?? EMPTY_COMMAND_BUFFER;
-          const { html, frontmatter, droppedTransforms } = applyMdastCommandsAndConvertAndRender(
-            r.handle,
-            commands,
-            nativeConvertOptions,
+          const { html, frontmatter, droppedTransforms } = withPluginErrors(r.lastPlugin, () =>
+            applyMdastCommandsAndConvertAndRender(r.handle, commands, nativeConvertOptions),
           );
           warnIfDroppedTransforms(droppedTransforms, r.lastPlugin, "mdast");
           return {
@@ -209,7 +208,9 @@ export function markdownToHtml(
     try {
       let html: string;
       if (collected.commands.length > 0) {
-        const transformed = applyCommandsAndRenderHandle(h, collected.commands);
+        const transformed = withPluginErrors(collected.lastPlugin, () =>
+          applyCommandsAndRenderHandle(h, collected.commands),
+        );
         warnIfDroppedTransforms(transformed.droppedTransforms, collected.lastPlugin, "hast");
         html = transformed.html;
       } else {
@@ -322,11 +323,13 @@ function toJsImpl(
       const finishMdast = (r: MdastPipelineResult): MdxToJsResult => {
         try {
           const commands = r.pendingCommands ?? EMPTY_COMMAND_BUFFER;
-          const { code, frontmatter, droppedTransforms } = applyMdastCommandsAndConvertAndCompile(
-            r.handle,
-            commands,
-            mdxOptions,
-            nativeConvertOptions,
+          const { code, frontmatter, droppedTransforms } = withPluginErrors(r.lastPlugin, () =>
+            applyMdastCommandsAndConvertAndCompile(
+              r.handle,
+              commands,
+              mdxOptions,
+              nativeConvertOptions,
+            ),
           );
           warnIfDroppedTransforms(droppedTransforms, r.lastPlugin, "mdast");
           return {
@@ -397,7 +400,9 @@ function toJsImpl(
     try {
       let code: string;
       if (collected.commands.length > 0) {
-        const transformed = applyCommandsAndCompileHandle(h, collected.commands, mdxOptions);
+        const transformed = withPluginErrors(collected.lastPlugin, () =>
+          applyCommandsAndCompileHandle(h, collected.commands, mdxOptions),
+        );
         warnIfDroppedTransforms(transformed.droppedTransforms, collected.lastPlugin, "hast");
         code = transformed.code;
       } else {
@@ -460,7 +465,9 @@ function applyCollectedHastCommands(
 ): HastNode {
   if (collected.commands.length > 0) {
     try {
-      const dropped = applyCommandsToHandle(handle, collected.commands);
+      const dropped = withPluginErrors(collected.lastPlugin, () =>
+        applyCommandsToHandle(handle, collected.commands),
+      );
       warnIfDroppedTransforms(dropped, collected.lastPlugin, "hast");
     } catch (err) {
       releaseHandle(handle, invalidateStubs);

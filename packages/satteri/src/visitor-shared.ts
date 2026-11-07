@@ -104,6 +104,20 @@ export function insertIndex(index: number, length: number): number {
   return at < 0 ? Math.max(length + at, 0) : Math.min(at, length);
 }
 
+const COMMAND_ERROR = "command error: ";
+
+/** Runs the apply of one plugin's queued edits, naming that plugin in place of the native error's prefix. */
+export function withPluginErrors<T>(plugin: object | null | undefined, apply: () => T): T {
+  try {
+    return apply();
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith(COMMAND_ERROR)) throw error;
+    const name = (plugin as { name?: unknown } | null | undefined)?.name;
+    const label = `satteri: plugin "${typeof name === "string" ? name : "<anonymous>"}"`;
+    throw new Error(`${label}: ${error.message.slice(COMMAND_ERROR.length)}`, { cause: error });
+  }
+}
+
 export function unencodableContentError(content: unknown): Error {
   const type = (content as { type?: unknown } | null)?.type;
   return new Error(

@@ -57,6 +57,7 @@ import { LazyChildResolver, markHandleMutated } from "../lazy-child-resolver.js"
 import {
   asArray,
   insertIndex,
+  withPluginErrors,
   collectCommands,
   FOREIGN_REF,
   foreignContentError,
@@ -926,15 +927,19 @@ export function visitHastHandle(
     diagnostics,
   );
   if (result instanceof Promise) {
-    return result.then((commands) => applyCollectedCommands(handle, commands));
+    return result.then((commands) => applyCollectedCommands(handle, commands, plugin));
   }
-  return applyCollectedCommands(handle, result);
+  return applyCollectedCommands(handle, result, plugin);
 }
 
-function applyCollectedCommands(handle: HastHandle, commands: Uint8Array): number {
+function applyCollectedCommands(
+  handle: HastHandle,
+  commands: Uint8Array,
+  plugin: HastVisitorInstance,
+): number {
   if (commands.length === 0) return 0;
   markHandleMutated(handle);
-  return applyCommandsToHandle(handle, commands);
+  return withPluginErrors(plugin, () => applyCommandsToHandle(handle, commands));
 }
 
 // Collect the last plugin’s commands so the caller can fuse their apply with rendering or compilation.
@@ -1052,7 +1057,7 @@ export function visitHastHook(
     diagnostics,
   );
   if (result instanceof Promise) {
-    return result.then((commands) => applyCollectedCommands(handle, commands));
+    return result.then((commands) => applyCollectedCommands(handle, commands, plugin));
   }
-  return applyCollectedCommands(handle, result);
+  return applyCollectedCommands(handle, result, plugin);
 }
