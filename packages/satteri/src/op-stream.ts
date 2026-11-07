@@ -5,7 +5,6 @@ import {
   OP_OPEN,
   OP_CLOSE,
   OP_REF,
-  OP_RELIST_REF,
   OP_KEEP_CHILDREN,
   OP_STR,
   OP_U8,
@@ -115,12 +114,6 @@ export class OpWriter extends ByteWriter {
   ref(id: number): void {
     this.ensure(5);
     this.buf[this.n++] = OP_REF;
-    this.writeU32(id);
-  }
-
-  relistRef(id: number): void {
-    this.ensure(5);
-    this.buf[this.n++] = OP_RELIST_REF;
     this.writeU32(id);
   }
 

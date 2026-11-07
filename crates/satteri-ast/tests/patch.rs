@@ -5,8 +5,7 @@ use satteri_ast::commands::CommandError;
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::patch::{
-    Patch, PatchContent, REF_KIND_RELIST, REF_KIND_SLOT, REF_NODE_TYPE, apply_patches_in_place,
-    apply_patches_strict,
+    Patch, PatchContent, REF_KIND_SLOT, REF_NODE_TYPE, apply_patches_in_place, apply_patches_strict,
 };
 
 /// Compare the reachable trees of two arenas: shapes, positions, node_data.
@@ -1787,17 +1786,6 @@ fn ref_payload_mdast(target: u32) -> Arena<Mdast> {
     b.finish()
 }
 
-/// A ref the JS side writes for a node the plugin removed and lists again.
-fn relist_payload_mdast(target: u32) -> Arena<Mdast> {
-    let mut b = ArenaBuilder::<Mdast>::new(String::new());
-    b.open_node(REF_NODE_TYPE);
-    let mut td = target.to_le_bytes().to_vec();
-    td.push(REF_KIND_RELIST);
-    b.set_data_current(&td);
-    b.close_node();
-    b.finish()
-}
-
 fn root_with_ref(target: u32, prefix: Option<MdastNodeType>) -> Arena<Mdast> {
     let mut b = ArenaBuilder::<Mdast>::new(String::new());
     b.open_node(MdastNodeType::Root as u8);
@@ -2998,36 +2986,6 @@ fn unwrapping_a_node_keeps_the_sibling_inserts_on_its_children() {
 }
 
 #[test]
-fn a_child_moved_out_of_a_replaced_parent_lands_once() {
-    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
-    let mut arena = orig.clone();
-    let dropped = apply_patches_in_place(
-        &mut arena,
-        &[
-            Patch::Replace {
-                node_id: quote,
-                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[p1, p2])),
-                keep_children: false,
-            },
-            Patch::InsertAfter {
-                node_id: quote,
-                new_tree: PatchContent::Tree(relist_payload_mdast(p1)),
-            },
-            Patch::Remove { node_id: p1 },
-        ],
-    )
-    .expect("apply failed");
-
-    assert!(dropped.is_empty(), "nothing queued was lost: {dropped:?}");
-    let kids = arena.get_children(0).to_vec();
-    assert_eq!(kids.len(), 2);
-    assert_eq!(arena.get_children(kids[0]), &[p2]);
-    assert_eq!(kids[1], p1);
-    assert_children_point_back(&arena, 0);
-    assert_children_point_back(&arena, kids[0]);
-}
-
-#[test]
 fn an_insert_beside_a_child_moved_out_of_a_replaced_root_comes_along() {
     let orig = build_hello_world();
     let heading = orig.get_children(0)[0];
@@ -3099,116 +3057,103 @@ fn node_with_kind_refs(node_type: MdastNodeType, targets: &[u32], kind: u8) -> A
     b.finish()
 }
 
-/// `[Remove, patch]` or `[patch, Remove]`: the order a plugin queued them in must not matter.
-fn with_removal_in_both_orders(
-    removed: u32,
-    patch: impl Fn() -> Patch<Mdast>,
-) -> [Vec<Patch<Mdast>>; 2] {
-    [
-        vec![Patch::Remove { node_id: removed }, patch()],
-        vec![patch(), Patch::Remove { node_id: removed }],
-    ]
-}
+/// Patches that list `p1` again for `(quote, p1, p2)`.
+type ListingOf<K> = fn(u32, u32, u32) -> Vec<Patch<K>>;
 
 #[test]
-fn a_removed_child_its_parent_relists_is_put_back_with_its_edits() {
+fn a_removed_child_its_rebuilt_parent_lists_again_stays_removed() {
     let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
-    let relisting_quote = || Patch::Replace {
-        node_id: quote,
-        new_tree: PatchContent::Tree(node_with_kind_refs(
-            MdastNodeType::Blockquote,
-            &[p2, p1],
-            REF_KIND_RELIST,
-        )),
-        keep_children: false,
-    };
-    for mut patches in with_removal_in_both_orders(p1, relisting_quote) {
-        patches.push(Patch::InsertAfter {
-            node_id: p1,
-            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
-        });
-        let mut arena = orig.clone();
-        let dropped = apply_patches_in_place(&mut arena, &patches).expect("apply failed");
-
-        assert!(dropped.is_empty(), "nothing queued was lost: {dropped:?}");
-        let new_quote = arena.get_children(0)[0];
-        assert_eq!(
-            child_types(&arena, new_quote),
+    let listings: [ListingOf<Mdast>; 5] = [
+        |quote, p1, p2| {
+            vec![Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[p1, p2])),
+                keep_children: false,
+            }]
+        },
+        |quote, p1, p2| {
+            vec![Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(node_with_kind_refs(
+                    MdastNodeType::Blockquote,
+                    &[p1, p2],
+                    REF_KIND_SLOT,
+                )),
+                keep_children: false,
+            }]
+        },
+        |quote, p1, p2| {
+            vec![Patch::Replace {
+                node_id: quote,
+                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[p2, p1])),
+                keep_children: false,
+            }]
+        },
+        |quote, p1, p2| {
+            vec![Patch::SetChildren {
+                node_id: quote,
+                new_children: PatchContent::Tree(node_with_refs(MdastNodeType::Root, &[p2, p1])),
+            }]
+        },
+        |quote, p1, p2| {
             vec![
-                MdastNodeType::Paragraph as u8,
-                MdastNodeType::Paragraph as u8,
-                MdastNodeType::ThematicBreak as u8,
+                Patch::Replace {
+                    node_id: quote,
+                    new_tree: PatchContent::Tree(node_with_refs(
+                        MdastNodeType::Blockquote,
+                        &[p1, p2],
+                    )),
+                    keep_children: false,
+                },
+                Patch::InsertAfter {
+                    node_id: quote,
+                    new_tree: PatchContent::Tree(ref_payload_mdast(p1)),
+                },
             ]
-        );
-        assert_eq!(&arena.get_children(new_quote)[..2], &[p2, p1]);
-        assert_children_point_back(&arena, new_quote);
-    }
-}
-
-#[test]
-fn a_removed_root_child_the_root_relists_is_put_back() {
-    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
-    let relisting_root = || Patch::Replace {
-        node_id: 0,
-        new_tree: PatchContent::Tree(node_with_kind_refs(
-            MdastNodeType::Root,
-            &[quote],
-            REF_KIND_RELIST,
-        )),
-        keep_children: false,
-    };
-    for patches in with_removal_in_both_orders(quote, relisting_root) {
-        let mut arena = orig.clone();
-        apply_patches_strict(&mut arena, &patches).expect("apply failed");
-
-        assert_eq!(arena.get_children(0), &[quote]);
-        assert_eq!(arena.get_children(quote), &[p1, p2]);
-        assert_children_point_back(&arena, 0);
-    }
-}
-
-#[test]
-fn a_removed_child_relisted_through_set_children_is_put_back() {
-    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
-    let relisting_children = || Patch::SetChildren {
-        node_id: quote,
-        new_children: PatchContent::Tree(node_with_kind_refs(
-            MdastNodeType::Root,
-            &[p2, p1],
-            REF_KIND_RELIST,
-        )),
-    };
-    for patches in with_removal_in_both_orders(p1, relisting_children) {
-        let mut arena = orig.clone();
-        apply_patches_strict(&mut arena, &patches).expect("apply failed");
-
-        assert_eq!(arena.get_children(quote), &[p2, p1]);
-        assert_children_point_back(&arena, quote);
-    }
-}
-
-#[test]
-fn a_removed_child_handed_back_without_relisting_stays_removed() {
-    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
-    for kind in [None, Some(REF_KIND_SLOT)] {
-        let handing_back = || Patch::Replace {
-            node_id: quote,
-            new_tree: PatchContent::Tree(match kind {
-                Some(kind) => node_with_kind_refs(MdastNodeType::Blockquote, &[p1, p2], kind),
-                None => node_with_refs(MdastNodeType::Blockquote, &[p1, p2]),
-            }),
-            keep_children: false,
-        };
-        for patches in with_removal_in_both_orders(p1, handing_back) {
+        },
+    ];
+    for (case, listing) in listings.iter().enumerate() {
+        for remove_first in [true, false] {
+            let mut patches = listing(quote, p1, p2);
+            let removal = Patch::Remove { node_id: p1 };
+            if remove_first {
+                patches.insert(0, removal);
+            } else {
+                patches.push(removal);
+            }
+            let mut strict = orig.clone();
+            apply_patches_strict(&mut strict, &patches).expect("apply failed");
             let mut arena = orig.clone();
-            apply_patches_strict(&mut arena, &patches).expect("apply failed");
+            let dropped = apply_patches_in_place(&mut arena, &patches).expect("apply failed");
 
-            let new_quote = arena.get_children(0)[0];
-            assert_eq!(arena.get_children(new_quote), &[p2], "ref kind {kind:?}");
+            assert!(dropped.is_empty(), "case {case}: {dropped:?}");
+            let kids = arena.get_children(0);
+            assert_eq!(kids.len(), 1, "case {case}, remove first: {remove_first}");
+            assert_eq!(arena.get_children(kids[0]), &[p2], "case {case}");
+            assert_eq!(strict.get_children(0).len(), 1, "case {case}");
         }
     }
 }
 
+#[test]
+fn a_removed_root_child_the_root_lists_again_stays_removed() {
+    let (orig, quote, _) = build_quote_of_two_paragraphs();
+    let mut arena = orig.clone();
+    apply_patches_strict(
+        &mut arena,
+        &[
+            Patch::Remove { node_id: quote },
+            Patch::Replace {
+                node_id: 0,
+                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Root, &[quote])),
+                keep_children: false,
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    assert!(arena.get_children(0).is_empty());
+}
 #[test]
 fn a_grandchild_moved_out_of_a_discarded_parent_keeps_its_new_parent_and_inserts() {
     let (orig, quote, [item, _]) = build_quote_of_a_list_of_two_items();
@@ -3287,82 +3232,33 @@ fn an_insert_beside_a_child_moved_out_of_a_removed_parent_comes_along_on_both_sp
 }
 
 #[test]
-fn a_removed_grandchild_listed_elsewhere_takes_its_inserts_along() {
+fn strict_apply_rejects_an_insert_beside_a_removed_grandchild_its_removed_grandparent_lists() {
     let (orig, quote, [item, _]) = build_quote_of_a_list_of_two_items();
-    for strict in [false, true] {
-        let mut arena = orig.clone();
-        let patches = [
-            Patch::Remove { node_id: quote },
-            Patch::Remove { node_id: item },
-            Patch::InsertAfter {
-                node_id: quote,
-                new_tree: PatchContent::Tree(relist_payload_mdast(item)),
-            },
-            Patch::InsertAfter {
-                node_id: item,
-                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
-            },
-        ];
-        let dropped = if strict {
-            apply_patches_strict(&mut arena, &patches).map(|()| Vec::new())
-        } else {
-            apply_patches_in_place(&mut arena, &patches)
-        }
-        .expect("apply failed");
-
-        assert!(dropped.is_empty(), "strict: {strict}: {dropped:?}");
-        assert_eq!(arena.get_children(0)[0], item);
-        assert_eq!(
-            child_types(&arena, 0),
-            vec![
-                MdastNodeType::ListItem as u8,
-                MdastNodeType::ThematicBreak as u8
-            ]
-        );
-        assert_children_point_back(&arena, 0);
-    }
-}
-
-#[test]
-fn a_relisted_child_moved_out_of_its_replaced_parent_takes_its_inserts_along() {
-    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
+    let patches = [
+        Patch::Remove { node_id: quote },
+        Patch::Remove { node_id: item },
+        Patch::InsertAfter {
+            node_id: quote,
+            new_tree: PatchContent::Tree(ref_payload_mdast(item)),
+        },
+        Patch::InsertAfter {
+            node_id: item,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+        },
+    ];
     let mut arena = orig.clone();
-    let dropped = apply_patches_in_place(
-        &mut arena,
-        &[
-            Patch::Replace {
-                node_id: quote,
-                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[p1, p2])),
-                keep_children: false,
-            },
-            Patch::InsertBefore {
-                node_id: p1,
-                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Html)),
-            },
-            Patch::InsertAfter {
-                node_id: quote,
-                new_tree: PatchContent::Tree(relist_payload_mdast(p1)),
-            },
-            Patch::Remove { node_id: p1 },
-        ],
-    )
-    .expect("apply failed");
+    let dropped = apply_patches_in_place(&mut arena, &patches).expect("apply failed");
+    assert!(arena.get_children(0).is_empty());
+    assert_eq!(dropped, vec![item]);
 
-    assert!(dropped.is_empty(), "nothing queued was lost: {dropped:?}");
-    let kids = arena.get_children(0).to_vec();
-    assert_eq!(
-        child_types(&arena, 0),
-        vec![
-            MdastNodeType::Blockquote as u8,
-            MdastNodeType::Html as u8,
-            MdastNodeType::Paragraph as u8,
-        ]
-    );
-    assert_eq!(arena.get_children(kids[0]), &[p2]);
-    assert_eq!(kids[2], p1);
-    assert_children_point_back(&arena, 0);
+    let mut arena = orig.clone();
+    match apply_patches_strict(&mut arena, &patches).unwrap_err() {
+        CommandError::PatchOnRemovedSubtree(id) => assert_eq!(id, item),
+        other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
+    }
+    assert_eq!(arena.len(), orig.len());
+    assert_eq!(arena.get_children(0), &[quote]);
 }
-
 #[test]
 fn a_single_grafted_child_handed_back_keeps_its_sibling_inserts() {
     let (orig, quote, [_, p2]) = build_quote_of_two_paragraphs();
@@ -3431,37 +3327,7 @@ fn a_grandchild_removed_after_its_grandparent_lists_it_stays_removed() {
 }
 
 #[test]
-fn a_relisted_child_keeps_a_child_edit_queued_on_it() {
-    let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
-    let mut arena = orig.clone();
-    apply_patches_strict(
-        &mut arena,
-        &[
-            Patch::Remove { node_id: p1 },
-            Patch::Replace {
-                node_id: quote,
-                new_tree: PatchContent::Tree(node_with_kind_refs(
-                    MdastNodeType::Blockquote,
-                    &[p2, p1],
-                    REF_KIND_RELIST,
-                )),
-                keep_children: false,
-            },
-            Patch::AppendChild {
-                node_id: p1,
-                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Text)),
-            },
-        ],
-    )
-    .expect("apply failed");
-
-    let new_quote = arena.get_children(0)[0];
-    assert_eq!(arena.get_children(new_quote), &[p2, p1]);
-    assert_eq!(child_types(&arena, p1), vec![MdastNodeType::Text as u8]);
-}
-
-#[test]
-fn a_children_list_on_a_node_that_is_replaced_does_not_relist() {
+fn a_children_list_on_a_node_that_is_replaced_keeps_a_removal() {
     let (orig, quote, [p1, p2]) = build_quote_of_two_paragraphs();
     let mut arena = orig.clone();
     apply_patches_strict(
@@ -3470,11 +3336,7 @@ fn a_children_list_on_a_node_that_is_replaced_does_not_relist() {
             Patch::Remove { node_id: p1 },
             Patch::SetChildren {
                 node_id: quote,
-                new_children: PatchContent::Tree(node_with_kind_refs(
-                    MdastNodeType::Root,
-                    &[p2, p1],
-                    REF_KIND_RELIST,
-                )),
+                new_children: PatchContent::Tree(node_with_refs(MdastNodeType::Root, &[p2, p1])),
             },
             Patch::Replace {
                 node_id: quote,
