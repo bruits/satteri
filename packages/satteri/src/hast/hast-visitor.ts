@@ -783,6 +783,7 @@ function applyHastVisitResult(
   returnBuffer: CommandBuffer,
   originalNode: HastNode,
   refs: NodeRefs,
+  removals?: RemovalTracker<HastNode>,
 ): void {
   if (result == null) return;
   if (result === originalNode) return;
@@ -790,6 +791,7 @@ function applyHastVisitResult(
     returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
     return;
   }
+  removals?.rebuilt(nodeId, result);
   emitHastTree(returnBuffer, "replace", nodeId, result, refs, true);
 }
 
@@ -836,15 +838,10 @@ function dispatchMatches(
     const result = sub.visitFn(node, ctx);
     if (result instanceof Promise) {
       deferred ??= [];
-      // Checked on settling, against the removals made by then.
-      const promise = result.then((settled) => {
-        removals.rebuilt(nodeId, settled);
-        return settled;
-      });
+      const promise = removals.rebuiltOnSettling(nodeId, result);
       deferred.push({ nodeId, promise, originalNode: node });
     } else if (result !== undefined) {
-      removals.rebuilt(nodeId, result);
-      applyHastVisitResult(result, nodeId, returnBuffer, node, resolver.refs);
+      applyHastVisitResult(result, nodeId, returnBuffer, node, resolver.refs, removals);
     }
   }
 
@@ -921,6 +918,7 @@ export function visitHastHandleCollect(
     return Promise.all(deferred.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < deferred.length; i++) {
         const { nodeId, originalNode } = deferred[i]!;
+        // Checked for listed removals when it settled, against the removals made by then.
         applyHastVisitResult(results[i], nodeId, returnBuffer, originalNode, resolver.refs);
       }
       return finishHastVisit(ctx, returnBuffer, plugin);

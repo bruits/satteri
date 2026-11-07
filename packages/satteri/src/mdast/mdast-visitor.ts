@@ -947,6 +947,7 @@ function applyMdastVisitResult(
   returnBuffer: CommandBuffer,
   refs: NodeRefs,
   originalNode?: MdastNode,
+  removals?: RemovalTracker<MdastNode>,
 ): void {
   if (result === undefined || result === null) return;
   if (result === originalNode) return;
@@ -964,6 +965,7 @@ function applyMdastVisitResult(
         returnBuffer.setProperty(nodeId, "value", node.value);
         break;
       }
+      removals?.rebuilt(nodeId, node);
       emitMdastTree(returnBuffer, "replace", nodeId, node as MdastContent, true, refs, true);
       break;
     }
@@ -1028,15 +1030,10 @@ export function visitMdastHandle(
 
     if (result instanceof Promise) {
       deferred ??= [];
-      // Checked on settling, against the removals made by then.
-      const promise = result.then((settled) => {
-        removals.rebuilt(nodeId, settled);
-        return settled;
-      });
+      const promise = removals.rebuiltOnSettling(nodeId, result);
       deferred.push({ nodeId, promise, originalNode: node });
     } else if (result !== undefined) {
-      removals.rebuilt(nodeId, result);
-      applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, node);
+      applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, node, removals);
     }
   }
 
@@ -1045,6 +1042,7 @@ export function visitMdastHandle(
     return Promise.all(visits.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < visits.length; i++) {
         const { nodeId, originalNode } = visits[i]!;
+        // Checked for listed removals when it settled, against the removals made by then.
         applyMdastVisitResult(results[i], nodeId, returnBuffer, resolver.refs, originalNode);
       }
       return finalizeMdastVisit(context, returnBuffer, plugin);

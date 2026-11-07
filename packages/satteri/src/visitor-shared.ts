@@ -152,6 +152,14 @@ export class RemovalTracker<TNode> {
     if (this.#removed !== undefined) this.#collect(this.#removed, targetId, content);
   }
 
+  /** Checks an async visitor's result on settling, against the removals made by then. */
+  rebuiltOnSettling<T>(targetId: number, result: Promise<T>): Promise<T> {
+    return result.then((settled) => {
+      this.rebuilt(targetId, settled);
+      return settled;
+    });
+  }
+
   listedCount(): number {
     const removed = this.#removed;
     if (removed === undefined) return 0;
