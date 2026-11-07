@@ -740,9 +740,13 @@ test("hast: a removed child stays removed when its parent returns a spread copy"
   }
 });
 
-function removeMdastParagraphA(node: Paragraph, ctx: MdastVisitorContext) {
+function isParagraphA(node: Paragraph) {
   const [text] = node.children;
-  if (text?.type === "text" && text.value === "a") ctx.removeNode(node);
+  return text?.type === "text" && text.value === "a";
+}
+
+function removeMdastParagraphA(node: Paragraph, ctx: MdastVisitorContext) {
+  if (isParagraphA(node)) ctx.removeNode(node);
 }
 
 test("an async parent's new list does not undo a removal another visitor makes meanwhile", async () => {
@@ -1166,11 +1170,6 @@ test("hast: a removed child listed again stays removed and the plugin is warned"
     warn.mockRestore();
   }
 });
-
-function isParagraphA(node: Paragraph) {
-  const [text] = node.children;
-  return text?.type === "text" && text.value === "a";
-}
 
 test("removing a node without listing it again does not warn", () => {
   const passOn = relistAfterRemoving("pass-on-a-copy", (node) => asSection(node));
