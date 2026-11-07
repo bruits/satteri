@@ -45,6 +45,7 @@ export const CMD_SET_ATTRIBUTE = 0x0f;
 
 export const PAYLOAD_RAW = 0x10;
 export const PAYLOAD_OPSTREAM = 0x14;
+export const PAYLOAD_SEQUENCE = 0x15;
 
 export const RAW_LITERAL_BRACES = 0x01;
 

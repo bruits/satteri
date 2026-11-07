@@ -58,8 +58,11 @@ import {
   foreignContentError,
   makeRequireNid,
   requireRootReplacement,
+  RemovalTracker,
+  existingWrapperError,
   ROOT_NODE_ID,
   rootReplacementError,
+  selfInsertError,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
@@ -394,6 +397,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
   readonly #refs: NodeRefs;
+  readonly removals: RemovalTracker<HastNode>;
   readonly fileURL: URL | undefined;
   readonly data: Data;
   readonly sourceFormat: SourceFormat;
@@ -412,6 +416,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.fileURL = fileURL;
     this.#resolver = resolver;
     this.#refs = resolver.refs;
+    this.removals = new RemovalTracker(getNodeId, resolver.refs, resolver);
     this.data = data;
     this.sourceFormat = sourceFormat;
     this.#diagnostics = diagnostics;
@@ -427,6 +432,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     const id = requireNid(node, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
+    this.removals.removed(id);
   }
 
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
@@ -443,42 +449,43 @@ class HastVisitorContextImpl implements HastVisitorContext {
     ) {
       return;
     }
-    if (Array.isArray(newNode)) {
-      if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
-      // One command, so the node's replacement is its whole slot and a ref back
-      // to it resolves to all of it rather than to the last element.
-      if (id !== ROOT_NODE_ID && newNode.length > 1) {
-        emitHastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
-        this.#pendingNodes.delete(id);
+    this.removals.rebuilt(id, newNode);
+    if (onlyReplacement === undefined) {
+      const nodes = asArray(newNode);
+      if (nodes.length === 0) {
+        this.removeNode(node);
         return;
       }
-      let previous: HastContent | undefined;
-      for (const n of newNode) {
-        if (previous !== undefined)
-          emitHastTree(this.#commandBuffer, "insertBefore", id, previous, this.#refs);
-        previous = n;
-      }
-      if (previous === undefined) {
-        this.removeNode(node);
-      } else if (id === ROOT_NODE_ID) {
-        emitHastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
-      } else {
-        emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs, true);
-      }
-      if (previous === undefined) this.#pendingNodes.delete(id);
-      else this.#pendingNodes.set(id, previous);
+      if (id === ROOT_NODE_ID) throw rootReplacementError(nodes);
+      // One command, so the node's replacement is its whole slot and a ref back
+      // to it resolves to all of it rather than to the last element.
+      emitHastMultiReplace(this.#commandBuffer, id, nodes, this.#refs);
+      this.#pendingNodes.delete(id);
       return;
     }
     if (id === ROOT_NODE_ID) {
-      emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
-      return;
+      emitHastRootReplace(this.#commandBuffer, requireRootReplacement(onlyReplacement), this.#refs);
+    } else {
+      emitHastTree(this.#commandBuffer, "replace", id, onlyReplacement, this.#refs, true);
     }
-    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs, true);
-    this.#pendingNodes.set(id, newNode);
+    this.#pendingNodes.set(id, onlyReplacement);
+  }
+
+  /** A queued replacement of new content takes later field edits; a node from the tree takes them as it is. */
+  #foldablePending(id: number): HastNode | undefined {
+    const pending = this.#pendingNodes.get(id);
+    return pending !== undefined && getNodeId(pending, this.#refs) === undefined
+      ? pending
+      : undefined;
   }
 
   #splice(anchorId: number, content: HastContent | HastContent[], op: StructuralOp): void {
-    for (const n of asArray(content)) {
+    const nodes = asArray(content);
+    for (const n of nodes) {
+      if (getNodeId(n, this.#refs) === anchorId) throw selfInsertError(op);
+    }
+    this.removals.inserted(anchorId, content);
+    for (const n of nodes) {
       emitHastTree(this.#commandBuffer, op, anchorId, n, this.#refs, true);
     }
   }
@@ -504,6 +511,10 @@ class HastVisitorContextImpl implements HastVisitorContext {
       return;
     }
     assertHastWrapParent(parentNode as HastContent);
+    const wrapperId = getNodeId(parentNode as HastNode, this.#refs);
+    if (wrapperId === FOREIGN_REF) throw foreignContentError();
+    if (wrapperId !== undefined) throw existingWrapperError();
+    this.removals.inserted(id, parentNode);
     emitHastTree(this.#commandBuffer, "wrapNode", id, parentNode as HastContent, this.#refs);
   }
 
@@ -534,12 +545,14 @@ class HastVisitorContextImpl implements HastVisitorContext {
   setProperty(node: HastNode, key: string, value: unknown): void {
     const id = requireNid(node, "setProperty", this.#refs);
     if (key === "children") {
+      this.removals.rebuilt(id, value);
       if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
       return;
     }
     if (key === "data") {
+      if (this.#foldPendingField(node, id, key, value)) return;
       this.#commandBuffer.setProperty(id, key, value != null ? JSON.stringify(value) : null);
       return;
     }
@@ -563,6 +576,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   setField(node: HastNode, key: string, value: unknown): void {
     const id = requireNid(node, "setField", this.#refs);
+    if (key === "children") this.removals.rebuilt(id, value);
     if (this.#foldPendingField(node, id, key, value)) return;
     if (key === "children") {
       if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
@@ -594,7 +608,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   /** A queued replacement would discard the field, so fold it into a fresh replacement. */
   #foldPendingField(node: HastNode, id: number, key: string, value: unknown): boolean {
-    const pending = this.#pendingNodes.get(id);
+    const pending = this.#foldablePending(id);
     if (pending === undefined) return false;
     this.replaceNode(node, { ...pending, [key]: value } as HastNode);
     return true;
@@ -602,7 +616,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   /** A queued replacement would discard the attribute, so fold it in instead. */
   #foldPendingJsxAttribute(node: HastNode, id: number, name: string, value: unknown): boolean {
-    const pending = this.#pendingNodes.get(id);
+    const pending = this.#foldablePending(id);
     if (pending?.type !== "mdxJsxFlowElement" && pending?.type !== "mdxJsxTextElement") {
       return false;
     }
@@ -785,6 +799,7 @@ function applyHastVisitResult(
   returnBuffer: CommandBuffer,
   originalNode: HastNode,
   refs: NodeRefs,
+  removals?: RemovalTracker<HastNode>,
 ): void {
   if (result == null) return;
   if (result === originalNode) return;
@@ -792,6 +807,7 @@ function applyHastVisitResult(
     returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
     return;
   }
+  removals?.rebuilt(nodeId, result);
   emitHastTree(returnBuffer, "replace", nodeId, result, refs, true);
 }
 
@@ -825,6 +841,7 @@ function dispatchMatches(
   let deferred:
     | { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[]
     | null = null;
+  const removals = ctx.removals;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -837,9 +854,10 @@ function dispatchMatches(
     const result = sub.visitFn(node, ctx);
     if (result instanceof Promise) {
       deferred ??= [];
-      deferred.push({ nodeId, promise: result, originalNode: node });
-    } else {
-      applyHastVisitResult(result, nodeId, returnBuffer, node, resolver.refs);
+      const promise = removals.rebuiltOnSettling(nodeId, result);
+      deferred.push({ nodeId, promise, originalNode: node });
+    } else if (result !== undefined) {
+      applyHastVisitResult(result, nodeId, returnBuffer, node, resolver.refs, removals);
     }
   }
 
@@ -916,12 +934,22 @@ export function visitHastHandleCollect(
     return Promise.all(deferred.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < deferred.length; i++) {
         const { nodeId, originalNode } = deferred[i]!;
+        // Checked for listed removals when it settled, against the removals made by then.
         applyHastVisitResult(results[i], nodeId, returnBuffer, originalNode, resolver.refs);
       }
-      return collectCommands(returnBuffer, ctx.getCommandBuffer());
+      return finishHastVisit(ctx, returnBuffer, plugin);
     });
   }
 
+  return finishHastVisit(ctx, returnBuffer, plugin);
+}
+
+function finishHastVisit(
+  ctx: HastVisitorContextImpl,
+  returnBuffer: CommandBuffer,
+  plugin: HastVisitorInstance,
+): Uint8Array {
+  ctx.removals.warn(plugin, "hast");
   return collectCommands(returnBuffer, ctx.getCommandBuffer());
 }
 
@@ -954,8 +982,7 @@ export function visitHastHookCollect(
   const returnBuffer = acquireCommandBuffer();
   const matchBuf = walkHandle(handle, HAST_ROOT_SUBS);
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
-  if (matchView.getUint32(0, true) === 0)
-    return collectCommands(returnBuffer, ctx.getCommandBuffer());
+  if (matchView.getUint32(0, true) === 0) return finishHastVisit(ctx, returnBuffer, plugin);
 
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
   const root = readMatchedNode(
@@ -967,8 +994,8 @@ export function visitHastHookCollect(
 
   const result = hook.call(plugin, root, ctx);
   if (result instanceof Promise)
-    return result.then(() => collectCommands(returnBuffer, ctx.getCommandBuffer()));
-  return collectCommands(returnBuffer, ctx.getCommandBuffer());
+    return result.then(() => finishHastVisit(ctx, returnBuffer, plugin));
+  return finishHastVisit(ctx, returnBuffer, plugin);
 }
 
 export function visitHastHook(

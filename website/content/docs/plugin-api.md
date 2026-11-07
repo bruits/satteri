@@ -382,7 +382,7 @@ defineHastPlugin({
 });
 ```
 
-Use `structuredClone(node)` for a deep, fully independent copy of the node and its subtree, or `{ ...node }` for a cheaper shallow copy when you only need this node's own fields. A shallow copy's `children` still contain references to the original tree. Nested references resolve with edits from the current pass; references from another document or an earlier pass cannot be inserted. Make a detached copy **during the original pass** if you need to reuse content later (an unread lazy node may no longer be readable after the tree changes).
+Use `structuredClone(node)` for a deep, fully independent copy of the node and its subtree, or `{ ...node }` for a cheaper shallow copy when you only need this node's own fields. A shallow copy's `children` are still the original nodes, so inserting the copy elsewhere moves them out of the original. Nested references resolve with edits from the current pass; references from another document, or an mdast node in a hast plugin, cannot be inserted. Make a detached copy **during the original pass** if you need to reuse content later (an unread lazy node may no longer be readable after the tree changes).
 
 To get a plain JavaScript tree of the whole document, use [`markdownToMdast` or `markdownToHast`](/docs/entry-points/#trees-without-compiling):
 
@@ -428,24 +428,28 @@ declare module "satteri" {
 
 ### Tree mutation
 
-| Method                                  | Effect                                                  |
-| --------------------------------------- | ------------------------------------------------------- |
-| `removeNode(node)`                      | Drop the node from its parent                           |
-| `replaceNode(node, newNode)`            | Swap the node for a different one, or for several       |
-| `insertBefore(node, newNode)`           | Insert a sibling before the node                        |
-| `insertAfter(node, newNode)`            | Insert a sibling after the node                         |
-| `wrapNode(node, parentNode)`            | Wrap the node in `parentNode` (becomes its first child) |
-| `prependChild(node, childNode)`         | Insert `childNode` as the first child of `node`         |
-| `appendChild(node, childNode)`          | Insert `childNode` as the last child of `node`          |
-| `insertChildAt(node, index, childNode)` | Insert `childNode` as the `index`-th child of `node`    |
-| `removeChildAt(node, index)`            | Remove the `index`-th child of `node`                   |
-| `setField(node, key, value)`            | Replace one field on the node itself                    |
-| `setAttribute(node, name, value)`       | Set one entry in the node's `attributes`                |
-| `setProperty(node, key, value)`         | Set one entry in a HAST element's `properties`          |
+| Method                                  | Effect                                                    |
+| --------------------------------------- | --------------------------------------------------------- |
+| `removeNode(node)`                      | Remove the node; nothing later in the pass brings it back |
+| `replaceNode(node, newNode)`            | Swap the node for a different one, or for several         |
+| `insertBefore(node, newNode)`           | Insert a sibling before the node                          |
+| `insertAfter(node, newNode)`            | Insert a sibling after the node                           |
+| `wrapNode(node, parentNode)`            | Wrap the node in `parentNode` (becomes its first child)   |
+| `prependChild(node, childNode)`         | Insert `childNode` as the first child of `node`           |
+| `appendChild(node, childNode)`          | Insert `childNode` as the last child of `node`            |
+| `insertChildAt(node, index, childNode)` | Insert `childNode` as the `index`-th child of `node`      |
+| `removeChildAt(node, index)`            | Remove the `index`-th child of `node`                     |
+| `setField(node, key, value)`            | Replace one field on the node itself                      |
+| `setAttribute(node, name, value)`       | Set one entry in the node's `attributes`                  |
+| `setProperty(node, key, value)`         | Set one entry in a HAST element's `properties`            |
+
+An existing node passed to an insert or a replacement moves there, and its old place loses it; pass `structuredClone(node)` to insert a copy instead.
 
 `wrapNode` places the wrapped node as `parentNode`'s **first** child. If `parentNode` declares its own children, they are kept after it. Wrapping a heading in a `<div>` that holds an anchor link yields `<div><h2>…</h2><a>…</a></div>`. To put the node at an arbitrary position instead, return a replacement from the visitor.
 
-`parentNode` must be a node type that can hold children — a HAST element, an MDX JSX element, an MDAST container like `blockquote`, or a [custom node](#custom-nodes) declaring a `children` array. Leaf nodes (`html`, `text`, …) and leaf-shaped custom nodes have no slot for the wrapped node, so `wrapNode` rejects them. A void HAST element (`img`, `br`, …) is rejected for the same reason: it renders as a lone tag, so its children would never reach the output.
+`wrapNode` wraps whatever ends up in the node's place: the node itself, or what replaced it. Calling it twice on one node nests the wrappers, the first one innermost. A removed node leaves nothing to wrap, so the wrap is dropped with a warning.
+
+`parentNode` must be a new node, not one read from the tree, so pass `structuredClone(node)` to wrap in a copy of an existing one. It must also be a node type that can hold children — a HAST element, an MDX JSX element, an MDAST container like `blockquote`, or a [custom node](#custom-nodes) declaring a `children` array. Leaf nodes (`html`, `text`, …) and leaf-shaped custom nodes have no slot for the wrapped node, so `wrapNode` rejects them. A void HAST element (`img`, `br`, …) is rejected for the same reason: it renders as a lone tag, so its children would never reach the output.
 
 `wrapNode` also takes the `{ raw }` string shape the other mutations take. The string is parsed at apply time and must yield exactly one wrapper: an HTML fragment holding one non-void element in a HAST plugin, one block that can hold children in an MDAST plugin. Its own children are kept after the wrapped node, and anything else (no block, several blocks, a leaf) fails the compile.
 
@@ -460,7 +464,7 @@ The deprecated `{ rawHtml }` still works and behaves like `{ raw, mdxExpressions
 ctx.replaceNode(node, [{ type: "html", value: "<div>" }, node, { type: "html", value: "</div>" }]);
 ```
 
-`replaceNode`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, and `insertChildAt` each accept either a single node or an array of nodes. An array is inserted in order at the target position, so `replaceNode(node, [a, b])` leaves `a` and `b` where `node` was. Passing `replaceNode` an empty array removes the node.
+`replaceNode`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, and `insertChildAt` each accept either a single node or an array of nodes. An array is inserted in order at the target position, so `replaceNode(node, [a, b])` leaves `a` and `b` where `node` was. Several inserts at the same position land in the order they were made. Passing `replaceNode` an empty array removes the node.
 
 The three setters address three different places, and which one you want depends on where the value lives rather than on which tree you are in.
 
@@ -522,8 +526,10 @@ To share state across visits within a document, close over a variable in the sur
 
 Each Sätteri plugin walks the tree **once** — there is no re-walking until the tree stops changing. Within that single pass:
 
-- **Reused nodes keep their identity.** A node read from the tree and handed back to a context method is that node, not a snapshot of it, wherever it appears. When a visitor returns a replacement that reuses the original children (e.g. `{ ...node, children: [...node.children] }`), those children are spliced back unchanged, so a transform queued on a nested one in the same pass still applies. This is what lets a single `containerDirective` visitor turn both an outer `:::note` and a nested `:::tip` into asides in one go. The same holds for a node passed on its own, to `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, `insertChildAt` or `replaceNode`, and for one a visitor returns: it arrives carrying every change the pass made to it. `wrapNode` is the exception: a node passed as the wrapper contributes its own fields as you read them, while its children still splice live. Pass `structuredClone(node)` when you want a detached copy frozen at the moment you read it.
+- **A node is in one place.** Naming a node read from the tree, in a context method or in a replacement a visitor returns, moves it there, carrying every change the pass made to it, and the place it came from loses it. When a visitor returns a replacement that keeps the original children (e.g. `{ ...node, children: [...node.children] }`), those children stay where they are, so a transform queued on a nested one in the same pass still applies. This is what lets a single `containerDirective` visitor turn both an outer `:::note` and a nested `:::tip` into asides in one go. To put a node somewhere new and keep it where it was, insert `structuredClone(node)`, a detached copy frozen at the moment you read it. Naming the same node in two places fails the compile.
 - **A plugin's own freshly-built nodes are not re-walked by that plugin.** A brand-new node a visitor returns isn't visited again by the same plugin. Produce its final shape directly, or hand it to a later plugin — every plugin runs over the fully materialized output of the ones before it. A `before` hook is the exception: it lands before the walk, so nodes it builds _are_ visited.
 - **Dropping a subtree drops the transforms queued inside it.** If one visitor removes or replaces a node while another queued a transform on something inside that subtree, the orphaned transform is dropped and a warning is logged. Usually that's intended; the warning catches the cases where it isn't.
+- **A removed node stays removed.** Once `removeNode` has removed a node, nothing in the same pass brings it back, whichever came first: not an insert that names it, not a replacement of it or of any other node, and not a `children` list. To move a node, insert it without calling `removeNode`. A warning is logged when a plugin inserts a node it also removes, or names one it had already removed in a replacement or `children` list; passing a parent's children on as they are, as `{ ...node }` does, doesn't count.
+- **An edit to a replaced node follows it.** Once a node is replaced by one node, passed to `replaceNode` or returned by a visitor, `setField`, `setAttribute`, `setProperty` and child edits (`prependChild`, `appendChild`, `insertChildAt`, a `children` list) on it apply to that node, whether they came before or after the replacement. A replacement that names the node itself, as `{ type: "blockquote", children: [node] }` does, keeps the node, so its edits and those inside it stay on it. An edit with nowhere to land, on a removed node or on one replaced by several nodes or raw content that leaves it out, is dropped with a warning.
 - **Nodes from another document throw.** Handing a context method a node kept from a previous compile — or an mdast node inside a hast plugin — fails the compile. Keep nodes around within a document freely; don't carry them across.
-- **A few contradictory combinations throw.** Replacing a node with new content that reuses that same node while another plugin edits something inside it in the same pass, two replacements that each reuse the other's node, and inserting a sibling next to the root. Two more come from reuse having no answer: passing content that contains the node you are inserting it next to, as `insertAfter(node, ctx.parent(node))` does, and two inserts that each name the other's node. These reference errors are reported when Sätteri applies the queued edits, after the visitor returns; catch them around the processing call, not around an individual context method. Reordering siblings runs into the second one, so hand the parent the order you want with `setProperty(parent, "children", [...])` rather than shuffling by pairwise inserts. Replacing, removing, or wrapping the root itself — say, via `ctx.parent()` on a top-level node — works fine.
+- **A few contradictory combinations throw.** Two replacements that each reuse the other's node, and inserting a sibling next to the root. Two more come from reuse having no answer: passing content that contains the node you are inserting it next to or into, as `insertAfter(node, ctx.parent(node))` does, and two inserts that each name the other's node. These reference errors are reported when Sätteri applies the queued edits, after the visitor returns; catch them around the processing call, not around an individual context method. Reordering siblings runs into the second one, so hand the parent the order you want with `setProperty(parent, "children", [...])` rather than shuffling by pairwise inserts. Replacing, removing, or wrapping the root itself — say, via `ctx.parent()` on a top-level node — works fine.

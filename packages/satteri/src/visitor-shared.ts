@@ -112,6 +112,167 @@ export type NodeRefs = WeakMap<object, number>;
 /** Separates "belongs to another tree" from "never had an id"; arena ids are never negative. */
 export const FOREIGN_REF = -1;
 
+interface ChildResolver {
+  parentIdOf(id: number): number | undefined;
+  indexInParent(id: number): number | undefined;
+  childIdsOf(id: number): readonly number[];
+}
+
+/** A pass's removals, to warn once it ends when a plugin listed a node it removed, which stays removed. */
+export class RemovalTracker<TNode> {
+  #removed: Set<number> | undefined;
+  #listed: Set<number> | undefined;
+  /** Anchor id, then content, per insert. */
+  #inserted: unknown[] | undefined;
+  /** The last whole-list verdict, shared by the rest of that run of children. */
+  #runSiblings: readonly unknown[] | undefined;
+  #runParent = 0;
+  #runStart = 0;
+  #runWhole = false;
+  readonly #nodeId: (node: TNode, refs: NodeRefs) => number | undefined;
+  readonly #refs: NodeRefs;
+  readonly #resolver: ChildResolver;
+
+  constructor(
+    nodeId: (node: TNode, refs: NodeRefs) => number | undefined,
+    refs: NodeRefs,
+    resolver: ChildResolver,
+  ) {
+    this.#nodeId = nodeId;
+    this.#refs = refs;
+    this.#resolver = resolver;
+  }
+
+  removed(id: number): void {
+    (this.#removed ??= new Set()).add(id);
+  }
+
+  /** An insert places what it names, so a removal of any of it wins whichever came first. */
+  inserted(anchorId: number, content: unknown): void {
+    (this.#inserted ??= []).push(anchorId, content);
+  }
+
+  /** A replacement or children list naming a node already removed cannot bring it back. */
+  rebuilt(targetId: number, content: unknown): void {
+    // Kept tiny so the common no-removal case inlines into every replacement.
+    if (this.#removed !== undefined) this.#collect(this.#removed, targetId, content);
+  }
+
+  /** Checks an async visitor's result on settling, against the removals made by then. */
+  rebuiltOnSettling<T>(targetId: number, result: Promise<T>): Promise<T> {
+    return result.then((settled) => {
+      this.rebuilt(targetId, settled);
+      return settled;
+    });
+  }
+
+  warn(plugin: object, kind: "mdast" | "hast"): void {
+    const removed = this.#removed;
+    const inserted = this.#inserted;
+    if (removed !== undefined && inserted !== undefined) {
+      for (let i = 0; i < inserted.length; i += 2) {
+        this.#collect(removed, inserted[i] as number, inserted[i + 1]);
+      }
+    }
+    const name = (plugin as { name?: unknown }).name;
+    const label = `satteri: plugin "${typeof name === "string" ? name : "<anonymous>"}"`;
+    const listed = this.#listed?.size ?? 0;
+    if (listed > 0) {
+      console.warn(
+        `${label} listed ${listed} ${kind} node(s) it also removed, and a removed node stays ` +
+          "removed. To move a node, insert it without calling removeNode.",
+      );
+    }
+  }
+
+  #collect(removed: ReadonlySet<number>, editedId: number, content: unknown): void {
+    this.#runSiblings = undefined;
+    const listed = (this.#listed ??= new Set());
+    const visit = (
+      node: unknown,
+      siblings: readonly unknown[] | undefined,
+      index: number,
+    ): void => {
+      if (node === null || typeof node !== "object") return;
+      const id = this.#nodeId(node as TNode, this.#refs);
+      if (id !== undefined) {
+        if (
+          id !== FOREIGN_REF &&
+          removed.has(id) &&
+          !this.#passesOnWholeList(id, editedId, siblings, index)
+        ) {
+          listed.add(id);
+        }
+        return;
+      }
+      const children = (node as { children?: unknown }).children;
+      if (Array.isArray(children)) children.forEach((child, i) => visit(child, children, i));
+    };
+    if (Array.isArray(content)) content.forEach((item, i) => visit(item, content, i));
+    else visit(content, undefined, 0);
+  }
+
+  /** Content for the edited node that holds a parent's original children whole and in order, as `{ ...node }` does, only passes a removed one on. */
+  #passesOnWholeList(
+    id: number,
+    editedId: number,
+    siblings: readonly unknown[] | undefined,
+    index: number,
+  ): boolean {
+    const parentId = this.#resolver.parentIdOf(id);
+    const ownIndex = this.#resolver.indexInParent(id);
+    if (siblings === undefined || parentId === undefined || ownIndex === undefined) return false;
+    if (parentId !== editedId && !this.#isInside(parentId, editedId)) return false;
+    const start = index - ownIndex;
+    if (
+      siblings === this.#runSiblings &&
+      parentId === this.#runParent &&
+      start === this.#runStart
+    ) {
+      return this.#runWhole;
+    }
+    const original = this.#resolver.childIdsOf(parentId);
+    const whole =
+      start >= 0 &&
+      start + original.length <= siblings.length &&
+      original.every((childId, i) => {
+        const sibling = siblings[start + i];
+        return (
+          sibling !== null &&
+          typeof sibling === "object" &&
+          this.#nodeId(sibling as TNode, this.#refs) === childId
+        );
+      });
+    this.#runSiblings = siblings;
+    this.#runParent = parentId;
+    this.#runStart = start;
+    this.#runWhole = whole;
+    return whole;
+  }
+
+  #isInside(id: number, ancestorId: number): boolean {
+    for (let cur = this.#resolver.parentIdOf(id); cur !== undefined; ) {
+      if (cur === ancestorId) return true;
+      cur = this.#resolver.parentIdOf(cur);
+    }
+    return false;
+  }
+}
+
+/** Inserting a node next to or into itself would leave it in two places. */
+export function selfInsertError(method: string): Error {
+  return new Error(
+    `${method}: a node cannot be inserted next to or into itself. Pass structuredClone(node) to insert a copy.`,
+  );
+}
+
+/** The wrapper becomes a new parent, so an existing node would end up in two places. */
+export function existingWrapperError(): Error {
+  return new Error(
+    "wrapNode: the wrapper must be a new node, not one from the tree. Pass structuredClone(node) to wrap in a copy of an existing one.",
+  );
+}
+
 export function foreignContentError(): Error {
   return new Error(
     "satteri: content contains a node from another tree or pass; use structuredClone(node) to insert a detached copy.",
