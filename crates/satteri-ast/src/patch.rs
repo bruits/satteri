@@ -20,9 +20,8 @@ pub const REF_NODE_TYPE: u8 = 0xFF;
 /// Fifth byte of a ref node's type_data: the ref names its target's position
 /// (whatever ends up spliced there) rather than the target node itself.
 ///
-/// A plain ref to one of a node's own children, in that node's `Replace` payload
-/// or in content inserted beside it once it is removed, is a slot ref too, and a
-/// removal of that child empties the position.
+/// A plain ref in a `Replace` payload to one of the replaced node's own children
+/// is a slot ref too, and a removal of that child empties the position.
 pub const REF_KIND_SLOT: u8 = 1;
 
 #[derive(Debug, Clone)]
@@ -885,12 +884,7 @@ fn apply_patches_impl<K: ArenaKind>(
                 continue;
             }
             // A replacement handing back the replaced node's own children passes their slots on, edits around them included.
-            let hands_back_children = match p {
-                Patch::Replace { .. } => true,
-                // Content placed beside a removed node is that node's replacement too.
-                Patch::InsertBefore { .. } | Patch::InsertAfter { .. } => plan.removed,
-                _ => false,
-            };
+            let hands_back_children = matches!(p, Patch::Replace { .. });
             let rebuilds_subtree = hands_back_children || matches!(p, Patch::SetChildren { .. });
             let mut ref_kind = |target: u32, td: &[u8]| {
                 // Own children are never `Gone`: a set-children list keeps each as the marker its pending splice swaps out.

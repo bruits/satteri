@@ -3244,6 +3244,31 @@ fn a_removal_beats_a_replacement_of_the_same_node() {
 }
 
 #[test]
+fn a_removed_child_inserted_beside_its_removed_parent_moves_there() {
+    let (orig, quote, [p1, _]) = build_quote_of_two_paragraphs();
+    for remove_first in [true, false] {
+        let mut patches = vec![
+            Patch::Remove { node_id: quote },
+            Patch::InsertBefore {
+                node_id: quote,
+                new_tree: PatchContent::Tree(ref_payload_mdast(p1)),
+            },
+        ];
+        let removal = Patch::Remove { node_id: p1 };
+        if remove_first {
+            patches.insert(0, removal);
+        } else {
+            patches.push(removal);
+        }
+        let mut arena = orig.clone();
+        apply_patches_strict(&mut arena, &patches).expect("apply failed");
+
+        assert_eq!(arena.get_children(0), &[p1], "remove first: {remove_first}");
+        assert_children_point_back(&arena, 0);
+    }
+}
+
+#[test]
 fn a_removed_root_child_the_root_lists_again_stays_removed() {
     let (orig, quote, _) = build_quote_of_two_paragraphs();
     let mut arena = orig.clone();
@@ -3340,7 +3365,7 @@ fn an_insert_beside_a_child_moved_out_of_a_removed_parent_comes_along_on_both_sp
 }
 
 #[test]
-fn strict_apply_rejects_an_insert_beside_a_removed_grandchild_its_removed_grandparent_lists() {
+fn a_removed_grandchild_inserted_beside_its_removed_grandparent_moves_without_its_inserts() {
     let (orig, quote, [item, _]) = build_quote_of_a_list_of_two_items();
     let patches = [
         Patch::Remove { node_id: quote },
@@ -3356,7 +3381,7 @@ fn strict_apply_rejects_an_insert_beside_a_removed_grandchild_its_removed_grandp
     ];
     let mut arena = orig.clone();
     let dropped = apply_patches_in_place(&mut arena, &patches).expect("apply failed");
-    assert!(arena.get_children(0).is_empty());
+    assert_eq!(arena.get_children(0), &[item]);
     assert_eq!(dropped, vec![item]);
 
     let mut arena = orig.clone();
