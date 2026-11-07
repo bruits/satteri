@@ -3753,35 +3753,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if !bytes.starts_with(b"[^") {
             return None;
         }
-        // GFM footnote labels can't be empty or contain whitespace.
-        // `[^a b]` and `[^]` fall through to the regular refdef path.
         let (mut i, label) =
-            scan_link_label_rest(&self.text[start + 2..], &|_| None, self.tree.is_in_table())?;
-        // GFM/micromark's labelInside rejects whitespace CHARACTER-BY-CHARACTER.
-        // Any space/tab/eol — including leading whitespace stripped by
-        // scan_link_label_rest's trim — invalidates the footnote definition
-        // (it falls through to a regular reference definition). Inspect the
-        // raw source bytes between `[^` and `]`, not the trimmed `label`.
-        let raw_label = &self.text.as_bytes()[start + 2..start + 2 + i.saturating_sub(1)];
-        if raw_label.is_empty()
-            || raw_label
-                .iter()
-                .any(|&b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
-        {
-            return None;
-        }
+            scan_footnote_definition_label(&self.text[start + 2..], self.tree.is_in_table())?;
         i += 2;
         if bytes.get(i) != Some(&b':') {
             return None;
         }
         i += 1;
         self.finish_list(start);
-        if let Some(node_ix) = self.tree.peek_up()
-            && let ItemBody::FootnoteDefinition(..) = self.tree[node_ix].item.body
-        {
-            // finish previous footnote if it's still open
-            self.pop(start);
-        }
         i += scan_space_or_tab(&bytes[i..]);
         self.allocs
             .footdefs
@@ -4408,12 +4387,22 @@ fn scan_paragraph_interrupt_no_table(
                 }))
         || (has_footnote
             && bytes.starts_with(b"[^")
-            && scan_link_label_rest(
+            && scan_footnote_definition_label(
                 core::str::from_utf8(&bytes[2..]).unwrap(),
-                &|_| None,
                 tree.is_in_table(),
             )
             .is_some_and(|(len, _)| bytes.get(2 + len) == Some(&b':')))
+}
+
+/// GFM rejects an empty footnote label or one holding whitespace, leaving `[^a b]:` a link reference definition.
+fn scan_footnote_definition_label(text: &str, in_table: bool) -> Option<(usize, CowStr<'_>)> {
+    let (len, label) = scan_link_label_rest(text, &|_| None, in_table)?;
+    let raw_label = &text.as_bytes()[..len - 1];
+    let valid = !raw_label.is_empty()
+        && !raw_label
+            .iter()
+            .any(|&b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'));
+    valid.then_some((len, label))
 }
 
 /// Return `true` if `pos` sits between two backtick runs of matching length
@@ -5535,9 +5524,11 @@ fn delim_run_flags(
     classify_delimiter_run(s, suffix, run_len, at - start, mode, options)
 }
 
-/// Only GFM strikethrough ever adds `~` to micromark's attention markers.
+/// An attention marker another construct registers, which lets a `*` run
+/// flank it without whitespace. `*` and `_` are plain punctuation here, as
+/// CommonMark's flanking rules say; GFM strikethrough's `~` is the only one.
 fn is_attention_marker(c: char, options: Options) -> bool {
-    c == '*' || c == '_' || (c == '~' && options.contains(Options::ENABLE_STRIKETHROUGH))
+    c == '~' && options.contains(Options::ENABLE_STRIKETHROUGH)
 }
 
 fn tilde_is_delimiter(options: Options) -> bool {

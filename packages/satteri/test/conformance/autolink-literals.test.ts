@@ -258,6 +258,9 @@ describe("unicode in and around the URL", () => {
     ["www.example.com—\n", ["http://www.example.com—"]],
     ["www.example.com\u{200b}\n", ["http://www.example.com\u{200b}"]],
     ["www.example.com\u{a0}x\n", ["http://www.example.com"]],
+    ["www.—_→_\n", ["http://www.—_→"]],
+    ["https://a.b→_c_\n", ["https://a.b→_c"]],
+    ["http://—x\n", []],
   ])("%j", conforms);
 });
 

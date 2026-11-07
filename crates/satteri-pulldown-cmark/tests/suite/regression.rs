@@ -3684,3 +3684,82 @@ next line</p>
 
     test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
 }
+
+#[test]
+fn regression_test_214() {
+    let original = r##"*_*a
+
+**_**a
+
+*\**3
+
+_**c*
+"##;
+    let expected = r##"<p>*_*a</p>
+<p>**_**a</p>
+<p>***3</p>
+<p>_*<em>c</em></p>
+"##;
+
+    test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
+}
+
+#[test]
+fn regression_test_215() {
+    let original = r##"> - 	[x] -
+"##;
+    let expected = r##"<blockquote>
+<ul>
+<li>
+<pre><code>[x] -
+</code></pre>
+</li>
+</ul>
+</blockquote>
+"##;
+
+    test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
+}
+
+#[test]
+fn regression_test_216() {
+    let original = r##"  - 	[x] -
+"##;
+    let expected = r##"<ul>
+<li>
+<pre><code>[x] -
+</code></pre>
+</li>
+</ul>
+"##;
+
+    test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
+}
+
+#[test]
+fn regression_test_217() {
+    let original = r##"- 	[x] -
+"##;
+    let expected = r##"<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" checked disabled> -</li>
+</ul>
+"##;
+
+    test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
+}
+
+#[test]
+fn regression_test_218() {
+    let original = r##"www.—_×_
+
+https://a.b×_c_
+
+http://—x
+"##;
+    let expected = r##"<p><a href="http://www.%E2%80%94_%C3%97">www.—_×</a>_</p>
+<p><a href="https://a.b%C3%97_c">https://a.b×_c</a>_</p>
+<p>http://—x</p>
+"##;
+
+    test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
+}
