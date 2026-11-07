@@ -1,5 +1,12 @@
 # satteri
 
+## 0.11.7 — 2026-11-06
+
+### Patch changes
+
+- [6c85094](https://github.com/bruits/satteri/commit/6c850949da53a63f1c63ddd401ec642f39e3027e) Fixed type errors when a project and its plugins use different versions of satteri. — Thanks @Princesseuh!
+- [ba787dd](https://github.com/bruits/satteri/commit/ba787dd0558e81f9af55eb11b97c3d943318abd5) Added a `byteOffsets` option to `serializeHandle`, for buffers read back in Rust with `Arena::from_raw_buffer`. — Thanks @Princesseuh!
+
 ## 0.11.6 — 2026-10-28
 
 ### Patch changes
