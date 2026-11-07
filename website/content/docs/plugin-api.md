@@ -445,6 +445,8 @@ declare module "satteri" {
 
 An existing node passed to an insert or a replacement moves there, and its old place loses it; pass `structuredClone(node)` to insert a copy instead.
 
+`insertChildAt` and `removeChildAt` read `index` the way arrays do: a negative one counts from the end, as in `splice` and `at`. An `index` out of range makes `insertChildAt` insert at the nearer end and `removeChildAt` do nothing.
+
 `wrapNode` places the wrapped node as `parentNode`'s **first** child. If `parentNode` declares its own children, they are kept after it. Wrapping a heading in a `<div>` that holds an anchor link yields `<div><h2>…</h2><a>…</a></div>`. To put the node at an arbitrary position instead, return a replacement from the visitor.
 
 `wrapNode` wraps whatever ends up in the node's place: the node itself, or what replaced it. Calling it twice on one node nests the wrappers, the first one innermost. A removed node leaves nothing to wrap, so the wrap is dropped with a warning.
@@ -496,13 +498,14 @@ For now `setProperty` still accepts node fields and MDX JSX attribute names as w
 
 ## Return value semantics
 
-| Returned                                 | MDAST                                  | HAST    |
-| ---------------------------------------- | -------------------------------------- | ------- |
-| `undefined` / `null` / `void`            | Keep node, apply `ctx` mutations       | Same    |
-| The same node object                     | Same (no-op replace)                   | Same    |
-| A different node                         | Replace the visited node               | Replace |
-| `{ raw: string }`                        | Splice a string, re-parsed as Markdown | N/A     |
-| `{ raw: string, mdxExpressions: false }` | Same, but keep MDX `{…}` literal       | N/A     |
+| Returned                                 | MDAST                                                         | HAST    |
+| ---------------------------------------- | ------------------------------------------------------------- | ------- |
+| `undefined` / `null` / `void`            | Keep node, apply `ctx` mutations                              | Same    |
+| The same node object                     | Same (no-op replace)                                          | Same    |
+| A different node                         | Replace the visited node                                      | Replace |
+| An array of nodes                        | Replace the visited node with them, in order; `[]` removes it | Same    |
+| `{ raw: string }`                        | Splice a string, re-parsed as Markdown                        | N/A     |
+| `{ raw: string, mdxExpressions: false }` | Same, but keep MDX `{…}` literal                              | N/A     |
 
 `{ raw }` takes a string and re-parses it as Markdown, splicing the result in place of the node.
 
@@ -532,4 +535,4 @@ Each Sätteri plugin walks the tree **once** — there is no re-walking until th
 - **A removed node stays removed.** Once `removeNode` has removed a node, nothing in the same pass brings it back, whichever came first: not an insert that names it, not a replacement of it or of any other node, and not a `children` list. To move a node, insert it without calling `removeNode`. A warning is logged when a plugin inserts a node it also removes, or names one it had already removed in a replacement or `children` list; passing a parent's children on as they are, as `{ ...node }` does, doesn't count.
 - **An edit to a replaced node follows it.** Once a node is replaced by one node, passed to `replaceNode` or returned by a visitor, `setField`, `setAttribute`, `setProperty` and child edits (`prependChild`, `appendChild`, `insertChildAt`, a `children` list) on it apply to that node, whether they came before or after the replacement. A replacement that names the node itself, as `{ type: "blockquote", children: [node] }` does, keeps the node, so its edits and those inside it stay on it. An edit with nowhere to land, on a removed node or on one replaced by several nodes or raw content that leaves it out, is dropped with a warning.
 - **Nodes from another document throw.** Handing a context method a node kept from a previous compile — or an mdast node inside a hast plugin — fails the compile. Keep nodes around within a document freely; don't carry them across.
-- **A few contradictory combinations throw.** Two replacements that each reuse the other's node, and inserting a sibling next to the root. Two more come from reuse having no answer: passing content that contains the node you are inserting it next to or into, as `insertAfter(node, ctx.parent(node))` does, and two inserts that each name the other's node. These reference errors are reported when Sätteri applies the queued edits, after the visitor returns; catch them around the processing call, not around an individual context method. Reordering siblings runs into the second one, so hand the parent the order you want with `setProperty(parent, "children", [...])` rather than shuffling by pairwise inserts. Replacing, removing, or wrapping the root itself — say, via `ctx.parent()` on a top-level node — works fine.
+- **A few contradictory combinations throw.** Two replacements that each reuse the other's node, and inserting a sibling next to the root. Two more come from reuse having no answer: passing content that contains the node you are inserting it next to or into, as `insertAfter(node, ctx.parent(node))` does, and two inserts that each name the other's node. These reference errors are reported when Sätteri applies the queued edits, after the visitor returns, and name the plugin and the nodes involved with their line and column; catch them around the processing call, not around an individual context method. Reordering siblings runs into the second one, so hand the parent the order you want with `setProperty(parent, "children", [...])` rather than shuffling by pairwise inserts. Replacing, removing, or wrapping the root itself, say via `ctx.parent()` on a top-level node, works fine.
