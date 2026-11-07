@@ -37,6 +37,46 @@ fn marker_free_source_spans_do_not_hide_decoded_or_fallback_links() {
 }
 
 #[test]
+fn punctuation_runs_keep_the_url_and_trim_only_the_final_trail() {
+    // The final `!` also covers the adversarial form that an alphanumeric
+    // final-byte shortcut cannot help. No timing assertions: check the full
+    // output at increasing sizes, including a long entity-token run.
+    for count in [32, 4096, 65536, 131072] {
+        for punctuation in ["!", "&NotAnEntity;"] {
+            let url = format!("https://example.com/{}a", punctuation.repeat(count));
+            let escaped = url.replace('&', "&amp;");
+            for trail in ["", "!"] {
+                assert_html(
+                    &format!("{url}{trail}\n"),
+                    Options::ENABLE_GFM,
+                    &format!("<p><a href=\"{escaped}\">{escaped}</a>{trail}</p>\n"),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn forward_trimming_keeps_balanced_parentheses_until_another_trail_starts() {
+    for (body, kept, trail) in [
+        ("a(b)", "a(b)", ""),
+        ("a(b.)", "a(b", ".)"),
+        ("a(b&NotAnEntity;)", "a(b", "&amp;NotAnEntity;)"),
+        ("a(b))", "a(b)", ")"),
+        ("a(b)!", "a(b)", "!"),
+        ("a&;", "a&", ";"),
+        ("a&#1;", "a&#1", ";"),
+    ] {
+        let kept = format!("https://example.com/{kept}").replace('&', "&amp;");
+        assert_html(
+            &format!("https://example.com/{body}\n"),
+            Options::ENABLE_GFM,
+            &format!("<p><a href=\"{kept}\">{kept}</a>{trail}</p>\n"),
+        );
+    }
+}
+
+#[test]
 fn root_paragraph_termination_preserves_trailing_whitespace_and_backslashes() {
     for options in [Options::empty(), Options::ENABLE_GFM, Options::ENABLE_MATH] {
         for ending in ["", "\n", "\r", "\r\n", "\n\n", "\r\r", "\r\n\r\n"] {
