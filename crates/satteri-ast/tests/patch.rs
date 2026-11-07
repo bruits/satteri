@@ -1995,9 +1995,7 @@ fn grafted_self_child_ref_is_rejected_without_mutating_the_arena() {
                 child_tree: PatchContent::Grafted(roots),
             }]
         ),
-        Err(CommandError::UnsupportedPatchShape(
-            "payload ref would contain its anchor"
-        ))
+        Err(CommandError::NodeInsideItself(node)) if node.id == heading_id
     ));
     assert_eq!(arena.to_raw_buffer(), before);
 }
@@ -2139,7 +2137,7 @@ fn a_node_named_twice_in_its_own_replacement_errors() {
             keep_children: false,
         }],
     );
-    assert!(matches!(result, Err(CommandError::NodePlacedTwice(id)) if id == heading));
+    assert!(matches!(result, Err(CommandError::NodePlacedTwice(node)) if node.id == heading));
 }
 
 #[test]
@@ -2242,7 +2240,7 @@ fn a_child_edit_on_a_node_replaced_by_several_is_dropped_and_leaves_what_it_name
     let mut strict = orig.clone();
     assert!(matches!(
         apply_patches_strict(&mut strict, &patches),
-        Err(CommandError::PatchOnRemovedSubtree(id)) if id == paragraph
+        Err(CommandError::PatchOnRemovedSubtree(node)) if node.id == paragraph
     ));
 }
 
@@ -2394,7 +2392,7 @@ fn a_node_arranged_twice_errors() {
     )
     .unwrap_err();
     assert!(
-        matches!(err, CommandError::NodePlacedTwice(id) if id == text_in_heading),
+        matches!(&err, CommandError::NodePlacedTwice(node) if node.id == text_in_heading),
         "{err:?}"
     );
     assert_eq!(arena.len(), orig.len());
@@ -3530,7 +3528,7 @@ fn a_node_placed_twice_errors() {
     )
     .unwrap_err();
     assert!(
-        matches!(err, CommandError::NodePlacedTwice(id) if id == text_in_heading),
+        matches!(&err, CommandError::NodePlacedTwice(node) if node.id == text_in_heading),
         "{err:?}"
     );
     assert_eq!(arena.len(), orig.len());
@@ -3563,7 +3561,7 @@ fn inserting_a_node_beside_itself_errors() {
     )
     .unwrap_err();
     assert!(
-        matches!(err, CommandError::UnsupportedPatchShape(_)),
+        matches!(&err, CommandError::NodeInsideItself(node) if node.id == p1),
         "{err:?}"
     );
 }
@@ -3874,7 +3872,7 @@ fn a_child_listed_twice_in_its_parents_replacement_errors() {
     )
     .unwrap_err();
     assert!(
-        matches!(err, CommandError::NodePlacedTwice(id) if id == p1),
+        matches!(&err, CommandError::NodePlacedTwice(node) if node.id == p1),
         "{err:?}"
     );
 }

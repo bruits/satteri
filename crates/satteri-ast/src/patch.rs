@@ -3,7 +3,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use satteri_arena::{Arena, ArenaKind, Hast, Mdast, NodePosition};
 
-use crate::commands::CommandError;
+use crate::commands::{CommandError, NodeLabel};
 use crate::stack::with_headroom;
 
 /// Sentinel `node_type` for a *reference* node inside a replacement sub-tree:
@@ -1021,7 +1021,7 @@ fn apply_patches_impl<K: ArenaKind>(
         if (anchor == 0 || !matches!(patch, Patch::Replace { .. }))
             && refs.iter().any(|&(_, target, _)| target == anchor)
         {
-            return Err(unsupported("payload ref would contain its anchor"));
+            return Err(CommandError::NodeInsideItself(NodeLabel::of(arena, anchor)));
         }
     }
 
@@ -1089,7 +1089,10 @@ fn apply_patches_impl<K: ArenaKind>(
             while cur != 0 {
                 cur = arena.get_node(cur).parent;
                 if cur == target {
-                    return Err(unsupported("payload ref targets an ancestor of its anchor"));
+                    return Err(CommandError::AncestorPlacedInside {
+                        ancestor: NodeLabel::of(arena, target),
+                        node: NodeLabel::of(arena, anchor),
+                    });
                 }
             }
             referrers.entry(target).or_default().push(anchor);
@@ -1144,7 +1147,7 @@ fn apply_patches_impl<K: ArenaKind>(
         }
         for (&target, &(placed, self_refs, arranged)) in &claims {
             if placed + self_refs > 1 || arranged > 1 {
-                return Err(CommandError::NodePlacedTwice(target));
+                return Err(CommandError::NodePlacedTwice(NodeLabel::of(arena, target)));
             }
             if placed + arranged > 0 {
                 claimed.insert(target);
@@ -1194,7 +1197,9 @@ fn apply_patches_impl<K: ArenaKind>(
     // Strict callers reject stranded patches here, before the first arena
     // mutation, so the arena survives the error untouched.
     if strict && let Some(&anchor) = dropped_set.iter().chain(&lost_edits).min() {
-        return Err(CommandError::PatchOnRemovedSubtree(anchor));
+        return Err(CommandError::PatchOnRemovedSubtree(NodeLabel::of(
+            arena, anchor,
+        )));
     }
 
     // Referring anchors wait for the target's patches and patches inside it.
@@ -1215,7 +1220,7 @@ fn apply_patches_impl<K: ArenaKind>(
         let mut state: FxHashMap<u32, u8> = FxHashMap::default(); // 1=visiting, 2=done
         let mut out: Vec<u32> = Vec::with_capacity(anchor_order.len());
         let mut stack: Vec<(u32, usize)> = Vec::new();
-        let mut cyclic = false;
+        let mut cycle: Option<(u32, u32)> = None;
         for &root in &anchor_order {
             if state.get(&root).copied().unwrap_or(0) == 2 {
                 continue;
@@ -1233,7 +1238,7 @@ fn apply_patches_impl<K: ArenaKind>(
                             stack.push((dep, 0));
                         }
                         1 => {
-                            cyclic = true;
+                            cycle = Some((dep, node));
                             break;
                         }
                         _ => {}
@@ -1244,12 +1249,15 @@ fn apply_patches_impl<K: ArenaKind>(
                     stack.pop();
                 }
             }
-            if cyclic {
+            if cycle.is_some() {
                 break;
             }
         }
-        if cyclic {
-            return Err(unsupported("ref-dependency cycle"));
+        if let Some((a, b)) = cycle {
+            return Err(CommandError::CircularPlacement(
+                NodeLabel::of(arena, a),
+                NodeLabel::of(arena, b),
+            ));
         }
         out
     };
@@ -2628,7 +2636,7 @@ mod tests {
             assert_eq!(dropped, vec![heading_id]);
             assert_eq!(arena.get_children(0), &orig.get_children(0)[1..]);
             match rebuild(&orig, &patches) {
-                Err(CommandError::PatchOnRemovedSubtree(id)) => assert_eq!(id, heading_id),
+                Err(CommandError::PatchOnRemovedSubtree(node)) => assert_eq!(node.id, heading_id),
                 other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
             }
         }
@@ -2653,7 +2661,7 @@ mod tests {
             },
         ];
         match rebuild(&orig, &patches) {
-            Err(CommandError::PatchOnRemovedSubtree(id)) => assert_eq!(id, text_in_heading),
+            Err(CommandError::PatchOnRemovedSubtree(node)) => assert_eq!(node.id, text_in_heading),
             other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
         }
     }
@@ -2851,8 +2859,10 @@ mod tests {
             keep_children: false,
         }];
         match rebuild(&orig, &patches) {
-            Err(CommandError::UnsupportedPatchShape(_)) => {}
-            other => panic!("expected UnsupportedPatchShape, got {other:?}"),
+            Err(CommandError::AncestorPlacedInside { ancestor, node }) => {
+                assert_eq!((ancestor.id, node.id), (0, heading_id));
+            }
+            other => panic!("expected AncestorPlacedInside, got {other:?}"),
         }
     }
 
@@ -2867,8 +2877,10 @@ mod tests {
             new_tree: PatchContent::Tree(ref_arena(0, None)),
         }];
         match rebuild(&orig, &patches) {
-            Err(CommandError::UnsupportedPatchShape(_)) => {}
-            other => panic!("expected UnsupportedPatchShape, got {other:?}"),
+            Err(CommandError::AncestorPlacedInside { ancestor, node }) => {
+                assert_eq!((ancestor.id, node.id), (0, para_id));
+            }
+            other => panic!("expected AncestorPlacedInside, got {other:?}"),
         }
     }
 
@@ -2899,9 +2911,7 @@ mod tests {
             let before = arena.to_raw_buffer();
             assert!(matches!(
                 apply_patches_strict(&mut arena, &[patch]),
-                Err(CommandError::UnsupportedPatchShape(
-                    "payload ref would contain its anchor"
-                ))
+                Err(CommandError::NodeInsideItself(_))
             ));
             assert_eq!(
                 arena.to_raw_buffer(),
@@ -3279,7 +3289,7 @@ mod tests {
             },
         ];
         match apply_patches_strict(&mut work, &patches) {
-            Err(CommandError::PatchOnRemovedSubtree(id)) => assert_eq!(id, text_in_heading),
+            Err(CommandError::PatchOnRemovedSubtree(node)) => assert_eq!(node.id, text_in_heading),
             other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
         }
         // Untouched on error: same node count, same child lists.

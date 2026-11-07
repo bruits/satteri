@@ -22,7 +22,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, NodePosition, StringRef};
-use satteri_ast::commands::CommandError;
+use satteri_ast::commands::{CommandError, NodeLabel};
 use satteri_ast::hast::codec::decode_element_tag;
 use satteri_ast::hast::{HastNodeType, is_void_element};
 use satteri_ast::mdast::MdastNodeType;
@@ -1801,7 +1801,7 @@ pub fn apply_mdast_commands_with_options(
     let (arena, dropped) =
         apply_mdast_commands_lenient_with_options(arena, command_buf, parse_markdown, options)?;
     if let Some(anchor) = dropped.first() {
-        return Err(CommandError::PatchOnRemovedSubtree(*anchor));
+        return Err(CommandError::PatchOnRemovedSubtree(NodeLabel::of(&arena, *anchor)));
     }
     Ok(arena)
 }
@@ -2039,7 +2039,7 @@ pub fn apply_hast_commands(
 ) -> Result<Arena<Hast>, CommandError> {
     let (arena, dropped) = apply_hast_commands_lenient(arena, command_buf)?;
     if let Some(anchor) = dropped.first() {
-        return Err(CommandError::PatchOnRemovedSubtree(*anchor));
+        return Err(CommandError::PatchOnRemovedSubtree(NodeLabel::of(&arena, *anchor)));
     }
     Ok(arena)
 }
