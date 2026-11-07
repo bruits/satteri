@@ -84,6 +84,7 @@ import type {
 } from "../types.js";
 import {
   asArray,
+  insertIndex,
   collectCommands,
   FOREIGN_REF,
   foreignContentError,
@@ -187,13 +188,18 @@ export interface MdastVisitorContext {
   ): void;
   prependChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void;
   appendChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void;
-  /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
+  /**
+   * Insert one node or an array before the `index`-th child. `index` works as in
+   * `Array.prototype.splice`: a negative one counts from the end, and one out of
+   * range inserts at the nearer end.
+   */
   insertChildAt(
     node: Readonly<MdastTarget>,
     index: number,
     childNode: MdastContent | MdastContent[],
   ): void;
-  /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
+  /** Remove the `index`-th child of `node`, counting from the end when negative as in
+   *  `Array.prototype.at`; a no-op when there is no such child. */
   removeChildAt(node: Readonly<MdastTarget>, index: number): void;
   setField<N extends MdastTarget, K extends SettableFieldKey<N, true>>(
     node: Readonly<N>,
@@ -366,17 +372,18 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     childNode: MdastContent | MdastContent[],
   ): void {
     const children = ("children" in node ? node.children : undefined) ?? [];
+    const at = insertIndex(index, children.length);
     const [anchor, op] =
-      index <= 0 || children.length === 0
-        ? ([node, "prependChild"] as const)
-        : index >= children.length
-          ? ([node, "appendChild"] as const)
-          : ([children[index]!, "insertBefore"] as const);
+      at === children.length
+        ? ([node, "appendChild"] as const)
+        : at === 0
+          ? ([node, "prependChild"] as const)
+          : ([children[at]!, "insertBefore"] as const);
     this.#splice(requireNid(anchor as MdastNode, "insertChildAt", this.#refs), childNode, op);
   }
 
   removeChildAt(node: Readonly<MdastTarget>, index: number): void {
-    const child = "children" in node ? node.children?.[index] : undefined;
+    const child = "children" in node ? node.children?.at(index) : undefined;
     if (child) this.removeNode(child);
   }
 
