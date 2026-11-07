@@ -124,6 +124,11 @@ export class RemovalTracker<TNode> {
   #listed: Set<number> | undefined;
   /** Anchor id, then content, per insert. */
   #inserted: unknown[] | undefined;
+  /** The last whole-list verdict, shared by the rest of that run of children. */
+  #runSiblings: readonly unknown[] | undefined;
+  #runParent = 0;
+  #runStart = 0;
+  #runWhole = false;
   readonly #nodeId: (node: TNode, refs: NodeRefs) => number | undefined;
   readonly #refs: NodeRefs;
   readonly #resolver: ChildResolver;
@@ -181,6 +186,7 @@ export class RemovalTracker<TNode> {
   }
 
   #collect(removed: ReadonlySet<number>, editedId: number, content: unknown): void {
+    this.#runSiblings = undefined;
     const listed = (this.#listed ??= new Set());
     const visit = (
       node: unknown,
@@ -217,17 +223,31 @@ export class RemovalTracker<TNode> {
     const ownIndex = this.#resolver.indexInParent(id);
     if (siblings === undefined || parentId === undefined || ownIndex === undefined) return false;
     if (parentId !== editedId && !this.#isInside(parentId, editedId)) return false;
-    const original = this.#resolver.childIdsOf(parentId);
     const start = index - ownIndex;
-    if (start < 0 || start + original.length > siblings.length) return false;
-    return original.every((childId, i) => {
-      const sibling = siblings[start + i];
-      return (
-        sibling !== null &&
-        typeof sibling === "object" &&
-        this.#nodeId(sibling as TNode, this.#refs) === childId
-      );
-    });
+    if (
+      siblings === this.#runSiblings &&
+      parentId === this.#runParent &&
+      start === this.#runStart
+    ) {
+      return this.#runWhole;
+    }
+    const original = this.#resolver.childIdsOf(parentId);
+    const whole =
+      start >= 0 &&
+      start + original.length <= siblings.length &&
+      original.every((childId, i) => {
+        const sibling = siblings[start + i];
+        return (
+          sibling !== null &&
+          typeof sibling === "object" &&
+          this.#nodeId(sibling as TNode, this.#refs) === childId
+        );
+      });
+    this.#runSiblings = siblings;
+    this.#runParent = parentId;
+    this.#runStart = start;
+    this.#runWhole = whole;
+    return whole;
   }
 
   #isInside(id: number, ancestorId: number): boolean {
