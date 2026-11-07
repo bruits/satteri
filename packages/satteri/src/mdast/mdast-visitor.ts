@@ -541,13 +541,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   }
 }
 
-type MdastVisitorResult =
-  | MdastNode
-  | RawMdastContent
-  | RawHtmlMdastContent
-  | undefined
-  | null
-  | void;
+type MdastVisitorResult = MdastContent | MdastContent[] | undefined | null | void;
 
 export type MdastVisitorFn<N extends MdastNode | Custom = MdastNode> = (
   node: Readonly<N>,
@@ -823,6 +817,23 @@ function emitMdastOp(
   return true;
 }
 
+function applyMdastArrayResult(
+  result: MdastContent[],
+  nodeId: number,
+  returnBuffer: CommandBuffer,
+  refs: NodeRefs,
+  originalNode?: MdastNode,
+  removals?: RemovalTracker<MdastNode>,
+): void {
+  if (result.length === 1) {
+    applyMdastVisitResult(result[0], nodeId, returnBuffer, refs, originalNode, removals);
+    return;
+  }
+  removals?.returned(nodeId, result);
+  if (result.length === 0) returnBuffer.removeNode(nodeId);
+  else emitMdastMultiReplace(returnBuffer, nodeId, result, refs);
+}
+
 function mdastListFieldJson(key: "attributes" | "align", value: unknown): string {
   if (key === "attributes") return attributesJson(value);
   return JSON.stringify(Array.isArray(value) ? value.map(alignCode) : []);
@@ -952,6 +963,10 @@ function applyMdastVisitResult(
 ): void {
   if (result === undefined || result === null) return;
   if (result === originalNode) return;
+  if (Array.isArray(result)) {
+    applyMdastArrayResult(result, nodeId, returnBuffer, refs, originalNode, removals);
+    return;
+  }
   const cls = classifyReturn(result);
   switch (cls) {
     case "raw_markdown":
@@ -1031,7 +1046,7 @@ export function visitMdastHandle(
 
     if (result instanceof Promise) {
       deferred ??= [];
-      const promise = removals.rebuiltOnSettling(nodeId, result);
+      const promise = removals.returnedOnSettling(nodeId, result);
       deferred.push({ nodeId, promise, originalNode: node });
     } else if (result !== undefined) {
       applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, node, removals);

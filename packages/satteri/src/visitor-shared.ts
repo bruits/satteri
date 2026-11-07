@@ -158,10 +158,16 @@ export class RemovalTracker<TNode> {
     if (this.#removed !== undefined) this.#collect(this.#removed, targetId, content);
   }
 
+  /** A visitor's return replaces the node it visited, and an empty array removes it. */
+  returned(targetId: number, result: unknown): void {
+    if (Array.isArray(result) && result.length === 0) this.removed(targetId);
+    else this.rebuilt(targetId, result);
+  }
+
   /** Checks an async visitor's result on settling, against the removals made by then. */
-  rebuiltOnSettling<T>(targetId: number, result: Promise<T>): Promise<T> {
+  returnedOnSettling<T>(targetId: number, result: Promise<T>): Promise<T> {
     return result.then((settled) => {
-      this.rebuilt(targetId, settled);
+      this.returned(targetId, settled);
       return settled;
     });
   }

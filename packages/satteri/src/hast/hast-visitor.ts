@@ -673,13 +673,15 @@ class HastVisitorContextImpl implements HastVisitorContext {
 /** A filtered visitor: Rust filters by tag/component name, only matched nodes cross the boundary. */
 export interface HastFilteredVisitor<N extends HastNode = HastNode> {
   filter: string[];
-  visit(node: Readonly<N>, ctx: HastVisitorContext): HastNode | void | Promise<HastNode | void>;
+  visit(node: Readonly<N>, ctx: HastVisitorContext): HastVisitorResult | Promise<HastVisitorResult>;
 }
+
+type HastVisitorResult = HastNode | HastContent[] | void;
 
 export type HastVisitorFn<N extends HastNode = HastNode> = (
   node: Readonly<N>,
   ctx: HastVisitorContext,
-) => HastNode | void | Promise<HastNode | void>;
+) => HastVisitorResult | Promise<HastVisitorResult>;
 
 export type HastHookFn = (
   root: Readonly<HastRoot>,
@@ -717,7 +719,7 @@ export interface HastVisitorInstance {
 interface ResolvedSubscription {
   nodeType: number;
   tagFilter: string[];
-  visitFn: (node: HastNode, ctx: HastVisitorContext) => HastNode | void;
+  visitFn: (node: HastNode, ctx: HastVisitorContext) => HastVisitorResult;
 }
 
 const FILTERED_METHODS = new Set(["element", "mdxJsxFlowElement", "mdxJsxTextElement"]);
@@ -797,7 +799,7 @@ const METHOD_TO_TYPE: Record<string, number> = Object.fromEntries(
 
 // Returning the input node must not overwrite mutations queued through the context.
 function applyHastVisitResult(
-  result: HastNode | void,
+  result: HastVisitorResult,
   nodeId: number,
   returnBuffer: CommandBuffer,
   originalNode: HastNode,
@@ -806,12 +808,33 @@ function applyHastVisitResult(
 ): void {
   if (result == null) return;
   if (result === originalNode) return;
+  if (Array.isArray(result)) {
+    applyHastArrayResult(result, nodeId, returnBuffer, originalNode, refs, removals);
+    return;
+  }
   if (isTextValueSwap(result, originalNode)) {
     returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
     return;
   }
   removals?.rebuilt(nodeId, result);
   emitHastTree(returnBuffer, "replace", nodeId, result, refs, true);
+}
+
+function applyHastArrayResult(
+  result: HastContent[],
+  nodeId: number,
+  returnBuffer: CommandBuffer,
+  originalNode: HastNode,
+  refs: NodeRefs,
+  removals?: RemovalTracker<HastNode>,
+): void {
+  if (result.length === 1) {
+    applyHastVisitResult(result[0], nodeId, returnBuffer, originalNode, refs, removals);
+    return;
+  }
+  removals?.returned(nodeId, result);
+  if (result.length === 0) returnBuffer.removeNode(nodeId);
+  else emitHastMultiReplace(returnBuffer, nodeId, result, refs);
 }
 
 // Explicit field checks avoid allocating Object.keys on the per-text-node hot path.
@@ -837,12 +860,12 @@ function dispatchMatches(
   ctx: HastVisitorContextImpl,
   returnBuffer: CommandBuffer,
   resolver: HastLazyChildResolver,
-): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
+): { nodeId: number; promise: Promise<HastVisitorResult>; originalNode: HastNode }[] | null {
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = matchView.getUint32(0, true);
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
   let deferred:
-    | { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[]
+    | { nodeId: number; promise: Promise<HastVisitorResult>; originalNode: HastNode }[]
     | null = null;
   const removals = ctx.removals;
 
@@ -857,7 +880,7 @@ function dispatchMatches(
     const result = sub.visitFn(node, ctx);
     if (result instanceof Promise) {
       deferred ??= [];
-      const promise = removals.rebuiltOnSettling(nodeId, result);
+      const promise = removals.returnedOnSettling(nodeId, result);
       deferred.push({ nodeId, promise, originalNode: node });
     } else if (result !== undefined) {
       applyHastVisitResult(result, nodeId, returnBuffer, node, resolver.refs, removals);
