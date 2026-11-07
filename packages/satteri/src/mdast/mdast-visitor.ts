@@ -47,6 +47,7 @@ import type {
   MdxTextExpression,
 } from "../mdx-types.js";
 import {
+  attributesJson,
   emitMdxAttr,
   OF_ALT,
   OF_CHECKED,
@@ -439,15 +440,8 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
       }
       return;
     }
-    if (
-      (key === "attributes" && (isMdxJsxElement(node) || isDirective(node))) ||
-      (key === "align" && node.type === "table")
-    ) {
-      // These are structured node fields, so re-encode the node rather than a scalar command.
-      this.replaceNode(node, { ...node, [key]: value } as MdastTarget);
-      return;
-    }
     if (key === "data") value = value != null ? JSON.stringify(value) : null;
+    else if (key === "attributes" || key === "align") value = mdastListFieldJson(key, value);
     this.#commandBuffer.setField(id, key, value);
   }
 
@@ -493,21 +487,8 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   }
 
   setProperty(node: Readonly<MdastTarget>, key: string, value: unknown): void {
-    const id = requireNid(node as MdastNode, "setProperty", this.#refs);
-    if (key === "children") {
-      this.removals.rebuilt(id, value);
-      if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
-        throw unencodableContentError(value);
-      }
-      return;
-    }
-    const target = this.#pendingNodes.get(id) ?? node;
-    if (key === "attributes" && isMdxJsxElement(target)) {
-      this.replaceNode(node, { ...target, attributes: value } as MdastTarget);
-      return;
-    }
-    if (key === "data") value = value != null ? JSON.stringify(value) : null;
-    this.#commandBuffer.setProperty(id, key, value);
+    requireNid(node as MdastNode, "setProperty", this.#refs);
+    this.setField(node, key, value);
   }
 
   textContent(
@@ -840,6 +821,11 @@ function emitMdastOp(
   }
   w.close();
   return true;
+}
+
+function mdastListFieldJson(key: "attributes" | "align", value: unknown): string {
+  if (key === "attributes") return attributesJson(value);
+  return JSON.stringify(Array.isArray(value) ? value.map(alignCode) : []);
 }
 
 function alignCode(a: unknown): number {

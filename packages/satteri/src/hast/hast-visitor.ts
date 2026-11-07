@@ -24,6 +24,7 @@ import type {
   MdxTextExpressionHast,
 } from "../mdx-types.js";
 import {
+  attributesJson,
   emitMdxAttr,
   OF_EXPLICIT,
   OF_NAME,
@@ -35,6 +36,8 @@ import {
   PROP_INT,
   PROP_TOKEN_LIST,
   PROP_STRING,
+  PropRows,
+  type PropSink,
 } from "../op-stream.js";
 import type { Data, HastRaw, SourceFormat } from "../types.js";
 import { HAST_OPSTREAM_TYPES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
@@ -379,7 +382,17 @@ function emitHastOp(
   return true;
 }
 
-function emitHastProp(w: OpWriter, name: string, value: unknown): void {
+function propertiesJson(value: unknown): string {
+  const rows = new PropRows();
+  if (value !== null && typeof value === "object") {
+    for (const name in value as Record<string, unknown>) {
+      emitHastProp(rows, name, (value as Record<string, unknown>)[name]);
+    }
+  }
+  return JSON.stringify(rows.rows);
+}
+
+function emitHastProp(w: PropSink, name: string, value: unknown): void {
   if (value === true) w.prop(name, PROP_BOOL_TRUE, "");
   else if (value === false) w.prop(name, PROP_BOOL_FALSE, "");
   else if (typeof value === "string") w.prop(name, PROP_STRING, value);
@@ -584,19 +597,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
       }
       return;
     }
-    if (
-      (key === "attributes" &&
-        (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement")) ||
-      (key === "properties" && node.type === "element")
-    ) {
-      // These are structured fields, so re-encode the node rather than a scalar command.
-      this.replaceNode(node, { ...node, [key]: value } as HastContent);
-      return;
-    }
-    if (key === "data") {
-      this.#commandBuffer.setField(id, key, value != null ? JSON.stringify(value) : null);
-      return;
-    }
+    if (key === "data") value = value != null ? JSON.stringify(value) : null;
+    else if (key === "attributes") value = attributesJson(value);
+    else if (key === "properties") value = propertiesJson(value);
     this.#commandBuffer.setField(id, key, value);
   }
 

@@ -161,7 +161,37 @@ function isLineOrColumn(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 4294967295;
 }
 
-export function emitMdxAttr(w: OpWriter, a: Record<string, unknown>): void {
+export interface PropSink {
+  prop(name: string, kind: number, value: string): void;
+}
+
+/** Keeps a list field's entries, which a field edit sends as JSON the way `data` goes. */
+export class PropRows implements PropSink {
+  readonly rows: [name: string, kind: number, value: string][] = [];
+
+  prop(name: string, kind: number, value: string): void {
+    this.rows.push([name, kind, value]);
+  }
+}
+
+/** An MDX JSX attribute list as entries, or a directive's string map as `[key, value]` pairs. */
+export function attributesJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    const rows = new PropRows();
+    for (const a of value) emitMdxAttr(rows, a as Record<string, unknown>);
+    return JSON.stringify(rows.rows);
+  }
+  const pairs: [string, string][] = [];
+  if (value !== null && typeof value === "object") {
+    for (const key in value as Record<string, unknown>) {
+      const v = (value as Record<string, unknown>)[key];
+      if (typeof v === "string") pairs.push([key, v]);
+    }
+  }
+  return JSON.stringify(pairs);
+}
+
+export function emitMdxAttr(w: PropSink, a: Record<string, unknown>): void {
   if (a.type === "mdxJsxExpressionAttribute") {
     w.prop("", MDX_ATTR_SPREAD, typeof a.value === "string" ? a.value : "");
     return;
