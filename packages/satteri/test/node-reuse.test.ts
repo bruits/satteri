@@ -1102,6 +1102,19 @@ test("a removed child listed again stays removed and the plugin is warned", () =
       ctx.removeNode(node);
       ctx.insertAfter(node, first);
     }),
+    relistAfterRemoving("beside-parent-removed-later", (node, ctx, first) => {
+      ctx.insertAfter(node, first);
+      ctx.removeNode(node);
+    }),
+    relistAfterRemoving("listed-twice", (node, _ctx, first) => ({
+      ...node,
+      children: [first, ...node.children.slice(1), first],
+    })),
+    relistAfterRemoving("set-field-after-replace", (node, ctx, first) => {
+      const children = [...node.children.slice(1), first];
+      ctx.replaceNode(node, asSection(node));
+      ctx.setField(node, "children", children);
+    }),
   ];
   const doneItems = defineMdastPlugin({
     name: "done-items-removed",
@@ -1118,11 +1131,11 @@ test("a removed child listed again stays removed and the plugin is warned", () =
       expect(html, plugin.name).not.toContain("<p>a</p>");
       expect(warn, plugin.name).toHaveBeenCalledTimes(1);
       const message = warn.mock.calls[0]?.[0] as string;
-      expect(message).toContain(`plugin "${plugin.name}"`);
+      expect(message).toContain(`plugin "${plugin.name}" listed 1 mdast node(s)`);
       expect(message).toContain("stays removed");
     }
     warn.mockClear();
-    const { html } = markdownToHtml("- [ ] a\n- [x] b\n", { mdastPlugins: [doneItems] });
+    const { html } = markdownToHtml("- [x] b\n- [ ] a\n", { mdastPlugins: [doneItems] });
     expect(html).not.toContain("> b</li>");
     expect(warn).toHaveBeenCalledTimes(1);
   } finally {
@@ -1154,8 +1167,43 @@ test("hast: a removed child listed again stays removed and the plugin is warned"
   }
 });
 
+function isParagraphA(node: Paragraph) {
+  const [text] = node.children;
+  return text?.type === "text" && text.value === "a";
+}
+
 test("removing a node without listing it again does not warn", () => {
   const passOn = relistAfterRemoving("pass-on-a-copy", (node) => asSection(node));
+  const passOnCopiedList = relistAfterRemoving("pass-on-a-copied-list", (node) => ({
+    ...node,
+    children: [...node.children],
+  }));
+  const alertFromMarker = defineMdastPlugin({
+    name: "alert-from-marker",
+    paragraph(node, ctx) {
+      if (!isParagraphA(node)) return;
+      const quote = ctx.parent(node);
+      ctx.removeNode(node);
+      ctx.replaceNode(quote, { ...quote, data: { hName: "aside" } });
+    },
+  });
+  const rawSandwich = defineMdastPlugin({
+    name: "raw-sandwich-after-removal",
+    paragraph(node, ctx) {
+      if (!isParagraphA(node)) return;
+      const quote = ctx.parent(node);
+      ctx.removeNode(node);
+      ctx.replaceNode(quote, [{ raw: "<div>" }, ...quote.children, { raw: "</div>" }]);
+    },
+  });
+  const unwrapByInsert = defineMdastPlugin({
+    name: "unwrap-by-insert",
+    blockquote(node, ctx) {
+      ctx.insertBefore(node, node.children);
+      ctx.removeNode(node);
+    },
+    paragraph: removeMdastParagraphA,
+  });
   const laterRemoval = defineMdastPlugin({
     name: "reverse-then-remove-child",
     blockquote(node) {
@@ -1180,10 +1228,213 @@ test("removing a node without listing it again does not warn", () => {
     expect(reversed.html).toBe("<blockquote>\n<p>b</p>\n</blockquote>\n");
     const moved = markdownToHtml("# h\n\np\n", { mdastPlugins: [moveAfterSibling] });
     expect(moved.html).toBe("<p>p</p>\n<h1>h</h1>\n");
+    const expected = [
+      [passOnCopiedList, "<blockquote>\n<p>b</p>\n</blockquote>\n"],
+      [alertFromMarker, "<aside>\n<p>b</p>\n</aside>\n"],
+      [rawSandwich, "<div>\n<p>b</p>\n</div>\n"],
+      [unwrapByInsert, "<p>b</p>\n"],
+    ] as const;
+    for (const [plugin, html] of expected) {
+      expect(markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] }).html, plugin.name).toBe(
+        html,
+      );
+    }
     expect(warn).not.toHaveBeenCalled();
   } finally {
     warn.mockRestore();
   }
+});
+
+test("an async visitor's list is checked against the removals made by the time it settles", async () => {
+  const removedLater = defineMdastPlugin({
+    name: "async-reverse-then-timed-removal",
+    async blockquote(node) {
+      return { ...node, children: node.children.toReversed() };
+    },
+    async paragraph(node, ctx) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      removeMdastParagraphA(node, ctx);
+    },
+  });
+  const removedFirst = defineMdastPlugin({
+    name: "async-remove-then-relist",
+    async blockquote(node, ctx) {
+      const [first, ...rest] = node.children;
+      if (!first) return;
+      ctx.removeNode(first);
+      await Promise.resolve();
+      return { ...node, children: [...rest, first] };
+    },
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    for (const [plugin, warnings] of [
+      [removedLater, 0],
+      [removedFirst, 1],
+    ] as const) {
+      warn.mockClear();
+      const { html } = await markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+      expect(html, plugin.name).toBe("<blockquote>\n<p>b</p>\n</blockquote>\n");
+      expect(warn, plugin.name).toHaveBeenCalledTimes(warnings);
+    }
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test("a node moved out beside its replaced parent or grandparent lands there", () => {
+  const beforeParent = defineMdastPlugin({
+    name: "move-before-replaced-parent",
+    blockquote: asSection,
+    paragraph(node, ctx) {
+      if (!isParagraphA(node)) return;
+      ctx.insertBefore(ctx.parent(node), node);
+      ctx.removeNode(node);
+    },
+  });
+  const afterGrandparent = defineMdastPlugin({
+    name: "move-after-replaced-grandparent",
+    blockquote(node, ctx) {
+      if (ctx.parent(node).type === "root") return asSection(node);
+    },
+    paragraph(node, ctx) {
+      const grandparent = ctx.parent(ctx.parent(node));
+      if (!isParagraphA(node) || !grandparent) return;
+      ctx.removeNode(node);
+      ctx.insertAfter(grandparent, node);
+    },
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [beforeParent] }).html).toBe(
+      "<p>a</p>\n<section>\n<p>b</p>\n</section>\n",
+    );
+    expect(markdownToHtml("> > a\n> >\n> > b\n", { mdastPlugins: [afterGrandparent] }).html).toBe(
+      "<section>\n<blockquote>\n<p>b</p>\n</blockquote>\n</section>\n<p>a</p>\n",
+    );
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test("hast: a node moved out beside its replaced parent lands there", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-move-before-replaced-parent",
+    element: {
+      filter: ["blockquote", "p"],
+      visit(node, ctx) {
+        if (node.tagName === "blockquote") return { ...node, tagName: "section" };
+        const [text] = node.children;
+        if (text?.type !== "text" || text.value !== "a") return;
+        ctx.insertBefore(ctx.parent(node), node);
+        ctx.removeNode(node);
+      },
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
+  expect(html).toBe("<p>a</p><section>\n\n<p>b</p>\n</section>\n");
+});
+
+function replaceParagraphAWithRule(node: Paragraph, ctx: MdastVisitorContext) {
+  if (!isParagraphA(node)) return;
+  ctx.insertAfter(node, { type: "thematicBreak" });
+  ctx.removeNode(node);
+}
+
+test("a children list set on a parent keeps the content queued beside a removed child", () => {
+  const onParent = defineMdastPlugin({
+    name: "set-quote-children",
+    blockquote(node, ctx) {
+      ctx.setProperty(node, "children", [...node.children]);
+    },
+    paragraph: replaceParagraphAWithRule,
+  });
+  const reordered = defineMdastPlugin({
+    name: "set-quote-children-reversed",
+    blockquote(node, ctx) {
+      ctx.setField(node, "children", node.children.toReversed());
+    },
+    paragraph: replaceParagraphAWithRule,
+  });
+  expect(markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [onParent] }).html).toBe(
+    "<blockquote>\n<hr>\n<p>b</p>\n</blockquote>\n",
+  );
+  expect(markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [reordered] }).html).toBe(
+    "<blockquote>\n<p>b</p>\n<hr>\n</blockquote>\n",
+  );
+});
+
+test("hast: a children list set on a parent keeps the content queued beside a removed child", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-set-quote-children",
+    element: {
+      filter: ["blockquote", "p"],
+      visit(node, ctx) {
+        if (node.tagName === "blockquote") {
+          ctx.setProperty(node, "children", [...node.children]);
+          return;
+        }
+        const [text] = node.children;
+        if (text?.type !== "text" || text.value !== "a") return;
+        ctx.insertAfter(node, { type: "element", tagName: "hr", properties: {}, children: [] });
+        ctx.removeNode(node);
+      },
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
+  expect(html).toBe("<blockquote>\n<hr>\n<p>b</p>\n</blockquote>\n");
+});
+
+test("a removed node stays removed when it is also replaced", () => {
+  const copiedByItsVisitor = defineMdastPlugin({
+    name: "parent-removes-child-that-copies-itself",
+    blockquote(node, ctx) {
+      const [first] = node.children;
+      if (first) ctx.removeNode(first);
+    },
+    paragraph(node) {
+      return { ...node, data: { hProperties: { className: ["x"] } } };
+    },
+  });
+  const replacedAfter = defineMdastPlugin({
+    name: "remove-then-replace",
+    paragraph(node, ctx) {
+      if (!isParagraphA(node)) return;
+      ctx.removeNode(node);
+      ctx.replaceNode(node, { type: "thematicBreak" });
+    },
+  });
+  expect(markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [copiedByItsVisitor] }).html).toBe(
+    '<blockquote>\n<p class="x">b</p>\n</blockquote>\n',
+  );
+  expect(markdownToHtml("a\n\nb\n", { mdastPlugins: [replacedAfter] }).html).toBe("<p>b</p>\n");
+});
+
+test("hast: a removed node stays removed when its own visitor returns a copy", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-parent-removes-child-that-copies-itself",
+    element: {
+      filter: ["blockquote", "p"],
+      visit(node, ctx) {
+        if (node.tagName === "p") return { ...node, properties: { className: ["x"] } };
+        const first = node.children.find((child) => child.type === "element");
+        if (first) ctx.removeNode(first);
+      },
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n", { hastPlugins: [plugin] });
+  expect(html).toBe('<blockquote>\n\n<p class="x">b</p>\n</blockquote>\n');
+});
+
+test("raw items replacing a node inside a paragraph stay inline", () => {
+  const plugin = defineMdastPlugin({
+    name: "inline-raw-and-text",
+    text(node, ctx) {
+      if (node.value === "x") ctx.replaceNode(node, [{ raw: "*x*" }, { type: "text", value: "!" }]);
+    },
+  });
+  expect(markdownToHtml("x\n", { mdastPlugins: [plugin] }).html).toBe("<p><em>x</em>!</p>\n");
 });
 
 test("a field set after an array replacement does not bring back an earlier replacement", () => {

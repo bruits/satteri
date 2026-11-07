@@ -84,11 +84,11 @@ import type {
 import {
   asArray,
   collectCommands,
-  countListedRemovals,
   FOREIGN_REF,
   foreignContentError,
   makeRequireNid,
   requireRootReplacement,
+  RemovalTracker,
   ROOT_NODE_ID,
   rootReplacementError,
   unencodableContentError,
@@ -264,12 +264,11 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: MdastDiagnostic[];
   readonly #pendingNodes: Map<number, MdastTarget> = new Map();
-  #removedIds: Set<number> | undefined;
-  #listedRemovals = 0;
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
   readonly #refs: NodeRefs;
+  readonly removals: RemovalTracker<MdastNode>;
   readonly fileURL: URL | undefined;
   readonly data: Data;
   readonly sourceFormat: SourceFormat;
@@ -288,6 +287,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     this.fileURL = fileURL;
     this.#resolver = resolver;
     this.#refs = resolver.refs;
+    this.removals = new RemovalTracker(getNodeId, resolver.refs, resolver);
     this.data = data;
     this.sourceFormat = sourceFormat;
     this.#diagnostics = diagnostics;
@@ -303,23 +303,25 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     const id = requireNid(node as MdastNode, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
     this.#pendingNodes.delete(id);
-    (this.#removedIds ??= new Set()).add(id);
+    this.removals.removed(id);
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
-    const id = requireNid(node as MdastNode, "insertBefore", this.#refs);
-    // Content beside a removed node takes its place.
-    if (this.#removedIds?.has(id)) this.noteListedRemovals(node, id, newNode);
-    this.#splice(id, newNode, "insertBefore");
+    this.#splice(
+      requireNid(node as MdastNode, "insertBefore", this.#refs),
+      newNode,
+      "insertBefore",
+    );
   }
 
   insertAfter(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
-    const id = requireNid(node as MdastNode, "insertAfter", this.#refs);
-    if (this.#removedIds?.has(id)) this.noteListedRemovals(node, id, newNode);
-    this.#splice(id, newNode, "insertAfter");
+    this.#splice(requireNid(node as MdastNode, "insertAfter", this.#refs), newNode, "insertAfter");
   }
 
   #splice(anchorId: number, content: MdastContent | MdastContent[], op: StructuralOp): void {
+    if (op === "insertBefore" || op === "insertAfter") {
+      this.removals.insertedBeside(anchorId, content);
+    }
     for (const n of asArray(content)) {
       emitMdastTree(this.#commandBuffer, op, anchorId, n, false, this.#refs, true);
     }
@@ -384,49 +386,37 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     ) {
       return;
     }
-    this.noteListedRemovals(node, id, newNode);
-    if (Array.isArray(newNode)) {
-      if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
-      // One command, so the node's replacement is its whole slot and a ref back
-      // to it resolves to all of it rather than to the last element.
-      if (id !== ROOT_NODE_ID && newNode.length > 1 && newNode.every(isPlainReplacement)) {
-        emitMdastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
-        this.#pendingNodes.delete(id);
+    this.removals.rebuilt(id, newNode);
+    if (onlyReplacement === undefined) {
+      const nodes = asArray(newNode);
+      if (nodes.length === 0) {
+        this.removeNode(node);
         return;
       }
-      let previous: MdastContent | undefined;
-      for (const n of newNode) {
-        if (previous !== undefined) {
-          emitMdastTree(this.#commandBuffer, "insertBefore", id, previous, false, this.#refs, true);
-        }
-        previous = n;
-      }
-      if (previous === undefined) {
-        this.removeNode(node);
-      } else if (id === ROOT_NODE_ID && !isRawMdastContent(previous)) {
-        emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
-      } else {
-        emitMdastTree(this.#commandBuffer, "replace", id, previous, true, this.#refs, true);
-      }
-      if (previous !== undefined && !isRawMdastContent(previous)) {
-        this.#pendingNodes.set(id, previous);
-      } else {
-        this.#pendingNodes.delete(id);
-      }
+      if (id === ROOT_NODE_ID) throw rootReplacementError(nodes);
+      // One command, so the node's replacement is its whole slot and a ref back
+      // to it resolves to all of it rather than to the last element.
+      emitMdastMultiReplace(this.#commandBuffer, id, nodes, this.#refs);
+      this.#pendingNodes.delete(id);
       return;
     }
-    if (id === ROOT_NODE_ID && !isRawMdastContent(newNode)) {
-      emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
-      return;
+    const raw = isRawMdastContent(onlyReplacement);
+    if (id === ROOT_NODE_ID && !raw) {
+      emitMdastRootReplace(
+        this.#commandBuffer,
+        requireRootReplacement(onlyReplacement),
+        this.#refs,
+      );
+    } else {
+      emitMdastTree(this.#commandBuffer, "replace", id, onlyReplacement, true, this.#refs, true);
     }
-    if (isRawMdastContent(newNode)) this.#pendingNodes.delete(id);
-    else this.#pendingNodes.set(id, newNode);
-    emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs, true);
+    if (raw) this.#pendingNodes.delete(id);
+    else this.#pendingNodes.set(id, onlyReplacement);
   }
 
   setField(node: Readonly<MdastTarget>, key: string, value: unknown): void {
     const id = requireNid(node as MdastNode, "setField", this.#refs);
-    if (key === "children") this.noteListedRemovals(node, id, value);
+    if (key === "children") this.removals.rebuilt(id, value);
     if (this.#foldPendingField(node, id, key, value)) return;
     if (key === "children") {
       if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
@@ -490,7 +480,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   setProperty(node: Readonly<MdastTarget>, key: string, value: unknown): void {
     const id = requireNid(node as MdastNode, "setProperty", this.#refs);
     if (key === "children") {
-      this.noteListedRemovals(node, id, value);
+      this.removals.rebuilt(id, value);
       if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
@@ -552,33 +542,6 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
 
   getDiagnostics(): MdastDiagnostic[] {
     return this.#diagnostics;
-  }
-
-  /** Content rebuilding `target` cannot bring back a node removed inside it, so listing one is counted for a warning. */
-  noteListedRemovals(target: object, targetId: number, content: unknown): void {
-    // Kept tiny so the common no-removal case inlines into every replacement.
-    if (this.#removedIds !== undefined) {
-      this.#countListedRemovals(this.#removedIds, target, targetId, content);
-    }
-  }
-
-  #countListedRemovals(
-    removed: ReadonlySet<number>,
-    target: object,
-    targetId: number,
-    content: unknown,
-  ): void {
-    const scan = {
-      removed,
-      nodeId: getNodeId,
-      refs: this.#refs,
-      resolver: this.#resolver,
-    };
-    this.#listedRemovals += countListedRemovals(scan, target, targetId, content);
-  }
-
-  listedRemovalCount(): number {
-    return this.#listedRemovals;
   }
 }
 
@@ -751,12 +714,14 @@ function emitMdastMultiReplace(
   nodes: readonly MdastContent[],
   refs: NodeRefs,
 ): void {
-  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
-    buffer.open(MDAST_ROOT);
-    for (const n of nodes) if (!emitMdastOp(buffer, n, false, true, refs)) return false;
-    buffer.close();
-    return true;
-  });
+  const ok = nodes.every(isPlainReplacement)
+    ? buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
+        buffer.open(MDAST_ROOT);
+        for (const n of nodes) if (!emitMdastOp(buffer, n, false, true, refs)) return false;
+        buffer.close();
+        return true;
+      })
+    : buffer.emitSequenceReplace(id, nodes, (n) => emitMdastOp(buffer, n, true, true, refs, true));
   if (!ok) throw unencodableContentError(nodes);
 }
 
@@ -981,8 +946,7 @@ function applyMdastVisitResult(
   nodeId: number,
   returnBuffer: CommandBuffer,
   refs: NodeRefs,
-  context: MdastVisitorContextImpl,
-  originalNode: MdastNode,
+  originalNode?: MdastNode,
 ): void {
   if (result === undefined || result === null) return;
   if (result === originalNode) return;
@@ -1000,7 +964,6 @@ function applyMdastVisitResult(
         returnBuffer.setProperty(nodeId, "value", node.value);
         break;
       }
-      context.noteListedRemovals(originalNode, nodeId, node);
       emitMdastTree(returnBuffer, "replace", nodeId, node as MdastContent, true, refs, true);
       break;
     }
@@ -1044,6 +1007,7 @@ export function visitMdastHandle(
   let deferred:
     | { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[]
     | null = null;
+  const removals = context.removals;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -1064,9 +1028,15 @@ export function visitMdastHandle(
 
     if (result instanceof Promise) {
       deferred ??= [];
-      deferred.push({ nodeId, promise: result, originalNode: node });
+      // Checked on settling, against the removals made by then.
+      const promise = result.then((settled) => {
+        removals.rebuilt(nodeId, settled);
+        return settled;
+      });
+      deferred.push({ nodeId, promise, originalNode: node });
     } else if (result !== undefined) {
-      applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, context, node);
+      removals.rebuilt(nodeId, result);
+      applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, node);
     }
   }
 
@@ -1075,14 +1045,7 @@ export function visitMdastHandle(
     return Promise.all(visits.map((visit) => visit.promise)).then((results) => {
       for (let i = 0; i < visits.length; i++) {
         const { nodeId, originalNode } = visits[i]!;
-        applyMdastVisitResult(
-          results[i],
-          nodeId,
-          returnBuffer,
-          resolver.refs,
-          context,
-          originalNode,
-        );
+        applyMdastVisitResult(results[i], nodeId, returnBuffer, resolver.refs, originalNode);
       }
       return finalizeMdastVisit(context, returnBuffer, plugin);
     });
@@ -1143,7 +1106,7 @@ function finalizeMdastVisit(
   returnBuffer: CommandBuffer,
   plugin: MdastPluginInstance,
 ): MdastVisitResult {
-  warnIfRemovalsListed(context.listedRemovalCount(), plugin, "mdast");
+  warnIfRemovalsListed(context.removals.listedCount(), plugin, "mdast");
   const commandBuffer = collectCommands(returnBuffer, context.getCommandBuffer());
   return {
     commandBuffer,

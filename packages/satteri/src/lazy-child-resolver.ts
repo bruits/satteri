@@ -114,6 +114,10 @@ export abstract class LazyChildResolver<TReader, TNode> {
     return parentId === NO_PARENT ? undefined : parentId;
   }
 
+  childIdsOf(parentId: number): number[] {
+    return this.readChildIds(this.#ensureReader(), parentId);
+  }
+
   // Immutable snapshots make cached child indices safe across repeated parent lookups.
   #childIndexByParent: Map<number, Map<number, number>> | null = null;
 
