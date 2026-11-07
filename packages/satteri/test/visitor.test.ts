@@ -818,23 +818,24 @@ test("context.setProperty(node, 'children', []) clears the children", () => {
   expect(html).toMatch(/<h1><\/h1>/);
 });
 
-test("context.removeChildAt() is a no-op for an out-of-range or negative index", () => {
+test("context.removeChildAt() counts a negative index from the end and ignores one out of range", () => {
   const html = visitAndRender("a *b*", {
     paragraph(node, ctx) {
       ctx.removeChildAt(node, 99);
       ctx.removeChildAt(node, -1);
     },
   });
-  expect(html).toMatch(/<p>a <em>b<\/em><\/p>/);
+  expect(html).toMatch(/<p>a <\/p>/);
 });
 
-test("context.insertChildAt() treats a negative index as a prepend", () => {
-  const html = visitAndRender("# Hello", {
+test("context.insertChildAt() counts a negative index from the end, stopping at the start", () => {
+  const html = visitAndRender("# Hello *world*", {
     heading(node, ctx) {
+      ctx.insertChildAt(node, -1, { type: "text", value: "X" });
       ctx.insertChildAt(node, -5, { type: "text", value: ">> " });
     },
   });
-  expect(html).toMatch(/<h1>&gt;&gt; Hello<\/h1>/);
+  expect(html).toMatch(/<h1>&gt;&gt; Hello X<em>world<\/em><\/h1>/);
 });
 
 test("setProperty on an invalid field throws an error naming the property and node type", () => {

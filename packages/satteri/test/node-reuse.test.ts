@@ -3,6 +3,7 @@ import type { Blockquote, List, Paragraph } from "mdast";
 import type { Element } from "hast";
 import {
   markdownToHtml,
+  mdxToJs,
   defineMdastPlugin,
   defineHastPlugin,
   type HastVisitorContext,
@@ -69,7 +70,7 @@ test("inserting a node inside itself is rejected when commands are applied", () 
     },
   });
   expect(() => markdownToHtml("> a\n", { mdastPlugins: [plugin] })).toThrow(
-    /payload ref targets an ancestor of its anchor/,
+    'satteri: plugin "insert-parent-after-child": the blockquote at 1:1 is placed next to or inside the paragraph at 1:3, which it contains',
   );
 });
 
@@ -87,7 +88,7 @@ test("two inserts that each reuse the other's node are rejected when commands ar
     },
   });
   expect(() => markdownToHtml(twoQuotes, { mdastPlugins: [plugin] })).toThrow(
-    /ref-dependency cycle/,
+    /the edits to the blockquote at \d:1 and the blockquote at \d:1 each place the other/,
   );
 });
 
@@ -162,7 +163,7 @@ test("hast: inserting an element inside itself is rejected when commands are app
     },
   });
   expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
-    /payload ref targets an ancestor of its anchor/,
+    "the <p> at 1:1 is placed next to or inside the <em> at 1:3, which it contains",
   );
 });
 
@@ -358,7 +359,7 @@ test("a nested self-child fails after the visitor returns", () => {
     },
   });
   expect(() => markdownToHtml("> x\n", { mdastPlugins: [plugin] })).toThrow(
-    /payload ref would contain its anchor/,
+    "content placed next to or into the blockquote at 1:1 contains that same node",
   );
   expect(returned).toBe(true);
 });
@@ -382,7 +383,7 @@ test("replacement root cannot contain a reference to itself", () => {
     },
   });
   expect(() => markdownToHtml("text\n", { mdastPlugins: [plugin] })).toThrow(
-    /payload ref would contain its anchor/,
+    "content placed next to or into the root at 1:1 contains that same node",
   );
 });
 
@@ -430,7 +431,7 @@ test("hast: an element cannot be nested inside new content appended to itself", 
     },
   });
   expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
-    /payload ref would contain its anchor/,
+    "content placed next to or into the <em> at 1:3 contains that same node",
   );
 });
 
@@ -1476,7 +1477,7 @@ test("a node listed in two places fails the compile", () => {
   });
   for (const plugin of [insertedTwice, listedTwice]) {
     expect(() => markdownToHtml("> a\n", { mdastPlugins: [plugin] }), plugin.name).toThrow(
-      /listed in two places/,
+      /the paragraph at 1:3 is placed in two places/,
     );
   }
 });
@@ -1910,4 +1911,141 @@ test("an edit on a removed node is dropped with a warning instead of failing", (
   } finally {
     warn.mockRestore();
   }
+});
+
+test("attributes, align and properties set before a replacement land on it", () => {
+  const table = defineMdastPlugin({
+    name: "align-then-replace",
+    table(node, ctx) {
+      ctx.setField(node, "align", ["right", null]);
+      ctx.replaceNode(node, { ...node });
+    },
+  });
+  expect(
+    markdownToHtml("| a | b |\n| --- | --- |\n", { features: { gfm: true }, mdastPlugins: [table] })
+      .html,
+  ).toContain('<th style="text-align: right">a</th>');
+
+  let attributes: unknown;
+  const directive = defineMdastPlugin({
+    name: "attributes-then-replace",
+    containerDirective(node, ctx) {
+      ctx.setField(node, "attributes", { id: "new" });
+      ctx.replaceNode(node, { ...node });
+    },
+  });
+  const observe = defineMdastPlugin({
+    name: "observe-attributes",
+    containerDirective(node) {
+      attributes = node.attributes;
+    },
+  });
+  markdownToHtml(':::note{id="old"}\nx\n:::\n', {
+    features: { directive: true },
+    mdastPlugins: [directive, observe],
+  });
+  expect(attributes).toEqual({ id: "new" });
+
+  const jsx = defineMdastPlugin({
+    name: "jsx-attributes-then-replace",
+    mdxJsxFlowElement(node, ctx) {
+      ctx.setField(node, "attributes", [
+        { type: "mdxJsxAttribute", name: "role", value: "status" },
+      ]);
+      ctx.replaceNode(node, { ...node });
+    },
+  });
+  const { code } = mdxToJs('<Button title="hello" />', { mdastPlugins: [jsx] });
+  expect(code).toContain('role: "status"');
+  expect(code).not.toContain("title");
+
+  const hast = defineHastPlugin({
+    name: "properties-then-replace",
+    element: {
+      filter: ["p"],
+      visit(node, ctx) {
+        ctx.setField(node, "properties", { id: "x" });
+        ctx.replaceNode(node, { ...node, tagName: "div" });
+      },
+    },
+  });
+  expect(markdownToHtml("a\n", { hastPlugins: [hast] }).html).toBe('<div id="x">a</div>\n');
+});
+
+test("a visitor can return an array of nodes, and an empty one removes the node", async () => {
+  const mdast = defineMdastPlugin({
+    name: "return-arrays",
+    paragraph(node) {
+      const [text] = node.children;
+      if (text?.type !== "text") return;
+      if (text.value === "keep") return [node];
+      if (text.value === "drop") return [];
+      return [{ type: "thematicBreak" }, node];
+    },
+  });
+  expect(markdownToHtml("a\n\nkeep\n\ndrop\n", { mdastPlugins: [mdast] }).html).toBe(
+    "<hr>\n<p>a</p>\n<p>keep</p>\n",
+  );
+
+  const asyncMdast = defineMdastPlugin({
+    name: "return-arrays-async",
+    async paragraph(node) {
+      return [node, { type: "thematicBreak" }];
+    },
+  });
+  expect((await markdownToHtml("a\n", { mdastPlugins: [asyncMdast] })).html).toBe(
+    "<p>a</p>\n<hr>\n",
+  );
+
+  const hast = defineHastPlugin({
+    name: "return-array",
+    element: {
+      filter: ["p"],
+      visit(node) {
+        return [node, { type: "element", tagName: "hr", properties: {}, children: [] }];
+      },
+    },
+  });
+  expect(markdownToHtml("a\n", { hastPlugins: [hast] }).html).toBe("<p>a</p><hr>\n");
+});
+
+test("a node removed by returning an empty array stays removed when listed elsewhere", () => {
+  const plugin = defineMdastPlugin({
+    name: "return-empty-then-move",
+    heading() {
+      return [];
+    },
+    blockquote(node, ctx) {
+      const heading = ctx.parent(node).children[0];
+      if (heading) ctx.appendChild(node, heading);
+    },
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(markdownToHtml("# h\n\n> q\n", { mdastPlugins: [plugin] }).html).toBe(
+      "<blockquote>\n<p>q</p>\n</blockquote>\n",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'plugin "return-empty-then-move" listed 1 mdast node(s) it also removed',
+      ),
+    );
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test("replacing two nodes with each other names the plugin and both nodes", () => {
+  const plugin = defineMdastPlugin({
+    name: "swap-by-replacing",
+    heading(node, ctx) {
+      const paragraph = ctx.parent(node).children[1];
+      if (!paragraph) return;
+      ctx.replaceNode(node, paragraph);
+      ctx.replaceNode(paragraph, node);
+    },
+  });
+  expect(() => markdownToHtml("# a\n\npara\n", { mdastPlugins: [plugin] })).toThrow(
+    'satteri: plugin "swap-by-replacing": the edits to the heading at 1:1 and the paragraph at 3:1 each place the other',
+  );
 });
