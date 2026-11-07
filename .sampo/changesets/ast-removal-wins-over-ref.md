@@ -2,4 +2,4 @@
 cargo/satteri-ast: patch
 ---
 
-Changed patch application so a node removed in the same batch stays removed when it is also replaced, or when content replacing one of its ancestors, or setting an ancestor's children, refers to it.
+Changed patch application so a ref moves its target instead of copying it, a node removed in the same batch stays removed whatever refers to it, and a node referred to twice fails with `CommandError::NodePlacedTwice`.
