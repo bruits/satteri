@@ -21,9 +21,11 @@
 //! signature on each entry point makes a cross-kind call a compile error.
 
 use rustc_hash::{FxHashMap, FxHashSet};
-use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, NodePosition, StringRef};
+use satteri_arena::{
+    Arena, ArenaBuilder, ArenaKind, Document, Hast, Mdast, NodePosition, StringRef,
+};
 use satteri_ast::commands::{CommandError, NodeLabel};
-use satteri_ast::hast::codec::decode_element_tag;
+use satteri_ast::hast::codec::{decode_element_tag, encode_element_data};
 use satteri_ast::hast::{HastNodeType, is_void_element};
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::mdast::codec::*;
@@ -34,6 +36,7 @@ use satteri_ast::patch::{
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
 use satteri_ast::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_NULL, PROP_SPACE_SEP, PROP_STRING,
+    PROP_TOKEN_LIST,
 };
 
 use crate::generated::prop_slots::{MdastPropSlot, mdast_prop_slot};
@@ -149,11 +152,9 @@ fn apply_mdast_set_field(
 
     let node_type = arena.get_node(node_id).node_type;
 
-    // The property doesn't resolve to a slot for this node type at all.
-    let slot = mdast_prop_slot(node_type, prop_name).ok_or_else(|| CommandError::UnknownField {
-        node_type: mdast_type_name(node_type),
-        name: prop_name.to_string(),
-    })?;
+    let Some(slot) = mdast_prop_slot(node_type, prop_name) else {
+        return apply_mdast_list_field(arena, node_id, prop_name, value_type, value_str);
+    };
 
     // The slot resolved, so a `None` from the writer means the value's type is
     // one the slot can't hold — report that rather than "unknown".
@@ -486,10 +487,7 @@ fn apply_hast_set_field(
         _ => false,
     };
     if !settable {
-        return Err(CommandError::UnknownField {
-            node_type: node_type.name().to_string(),
-            name: field_name.to_string(),
-        });
+        return apply_hast_list_field(arena, node_id, node_type, field_name, value_type, value_str);
     }
 
     let valid_value = match node_type {
@@ -536,6 +534,149 @@ fn apply_hast_set_attribute(
         _ => Err(CommandError::UnknownField {
             node_type: node_type.name().to_string(),
             name: attr_name.to_string(),
+        }),
+    }
+}
+
+/// `[name, kind, value]` entries of an attribute or property list.
+type ListRows = Vec<(String, u8, String)>;
+
+/// A list field arrives as JSON, the way `data` does: [`ListRows`], a directive's `[key, value]` pairs, or `align` codes.
+fn list_field_json<T: serde::de::DeserializeOwned>(value_type: u8, value_str: &str) -> Option<T> {
+    if value_type != PROP_STRING {
+        return None;
+    }
+    serde_json::from_str(value_str).ok()
+}
+
+fn borrow_rows(rows: &ListRows) -> Vec<(&str, u8, &str)> {
+    rows.iter()
+        .map(|(name, kind, value)| (name.as_str(), *kind, value.as_str()))
+        .collect()
+}
+
+/// `align` and `attributes` live in `type_data` beside the node's name, so an edit rebuilds the list and keeps the rest.
+fn apply_mdast_list_field(
+    arena: &mut Arena<Mdast>,
+    node_id: u32,
+    prop_name: &str,
+    value_type: u8,
+    value_str: &str,
+) -> Result<(), CommandError> {
+    let node_type = arena.get_node(node_id).node_type;
+    let invalid = || CommandError::InvalidPropertyValue {
+        node_type: mdast_type_name(node_type),
+        name: prop_name.to_string(),
+    };
+    match (MdastNodeType::from_u8(node_type), prop_name) {
+        (Some(MdastNodeType::Table), "align") => {
+            let codes: Vec<u8> = list_field_json(value_type, value_str).ok_or_else(invalid)?;
+            let aligns = codes
+                .into_iter()
+                .map(ColumnAlign::from_u8)
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(invalid)?;
+            arena.set_type_data(node_id, &encode_table_data(&aligns));
+        }
+        (
+            Some(
+                MdastNodeType::ContainerDirective
+                | MdastNodeType::LeafDirective
+                | MdastNodeType::TextDirective,
+            ),
+            "attributes",
+        ) => {
+            let pairs: Vec<(String, String)> =
+                list_field_json(value_type, value_str).ok_or_else(invalid)?;
+            let data = arena.get_type_data(node_id);
+            if data.len() < 16 {
+                return Err(CommandError::TypeDataTooShort);
+            }
+            let name = decode_directive_name(data);
+            let attrs: Vec<_> = pairs
+                .iter()
+                .map(|(key, value)| (arena.alloc_string(key), arena.alloc_string(value)))
+                .collect();
+            arena.set_type_data(node_id, &encode_directive_data(name, &attrs));
+        }
+        #[cfg(feature = "mdx")]
+        (
+            Some(MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement),
+            "attributes",
+        ) => {
+            let rows: ListRows = list_field_json(value_type, value_str).ok_or_else(invalid)?;
+            set_mdx_jsx_attributes(arena, node_id, &rows, invalid)?;
+        }
+        _ => {
+            return Err(CommandError::UnknownField {
+                node_type: mdast_type_name(node_type),
+                name: prop_name.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "mdx")]
+fn set_mdx_jsx_attributes<K: ArenaKind>(
+    arena: &mut Arena<K>,
+    node_id: u32,
+    rows: &ListRows,
+    invalid: impl Fn() -> CommandError,
+) -> Result<(), CommandError> {
+    if rows.iter().any(|&(_, kind, _)| kind > MDX_ATTR_SPREAD) {
+        return Err(invalid());
+    }
+    let data = arena.get_type_data(node_id);
+    if data.len() < 16 {
+        return Err(CommandError::TypeDataTooShort);
+    }
+    let name = decode_mdx_jsx_element_name(data);
+    let explicit = decode_mdx_jsx_explicit(data);
+    let attrs = intern_mdx_jsx_attrs(&borrow_rows(rows), arena);
+    arena.set_type_data(
+        node_id,
+        &encode_mdx_jsx_element_data(name, &attrs, explicit),
+    );
+    Ok(())
+}
+
+/// `properties` and MDX JSX `attributes` live in `type_data` beside the tag, so an edit rebuilds the list and keeps the rest.
+fn apply_hast_list_field(
+    arena: &mut Arena<Hast>,
+    node_id: u32,
+    node_type: HastNodeType,
+    field_name: &str,
+    value_type: u8,
+    value_str: &str,
+) -> Result<(), CommandError> {
+    let invalid = || CommandError::InvalidPropertyValue {
+        node_type: node_type.name().to_string(),
+        name: field_name.to_string(),
+    };
+    match (node_type, field_name) {
+        (HastNodeType::Element, "properties") => {
+            let rows: ListRows = list_field_json(value_type, value_str).ok_or_else(invalid)?;
+            if rows.iter().any(|&(_, kind, _)| kind > PROP_TOKEN_LIST) {
+                return Err(invalid());
+            }
+            let data = arena.get_type_data(node_id);
+            if data.len() < 16 {
+                return Err(CommandError::TypeDataTooShort);
+            }
+            let tag = decode_element_tag(data);
+            let props = intern_element_props(&borrow_rows(&rows), arena);
+            arena.set_type_data(node_id, &encode_element_data(tag, &props));
+            Ok(())
+        }
+        #[cfg(feature = "mdx")]
+        (HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement, "attributes") => {
+            let rows: ListRows = list_field_json(value_type, value_str).ok_or_else(invalid)?;
+            set_mdx_jsx_attributes(arena, node_id, &rows, invalid)
+        }
+        _ => Err(CommandError::UnknownField {
+            node_type: node_type.name().to_string(),
+            name: field_name.to_string(),
         }),
     }
 }
@@ -976,23 +1117,41 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
 #[cfg(feature = "mdx")]
 pub(crate) fn intern_mdx_jsx_attrs<K: ArenaKind>(
     props: &[(&str, u8, &str)],
-    builder: &mut ArenaBuilder<K>,
+    arena: &mut Document<'_, K>,
 ) -> Vec<(u8, StringRef, StringRef)> {
     let mut attrs = Vec::with_capacity(props.len());
     for &(name, kind, value) in props {
         let nr = if kind == MDX_ATTR_SPREAD {
             StringRef::empty()
         } else {
-            builder.alloc_string(name)
+            arena.alloc_string(name)
         };
         let vr = if kind == MDX_ATTR_BOOLEAN_PROP {
             StringRef::empty()
         } else {
-            builder.alloc_string(value)
+            arena.alloc_string(value)
         };
         attrs.push((kind, nr, vr));
     }
     attrs
+}
+
+/// Intern element property strings into `(name, kind, value)` rows; booleans carry no value.
+pub(crate) fn intern_element_props(
+    props: &[(&str, u8, &str)],
+    arena: &mut Document<'_, Hast>,
+) -> Vec<(StringRef, u8, StringRef)> {
+    let mut rows = Vec::with_capacity(props.len());
+    for &(name, kind, value) in props {
+        let nr = arena.alloc_string(name);
+        let vr = if kind == PROP_BOOL_TRUE || kind == PROP_BOOL_FALSE {
+            StringRef::empty()
+        } else {
+            arena.alloc_string(value)
+        };
+        rows.push((nr, kind, vr));
+    }
+    rows
 }
 
 /// Accumulates one node's fields between its OPEN and finalization. Strings
@@ -1801,7 +1960,9 @@ pub fn apply_mdast_commands_with_options(
     let (arena, dropped) =
         apply_mdast_commands_lenient_with_options(arena, command_buf, parse_markdown, options)?;
     if let Some(anchor) = dropped.first() {
-        return Err(CommandError::PatchOnRemovedSubtree(NodeLabel::of(&arena, *anchor)));
+        return Err(CommandError::PatchOnRemovedSubtree(NodeLabel::of(
+            &arena, *anchor,
+        )));
     }
     Ok(arena)
 }
@@ -2039,7 +2200,9 @@ pub fn apply_hast_commands(
 ) -> Result<Arena<Hast>, CommandError> {
     let (arena, dropped) = apply_hast_commands_lenient(arena, command_buf)?;
     if let Some(anchor) = dropped.first() {
-        return Err(CommandError::PatchOnRemovedSubtree(NodeLabel::of(&arena, *anchor)));
+        return Err(CommandError::PatchOnRemovedSubtree(NodeLabel::of(
+            &arena, *anchor,
+        )));
     }
     Ok(arena)
 }
@@ -3009,6 +3172,59 @@ mod tests {
     }
 
     const DATA: &str = r#"{"hName":"aside"}"#;
+
+    #[test]
+    fn a_list_field_takes_only_its_own_shape() {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        b.open_node(MdastNodeType::Root as u8);
+        b.open_node(MdastNodeType::Table as u8);
+        b.set_data_current(&encode_table_data(&[ColumnAlign::None]));
+        b.close_node();
+        b.open_node(MdastNodeType::ContainerDirective as u8);
+        let name = b.alloc_string("note");
+        b.set_data_current(&encode_directive_data(name, &[]));
+        b.close_node();
+        b.close_node();
+        let mut arena = b.finish();
+        let [table, directive] = [1, 2];
+
+        apply_mdast_set_field(&mut arena, table, "align", PROP_STRING, "[2,0]").unwrap();
+        assert_eq!(
+            decode_table_alignments(arena.get_type_data(table)),
+            [ColumnAlign::Right, ColumnAlign::None]
+        );
+        apply_mdast_set_field(
+            &mut arena,
+            directive,
+            "attributes",
+            PROP_STRING,
+            r#"[["id","x"]]"#,
+        )
+        .unwrap();
+        let data = arena.get_type_data(directive);
+        assert_eq!(arena.get_str(decode_directive_name(data)), "note");
+        let (key, value) = decode_directive_attr(data, 0);
+        assert_eq!((arena.get_str(key), arena.get_str(value)), ("id", "x"));
+
+        for (id, name, value) in [
+            (table, "align", "[9]"),
+            (table, "align", r#"["right"]"#),
+            (directive, "attributes", r#"[["id",1,"x"]]"#),
+            (directive, "attributes", r#"{"id":"x"}"#),
+        ] {
+            assert!(
+                matches!(
+                    apply_mdast_set_field(&mut arena, id, name, PROP_STRING, value),
+                    Err(CommandError::InvalidPropertyValue { .. })
+                ),
+                "{name} = {value}"
+            );
+        }
+        assert!(matches!(
+            apply_mdast_set_field(&mut arena, table, "attributes", PROP_STRING, "[]"),
+            Err(CommandError::UnknownField { .. })
+        ));
+    }
 
     #[test]
     fn a_field_edit_lands_on_a_one_node_replacement_whichever_came_first() {
