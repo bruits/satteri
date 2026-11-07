@@ -2051,6 +2051,323 @@ fn a_replacement_naming_another_node_moves_it() {
 }
 
 #[test]
+fn a_node_named_in_its_own_replacement_keeps_its_id_and_the_edits_inside_it() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let text_in_heading = orig.get_children(heading)[0];
+    let paragraph = orig.get_children(0)[1];
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::Replace {
+                node_id: heading,
+                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[heading])),
+                keep_children: false,
+            },
+            Patch::Replace {
+                node_id: text_in_heading,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
+                keep_children: false,
+            },
+        ],
+    );
+    let blockquote = rebuilt.get_children(0)[0];
+    assert_eq!(rebuilt.get_children(0), &[blockquote, paragraph]);
+    assert_eq!(rebuilt.get_children(blockquote), &[heading]);
+    assert_eq!(
+        child_types(&rebuilt, heading),
+        vec![MdastNodeType::Break as u8]
+    );
+}
+
+#[test]
+fn a_node_between_new_siblings_in_its_own_replacement_keeps_its_child_edits() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let text_in_heading = orig.get_children(heading)[0];
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node(MdastNodeType::Root as u8);
+    b.open_node(MdastNodeType::ThematicBreak as u8);
+    b.close_node();
+    b.open_node(REF_NODE_TYPE);
+    b.set_data_current(&heading.to_le_bytes());
+    b.close_node();
+    b.open_node(MdastNodeType::ThematicBreak as u8);
+    b.close_node();
+    b.close_node();
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::Replace {
+                node_id: heading,
+                new_tree: PatchContent::Tree(b.finish()),
+                keep_children: false,
+            },
+            Patch::AppendChild {
+                node_id: heading,
+                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
+            },
+        ],
+    );
+    assert_eq!(
+        child_types(&rebuilt, 0),
+        vec![
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::Heading as u8,
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::Paragraph as u8,
+        ]
+    );
+    assert_eq!(rebuilt.get_children(0)[1], heading);
+    assert_eq!(rebuilt.get_children(heading)[0], text_in_heading);
+    assert_eq!(
+        child_types(&rebuilt, heading),
+        vec![MdastNodeType::Text as u8, MdastNodeType::Break as u8]
+    );
+}
+
+#[test]
+fn a_node_named_twice_in_its_own_replacement_errors() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let mut arena = orig.clone();
+    let result = apply_patches_in_place(
+        &mut arena,
+        &[Patch::Replace {
+            node_id: heading,
+            new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Root, &[heading, heading])),
+            keep_children: false,
+        }],
+    );
+    assert!(matches!(result, Err(CommandError::NodePlacedTwice(id)) if id == heading));
+}
+
+#[test]
+fn child_edits_on_a_node_replaced_by_one_new_node_land_on_it() {
+    let orig = build_hello_world();
+    let paragraph = orig.get_children(0)[1];
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::AppendChild {
+                node_id: paragraph,
+                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
+            },
+            Patch::Replace {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+                keep_children: false,
+            },
+            Patch::PrependChild {
+                node_id: paragraph,
+                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+        ],
+    );
+    let blockquote = rebuilt.get_children(0)[1];
+    assert_eq!(
+        rebuilt.get_node(blockquote).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+    assert_eq!(
+        child_types(&rebuilt, blockquote),
+        vec![
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::Break as u8
+        ]
+    );
+}
+
+#[test]
+fn a_new_children_list_for_a_replaced_node_replaces_the_replacements_own() {
+    let orig = build_hello_world();
+    let paragraph = orig.get_children(0)[1];
+    let text = orig.get_children(paragraph)[0];
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::Replace {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(node_with_refs(MdastNodeType::Blockquote, &[text])),
+                keep_children: false,
+            },
+            Patch::SetChildren {
+                node_id: paragraph,
+                new_children: PatchContent::Tree(root_with_ref(text, Some(MdastNodeType::Break))),
+            },
+        ],
+    );
+    let blockquote = rebuilt.get_children(0)[1];
+    assert_eq!(
+        rebuilt.get_node(blockquote).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+    assert_eq!(rebuilt.get_children(blockquote)[1], text);
+    assert_eq!(
+        child_types(&rebuilt, blockquote),
+        vec![MdastNodeType::Break as u8, MdastNodeType::Text as u8]
+    );
+}
+
+#[test]
+fn a_child_edit_on_a_node_replaced_by_several_is_dropped_and_leaves_what_it_named() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+    let patches = [
+        Patch::Replace {
+            node_id: paragraph,
+            new_tree: PatchContent::Tree(root_wrapped_arena(&[
+                MdastNodeType::ThematicBreak,
+                MdastNodeType::ThematicBreak,
+            ])),
+            keep_children: false,
+        },
+        Patch::AppendChild {
+            node_id: paragraph,
+            child_tree: PatchContent::Tree(ref_payload_mdast(heading)),
+        },
+    ];
+    let (rebuilt, dropped) = rebuild_lenient_both(&orig, &patches);
+    assert_eq!(dropped, vec![paragraph]);
+    assert_eq!(rebuilt.get_children(0)[0], heading);
+    assert_eq!(
+        child_types(&rebuilt, 0),
+        vec![
+            MdastNodeType::Heading as u8,
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::ThematicBreak as u8,
+        ]
+    );
+    let mut strict = orig.clone();
+    assert!(matches!(
+        apply_patches_strict(&mut strict, &patches),
+        Err(CommandError::PatchOnRemovedSubtree(id)) if id == paragraph
+    ));
+}
+
+#[test]
+fn a_wrap_on_a_replaced_node_wraps_whatever_took_its_place() {
+    let orig = build_hello_world();
+    let paragraph = orig.get_children(0)[1];
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::Wrap {
+                node_id: paragraph,
+                parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+            },
+            Patch::Replace {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(root_wrapped_arena(&[
+                    MdastNodeType::ThematicBreak,
+                    MdastNodeType::Break,
+                ])),
+                keep_children: false,
+            },
+        ],
+    );
+    let blockquote = rebuilt.get_children(0)[1];
+    assert_eq!(
+        rebuilt.get_node(blockquote).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+    assert_eq!(
+        child_types(&rebuilt, blockquote),
+        vec![
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::Break as u8
+        ]
+    );
+}
+
+#[test]
+fn two_wraps_nest_in_call_order() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::Wrap {
+                node_id: heading,
+                parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+            },
+            Patch::Wrap {
+                node_id: heading,
+                parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ListItem)),
+            },
+        ],
+    );
+    let outer = rebuilt.get_children(0)[0];
+    assert_eq!(
+        rebuilt.get_node(outer).node_type,
+        MdastNodeType::ListItem as u8
+    );
+    let inner = rebuilt.get_children(outer)[0];
+    assert_eq!(
+        rebuilt.get_node(inner).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+    assert_eq!(rebuilt.get_children(inner), &[heading]);
+}
+
+#[test]
+fn a_child_moved_out_of_a_node_replaced_with_its_children_names_its_new_parent() {
+    let orig = build_hello_world();
+    let paragraph = orig.get_children(0)[1];
+    let text = orig.get_children(paragraph)[0];
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::Wrap {
+                node_id: text,
+                parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Emphasis)),
+            },
+            Patch::Replace {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+                keep_children: true,
+            },
+            Patch::SetChildren {
+                node_id: paragraph,
+                new_children: PatchContent::Tree(root_with_ref(text, None)),
+            },
+        ],
+    );
+    let blockquote = rebuilt.get_children(0)[1];
+    let emphasis = rebuilt.get_children(blockquote)[0];
+    assert_eq!(rebuilt.get_children(emphasis), &[text]);
+    assert_eq!(rebuilt.get_node(text).parent, emphasis);
+}
+
+#[test]
+fn a_child_edit_on_a_replaced_root_lands_on_the_new_root() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::Replace {
+                node_id: 0,
+                new_tree: PatchContent::Tree(root_wrapped_arena(&[MdastNodeType::ThematicBreak])),
+                keep_children: false,
+            },
+            Patch::AppendChild {
+                node_id: 0,
+                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
+            },
+        ],
+    );
+    assert_eq!(rebuilt.get_node(0).node_type, MdastNodeType::Root as u8);
+    assert_eq!(
+        child_types(&rebuilt, 0),
+        vec![
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::Break as u8
+        ]
+    );
+}
+
+#[test]
 fn a_node_arranged_twice_errors() {
     use satteri_ast::patch::REF_NODE_TYPE;
     let orig = build_hello_world();
@@ -2245,13 +2562,14 @@ fn property_fuzz_in_place_apply() {
         for _ in 0..patch_count {
             let anchor = 1 + rng.below(len - 1) as u32;
             let payload = |rng: &mut Lcg| -> Arena<Mdast> {
-                match rng.below(4) {
+                match rng.below(5) {
                     0 => single_node_arena(MdastNodeType::ThematicBreak),
                     1 => single_node_arena(MdastNodeType::Paragraph),
                     2 => root_wrapped_arena(&[
                         MdastNodeType::Paragraph,
                         MdastNodeType::ThematicBreak,
                     ]),
+                    3 => node_with_refs(MdastNodeType::Blockquote, &[rng.below(len) as u32]),
                     _ => ref_payload_mdast(rng.below(len) as u32),
                 }
             };

@@ -36,15 +36,8 @@ pub enum CommandError {
     UnencodableNodeType(&'static str),
     /// An op-stream nests OPENs deeper than the replay supports.
     OpstreamTooDeep(usize),
-    /// `wrapNode` was issued against a node that is also removed in the same
-    /// command buffer. There's no defined way to "wrap then remove" or
-    /// "remove then wrap" the same anchor.
-    WrapOnRemovedNode(u32),
-    /// `prependChild` or `appendChild` was issued against a node that is
-    /// also removed. The removed node has no inside to receive children.
-    ChildPatchOnRemovedNode(u32),
-    /// A patch's anchor lives inside a subtree whose root was removed, so
-    /// the patch can never apply.
+    /// A patch has nowhere to land: its anchor lives inside a removed subtree,
+    /// or it edits a node that is removed, or replaced by content that cannot take the edit.
     PatchOnRemovedSubtree(u32),
     /// Payloads place or arrange the same node twice; a node can only be in one place.
     NodePlacedTwice(u32),
@@ -106,12 +99,6 @@ impl std::fmt::Display for CommandError {
             Self::OpstreamTooDeep(max) => {
                 write!(f, "content nests deeper than {max} levels")
             }
-            Self::WrapOnRemovedNode(id) => {
-                write!(
-                    f,
-                    "wrapNode targets node {id}, which this pass removes or replaces"
-                )
-            }
             Self::UnbalancedOpstream => {
                 write!(f, "unbalanced op-stream: OPEN and CLOSE ops do not pair up")
             }
@@ -130,16 +117,15 @@ impl std::fmt::Display for CommandError {
                     "stored node type_data is shorter than its layout requires"
                 )
             }
-            Self::ChildPatchOnRemovedNode(id) => write!(
-                f,
-                "prependChild/appendChild targets node {id}, which this pass removes or replaces; add the child to its replacement instead"
-            ),
             Self::NodePlacedTwice(id) => write!(
                 f,
                 "node {id} is listed in two places, but a node can only be in one; list structuredClone(node) where you want a copy"
             ),
             Self::PatchOnRemovedSubtree(id) => {
-                write!(f, "patch targets node {id} inside a removed subtree")
+                write!(
+                    f,
+                    "patch on node {id} has nowhere to land: the node or a subtree holding it is removed or replaced"
+                )
             }
             Self::InvalidRawWrapper(reason) => {
                 write!(f, "wrapNode: {{raw}} wrapper {reason}")
