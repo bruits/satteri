@@ -1102,14 +1102,6 @@ test("a removed child listed again stays removed and the plugin is warned", () =
       node.children.push(first);
       return asSection(node);
     }),
-    relistAfterRemoving("beside-removed-parent", (node, ctx, first) => {
-      ctx.removeNode(node);
-      ctx.insertAfter(node, first);
-    }),
-    relistAfterRemoving("beside-parent-removed-later", (node, ctx, first) => {
-      ctx.insertAfter(node, first);
-      ctx.removeNode(node);
-    }),
     relistAfterRemoving("listed-twice", (node, _ctx, first) => ({
       ...node,
       children: [first, ...node.children.slice(1), first],
@@ -1195,14 +1187,6 @@ test("removing a node without listing it again does not warn", () => {
       ctx.replaceNode(quote, [{ raw: "<div>" }, ...quote.children, { raw: "</div>" }]);
     },
   });
-  const unwrapByInsert = defineMdastPlugin({
-    name: "unwrap-by-insert",
-    blockquote(node, ctx) {
-      ctx.insertBefore(node, node.children);
-      ctx.removeNode(node);
-    },
-    paragraph: removeMdastParagraphA,
-  });
   const laterRemoval = defineMdastPlugin({
     name: "reverse-then-remove-child",
     blockquote(node) {
@@ -1231,7 +1215,6 @@ test("removing a node without listing it again does not warn", () => {
       [passOnCopiedList, "<blockquote>\n<p>b</p>\n</blockquote>\n"],
       [alertFromMarker, "<aside>\n<p>b</p>\n</aside>\n"],
       [rawSandwich, "<div>\n<p>b</p>\n</div>\n"],
-      [unwrapByInsert, "<p>b</p>\n"],
     ] as const;
     for (const [plugin, html] of expected) {
       expect(markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] }).html, plugin.name).toBe(
@@ -1242,6 +1225,51 @@ test("removing a node without listing it again does not warn", () => {
   } finally {
     warn.mockRestore();
   }
+});
+
+test("an insert moves the nodes it is given, even beside a node that is removed", () => {
+  const plugins = [
+    relistAfterRemoving("insert-beside-removed-parent", (node, ctx, first) => {
+      ctx.removeNode(node);
+      ctx.insertAfter(node, first);
+    }),
+    relistAfterRemoving("insert-beside-parent-removed-later", (node, ctx, first) => {
+      ctx.insertAfter(node, first);
+      ctx.removeNode(node);
+    }),
+  ];
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    for (const plugin of plugins) {
+      const { html } = markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [plugin] });
+      expect(html, plugin.name).toBe("<p>a</p>\n");
+    }
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test("unwrapping with replaceNode keeps a removed child removed, inserting the children moves it", () => {
+  const replaced = defineMdastPlugin({
+    name: "unwrap-by-replace",
+    blockquote(node, ctx) {
+      ctx.replaceNode(node, node.children);
+    },
+    paragraph: removeMdastParagraphA,
+  });
+  const inserted = defineMdastPlugin({
+    name: "unwrap-by-insert",
+    blockquote(node, ctx) {
+      ctx.insertBefore(node, node.children);
+      ctx.removeNode(node);
+    },
+    paragraph: removeMdastParagraphA,
+  });
+  expect(markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [replaced] }).html).toBe("<p>b</p>\n");
+  expect(markdownToHtml("> a\n>\n> b\n", { mdastPlugins: [inserted] }).html).toBe(
+    "<p>a</p>\n<p>b</p>\n",
+  );
 });
 
 test("an async visitor's list is checked against the removals made by the time it settles", async () => {

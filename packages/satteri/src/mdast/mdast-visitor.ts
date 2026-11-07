@@ -319,9 +319,6 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   }
 
   #splice(anchorId: number, content: MdastContent | MdastContent[], op: StructuralOp): void {
-    if (op === "insertBefore" || op === "insertAfter") {
-      this.removals.insertedBeside(anchorId, content);
-    }
     for (const n of asArray(content)) {
       emitMdastTree(this.#commandBuffer, op, anchorId, n, false, this.#refs, true);
     }

@@ -122,8 +122,6 @@ interface ChildResolver {
 export class RemovalTracker<TNode> {
   #removed: Set<number> | undefined;
   #listed: Set<number> | undefined;
-  /** Anchor id, then content, per sibling insert; only once the pass ends is it known which anchors went away. */
-  #insertsBeside: unknown[] | undefined;
   readonly #nodeId: (node: TNode, refs: NodeRefs) => number | undefined;
   readonly #refs: NodeRefs;
   readonly #resolver: ChildResolver;
@@ -142,10 +140,6 @@ export class RemovalTracker<TNode> {
     (this.#removed ??= new Set()).add(id);
   }
 
-  insertedBeside(anchorId: number, content: unknown): void {
-    (this.#insertsBeside ??= []).push(anchorId, content);
-  }
-
   /** Notes the removed nodes inside `targetId` that content rebuilding it lists. */
   rebuilt(targetId: number, content: unknown): void {
     // Kept tiny so the common no-removal case inlines into every replacement.
@@ -161,14 +155,6 @@ export class RemovalTracker<TNode> {
   }
 
   listedCount(): number {
-    const removed = this.#removed;
-    if (removed === undefined) return 0;
-    // Content beside a removed node takes its place, whichever was queued first.
-    const inserts = this.#insertsBeside ?? [];
-    for (let i = 0; i < inserts.length; i += 2) {
-      const anchorId = inserts[i] as number;
-      if (removed.has(anchorId)) this.#collect(removed, anchorId, inserts[i + 1]);
-    }
     return this.#listed?.size ?? 0;
   }
 

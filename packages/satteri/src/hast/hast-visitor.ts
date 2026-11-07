@@ -471,9 +471,6 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   #splice(anchorId: number, content: HastContent | HastContent[], op: StructuralOp): void {
-    if (op === "insertBefore" || op === "insertAfter") {
-      this.removals.insertedBeside(anchorId, content);
-    }
     for (const n of asArray(content)) {
       emitHastTree(this.#commandBuffer, op, anchorId, n, this.#refs, true);
     }
