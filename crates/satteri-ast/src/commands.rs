@@ -108,6 +108,8 @@ pub enum CommandError {
     OpstreamTooDeep(usize),
     /// A patch has nowhere to land: by the time it applies, its node is no longer in the tree.
     PatchOnRemovedSubtree(NodeLabel),
+    /// Children are added to a node that cannot hold any, such as text or a void element.
+    ChildrenOnLeaf(NodeLabel),
     /// One payload names the same node twice; a node can only be in one place.
     NodePlacedTwice(NodeLabel),
     /// Content placed into or next to a node, or replacing the root, contains that node.
@@ -200,6 +202,12 @@ impl std::fmt::Display for CommandError {
                 f,
                 "content placed next to or into {node} contains that same node; place structuredClone(node) there for a copy"
             ),
+            Self::ChildrenOnLeaf(node) => {
+                write!(
+                    f,
+                    "{node} cannot hold children, so nothing can be inserted into it"
+                )
+            }
             Self::AncestorPlacedInside { ancestor, node } => write!(
                 f,
                 "{ancestor} is placed next to or inside {node}, which it contains"

@@ -12,6 +12,9 @@ use crate::commands::{CommandError, NodeLabel};
 /// can name a node once.
 pub const REF_NODE_TYPE: u8 = 0xFF;
 
+/// Sentinel `node_type` standing for the anchor's children as they are when the patch applies.
+pub const KEEP_CHILDREN_NODE_TYPE: u8 = 0xFE;
+
 #[derive(Debug, Clone)]
 /// Payload of a structural patch: a free-standing tree copied in at apply
 /// time, or subtrees already replayed into the target arena as orphans
@@ -220,79 +223,6 @@ pub fn graft_tree<K: ArenaKind>(arena: &mut Arena<K>, tree: &Arena<K>) -> Vec<u3
     copy_tree(arena, tree, Top::Splice)
 }
 
-/// Move `src`'s shape onto node 0: type, type_data, position, node_data, and
-/// children (re-parented to 0). `src` itself becomes unreachable garbage. The
-/// in-place equivalent of "the replacement becomes the new root".
-fn overwrite_root_with<K: ArenaKind>(arena: &mut Arena<K>, src: u32) {
-    let src_node = *arena.get_node(src);
-    let children = arena.get_children(src).to_vec();
-    {
-        let root = arena.get_node_mut(0);
-        root.node_type = src_node.node_type;
-        root.data_offset = src_node.data_offset;
-        root.data_len = src_node.data_len;
-        root.start_offset = src_node.start_offset;
-        root.end_offset = src_node.end_offset;
-        root.start_line = src_node.start_line;
-        root.start_column = src_node.start_column;
-        root.end_line = src_node.end_line;
-        root.end_column = src_node.end_column;
-    }
-    arena.set_children(0, &children);
-    match arena.node_data.remove(&src) {
-        Some(data) => {
-            arena.node_data.insert(0, data);
-        }
-        None => {
-            arena.node_data.remove(&0);
-        }
-    }
-}
-
-/// Make node 0 an empty root (no children, no data, zeroed position) for a
-/// `Remove` on the root. The node type is kept so the document still
-/// serializes (as empty).
-fn clear_root<K: ArenaKind>(arena: &mut Arena<K>) {
-    {
-        let root = arena.get_node_mut(0);
-        root.data_offset = 0;
-        root.data_len = 0;
-        root.start_offset = 0;
-        root.end_offset = 0;
-        root.start_line = 0;
-        root.start_column = 0;
-        root.end_line = 0;
-        root.end_column = 0;
-    }
-    arena.set_children(0, &[]);
-    arena.node_data.remove(&0);
-}
-
-/// Shallow-copy node 0 into a fresh node: same shape, node_data moved over,
-/// children re-parented under the copy. Used when a wrapper takes over the
-/// root slot and the old root becomes its first child.
-fn copy_root_shallow<K: ArenaKind>(arena: &mut Arena<K>) -> u32 {
-    let root = *arena.get_node(0);
-    let copy = arena.alloc_node(root.node_type);
-    {
-        let n = arena.get_node_mut(copy);
-        n.data_offset = root.data_offset;
-        n.data_len = root.data_len;
-        n.start_offset = root.start_offset;
-        n.end_offset = root.end_offset;
-        n.start_line = root.start_line;
-        n.start_column = root.start_column;
-        n.end_line = root.end_line;
-        n.end_column = root.end_column;
-    }
-    if let Some(data) = arena.node_data.remove(&0) {
-        arena.node_data.insert(copy, data);
-    }
-    let children = arena.get_children(0).to_vec();
-    arena.set_children(copy, &children);
-    copy
-}
-
 /// Apply `patches` in order by editing the arena in place; detached nodes stay
 /// behind as unreachable garbage (every consumer traverses from root). Returns
 /// the anchors of patches that did nothing because their node was no longer in
@@ -303,12 +233,19 @@ pub fn apply_patches_in_place<K: ArenaKind>(
 ) -> Result<Vec<u32>, CommandError> {
     let mut applier = PatchApplier::default();
     let mut dropped = Vec::new();
+    let mut result = Ok(());
     for patch in patches {
-        if !applier.apply(arena, patch)? {
-            dropped.push(patch_anchor(patch));
+        match applier.apply(arena, patch) {
+            Ok(true) => {}
+            Ok(false) => dropped.push(patch_anchor(patch)),
+            Err(err) => {
+                result = Err(err);
+                break;
+            }
         }
     }
-    Ok(dropped)
+    applier.finish(arena);
+    result.map(|()| dropped)
 }
 
 /// Like [`apply_patches_in_place`], but a patch whose node is no longer in the
@@ -318,15 +255,25 @@ pub fn apply_patches_strict<K: ArenaKind>(
     patches: &[Patch<K>],
 ) -> Result<(), CommandError> {
     let mut applier = PatchApplier::default();
+    let mut result = Ok(());
     for patch in patches {
-        if !applier.apply(arena, patch)? {
-            let anchor = patch_anchor(patch);
-            return Err(CommandError::PatchOnRemovedSubtree(NodeLabel::of(
-                arena, anchor,
-            )));
+        match applier.apply(arena, patch) {
+            Ok(true) => {}
+            Ok(false) => {
+                let anchor = patch_anchor(patch);
+                result = Err(CommandError::PatchOnRemovedSubtree(NodeLabel::of(
+                    arena, anchor,
+                )));
+                break;
+            }
+            Err(err) => {
+                result = Err(err);
+                break;
+            }
         }
     }
-    Ok(())
+    applier.finish(arena);
+    result
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -336,11 +283,15 @@ enum Top {
     Node,
 }
 
+const NONE: u32 = u32::MAX;
+
 /// Applies patches one at a time, each to the tree the previous ones left.
+/// Call [`PatchApplier::finish`] once the last patch is applied.
 #[derive(Default)]
 pub struct PatchApplier {
     /// A removed node stays removed: content naming it later leaves it out.
     removed: FxHashSet<u32>,
+    lists: ChildLists,
 }
 
 impl PatchApplier {
@@ -357,10 +308,10 @@ impl PatchApplier {
         if let Patch::Remove { node_id } = *patch {
             self.removed.insert(node_id);
             if node_id == 0 {
-                detach_all_children(arena, 0);
-                clear_root(arena);
+                self.clear(arena, 0);
+                clear_root_fields(arena);
             } else {
-                detach(arena, node_id);
+                self.unlink(arena, node_id);
             }
             return Ok(true);
         }
@@ -394,7 +345,13 @@ impl PatchApplier {
         Ok(true)
     }
 
-    /// A replacement that is one new node takes over the anchor's id, so later edits to it still apply.
+    /// Write the child lists the patches edited back into the arena.
+    pub fn finish<K: ArenaKind>(&mut self, arena: &mut Arena<K>) {
+        for (parent, list) in self.lists.drain() {
+            arena.set_children(parent, &list);
+        }
+    }
+
     fn replace<K: ArenaKind>(
         &mut self,
         arena: &mut Arena<K>,
@@ -409,42 +366,44 @@ impl PatchApplier {
             if sub.is_empty() {
                 return Err(unsupported("empty keep_children payload"));
             }
-            if matches!(sub.get_node(0).node_type, t if t == REF_NODE_TYPE || t == K::ROOT_TAG) {
+            if matches!(sub.get_node(0).node_type, t if t == REF_NODE_TYPE || t == KEEP_CHILDREN_NODE_TYPE || t == K::ROOT_TAG)
+            {
                 return Err(unsupported("keep_children payload with ROOT/REF root"));
             }
             let node = copy_node_only(arena, sub, 0);
-            let children = arena.get_children(anchor).to_vec();
-            arena.set_children(node, &children);
-            if anchor == 0 {
-                overwrite_root_with(arena, node);
-            } else {
-                take_over(arena, anchor, node);
-            }
+            copy_fields(arena, anchor, node);
             return Ok(());
         }
         if anchor == 0 {
             let mut tops = materialize(arena, content, Top::Node);
-            self.resolve_refs(arena, &mut tops, 0, 0, false)?;
-            detach_all_children(arena, 0);
+            let refs = self.claim_refs(arena, &tops, 0, 0, false)?;
+            self.place_refs(arena, &mut tops, &refs);
+            self.clear(arena, 0);
             match *tops.as_slice() {
-                [] => clear_root(arena),
-                [root] => overwrite_root_with(arena, root),
-                _ => arena.set_children(0, &tops),
+                [] => clear_root_fields(arena),
+                [root] => {
+                    copy_fields(arena, 0, root);
+                    let children = arena.get_children(root).to_vec();
+                    self.set(arena, 0, &children);
+                }
+                _ => self.set(arena, 0, &tops),
             }
             return Ok(());
         }
         let parent = arena.get_node(anchor).parent;
         let mut tops = materialize(arena, content, Top::Splice);
         let one_new_node =
-            matches!(*tops.as_slice(), [only] if arena.get_node(only).node_type != REF_NODE_TYPE);
-        self.resolve_refs(arena, &mut tops, parent, anchor, true)?;
-        // A replacement naming the anchor has moved it inside, out of the tree.
-        if one_new_node && in_tree(arena, anchor) {
-            take_over(arena, anchor, tops[0]);
+            matches!(*tops.as_slice(), [only] if !is_marker(arena.get_node(only).node_type));
+        let refs = self.claim_refs(arena, &tops, parent, anchor, true)?;
+        if one_new_node && !refs.names_anchor {
+            self.place_refs(arena, &mut tops, &refs);
+            self.take_over(arena, anchor, tops[0]);
             return Ok(());
         }
-        let index = position(arena, parent, anchor);
-        splice(arena, parent, index, 1, &tops);
+        let next = self.lists.next_sibling(arena, parent, anchor);
+        self.unlink(arena, anchor);
+        self.place_refs(arena, &mut tops, &refs);
+        self.insert_before(arena, parent, next, &tops);
         Ok(())
     }
 
@@ -460,9 +419,14 @@ impl PatchApplier {
         }
         let parent = arena.get_node(anchor).parent;
         let mut tops = materialize(arena, content, Top::Splice);
-        self.resolve_refs(arena, &mut tops, parent, anchor, false)?;
-        let index = position(arena, parent, anchor) + usize::from(after);
-        splice(arena, parent, index, 0, &tops);
+        let refs = self.claim_refs(arena, &tops, parent, anchor, false)?;
+        self.place_refs(arena, &mut tops, &refs);
+        let at = if after {
+            self.lists.next_sibling(arena, parent, anchor)
+        } else {
+            anchor
+        };
+        self.insert_before(arena, parent, at, &tops);
         Ok(())
     }
 
@@ -474,13 +438,14 @@ impl PatchApplier {
         append: bool,
     ) -> Result<(), CommandError> {
         let mut tops = materialize(arena, content, Top::Splice);
-        self.resolve_refs(arena, &mut tops, anchor, anchor, false)?;
-        let index = if append {
-            arena.get_node(anchor).children_count as usize
+        let refs = self.claim_refs(arena, &tops, anchor, anchor, false)?;
+        self.place_refs(arena, &mut tops, &refs);
+        let at = if append {
+            NONE
         } else {
-            0
+            self.lists.first_child(arena, anchor)
         };
-        splice(arena, anchor, index, 0, &tops);
+        self.insert_before(arena, anchor, at, &tops);
         Ok(())
     }
 
@@ -491,9 +456,9 @@ impl PatchApplier {
         content: &PatchContent<K>,
     ) -> Result<(), CommandError> {
         let mut tops = materialize(arena, content, Top::Splice);
-        self.resolve_refs(arena, &mut tops, anchor, anchor, false)?;
-        detach_all_children(arena, anchor);
-        arena.set_children(anchor, &tops);
+        let refs = self.claim_refs(arena, &tops, anchor, anchor, false)?;
+        self.place_refs(arena, &mut tops, &refs);
+        self.set(arena, anchor, &tops);
         Ok(())
     }
 
@@ -520,103 +485,335 @@ impl PatchApplier {
             arena.get_node(anchor).parent
         };
         let mut inner = arena.get_children(wrapper).to_vec();
-        self.resolve_refs(arena, &mut inner, attach, anchor, false)?;
+        let refs = self.claim_refs(arena, &inner, attach, anchor, false)?;
+        self.place_refs(arena, &mut inner, &refs);
         if anchor == 0 {
-            let old_root = copy_root_shallow(arena);
+            let root_type = arena.get_node(0).node_type;
+            let old_root = arena.alloc_node(root_type);
+            copy_fields(arena, old_root, 0);
+            let root_children = self.lists.children(arena, 0);
+            self.clear(arena, 0);
+            arena.set_children(old_root, &root_children);
+            copy_fields(arena, 0, wrapper);
             let mut children = vec![old_root];
             children.extend_from_slice(&inner);
-            arena.set_children(wrapper, &children);
-            overwrite_root_with(arena, wrapper);
+            self.set(arena, 0, &children);
             return Ok(());
         }
-        let parent = arena.get_node(anchor).parent;
-        let index = position(arena, parent, anchor);
+        let parent = attach;
+        let next = self.lists.next_sibling(arena, parent, anchor);
+        self.unlink(arena, anchor);
         let mut children = vec![anchor];
         children.extend_from_slice(&inner);
         arena.set_children(wrapper, &children);
-        splice(arena, parent, index, 1, &[wrapper]);
+        self.insert_before(arena, parent, next, &[wrapper]);
         Ok(())
     }
 
-    /// Swap each ref for the node it names, moved from wherever it is; `attach` is where the content lands.
-    fn resolve_refs<K: ArenaKind>(
+    /// Check and detach every node the payload names but the anchor; `attach` is where it lands.
+    fn claim_refs<K: ArenaKind>(
         &mut self,
         arena: &mut Arena<K>,
-        tops: &mut Vec<u32>,
+        tops: &[u32],
         attach: u32,
         anchor: u32,
         allow_self: bool,
-    ) -> Result<(), CommandError> {
-        let mut refs: Vec<(u32, u32)> = Vec::new();
-        let mut stack: Vec<u32> = tops.clone();
+    ) -> Result<Refs, CommandError> {
+        let mut refs = Refs::default();
+        let mut stack: Vec<u32> = tops.to_vec();
         while let Some(id) = stack.pop() {
-            if arena.get_node(id).node_type == REF_NODE_TYPE {
-                refs.push((id, ref_target(arena, id)?));
-            } else {
-                stack.extend_from_slice(arena.get_children(id));
+            match arena.get_node(id).node_type {
+                REF_NODE_TYPE => refs.markers.push((id, vec![ref_target(arena, id)?])),
+                KEEP_CHILDREN_NODE_TYPE => {
+                    refs.markers.push((id, self.lists.children(arena, anchor)));
+                }
+                _ => stack.extend_from_slice(arena.get_children(id)),
             }
         }
-        if refs.is_empty() {
-            return Ok(());
+        if refs.markers.is_empty() {
+            return Ok(refs);
         }
         let mut seen: FxHashSet<u32> = FxHashSet::default();
-        let mut resolved: FxHashMap<u32, Option<u32>> = FxHashMap::default();
-        for &(ref_id, target) in &refs {
-            if !seen.insert(target) {
-                return Err(CommandError::NodePlacedTwice(NodeLabel::of(arena, target)));
-            }
-            if target == anchor {
-                if !allow_self {
-                    return Err(CommandError::NodeInsideItself(NodeLabel::of(arena, anchor)));
+        for (_, targets) in &refs.markers {
+            for &target in targets {
+                if !seen.insert(target) {
+                    return Err(CommandError::NodePlacedTwice(NodeLabel::of(arena, target)));
                 }
-                resolved.insert(ref_id, Some(anchor));
-                continue;
-            }
-            if self.removed.contains(&target) {
-                resolved.insert(ref_id, None);
-                continue;
-            }
-            if is_ancestor_or_self(arena, target, attach) {
-                return Err(CommandError::AncestorPlacedInside {
-                    ancestor: NodeLabel::of(arena, target),
-                    node: NodeLabel::of(arena, anchor),
-                });
-            }
-            detach(arena, target);
-            resolved.insert(ref_id, Some(target));
-        }
-        let mut parents: Vec<u32> = Vec::new();
-        let mut seen_parents: FxHashSet<u32> = FxHashSet::default();
-        for &(ref_id, _) in &refs {
-            let parent = arena.get_node(ref_id).parent;
-            if parent != DETACHED && seen_parents.insert(parent) {
-                parents.push(parent);
+                if target == anchor {
+                    if !allow_self {
+                        return Err(CommandError::NodeInsideItself(NodeLabel::of(arena, anchor)));
+                    }
+                    refs.names_anchor = true;
+                    continue;
+                }
+                if self.removed.contains(&target) {
+                    continue;
+                }
+                if is_ancestor_or_self(arena, target, attach) {
+                    return Err(CommandError::AncestorPlacedInside {
+                        ancestor: NodeLabel::of(arena, target),
+                        node: NodeLabel::of(arena, anchor),
+                    });
+                }
             }
         }
-        for parent in parents {
-            let list: Vec<u32> = arena
-                .get_children(parent)
-                .iter()
-                .filter_map(|c| resolved.get(c).copied().unwrap_or(Some(*c)))
-                .collect();
-            arena.set_children(parent, &list);
+        let mut targets: Vec<u32> = Vec::new();
+        for (_, list) in &refs.markers {
+            targets.extend(
+                list.iter()
+                    .copied()
+                    .filter(|&t| t != anchor && !self.removed.contains(&t)),
+            );
         }
-        *tops = tops
+        for target in targets {
+            self.unlink(arena, target);
+        }
+        Ok(refs)
+    }
+
+    /// Swap each marker in the payload for the nodes it names that are not removed.
+    fn place_refs<K: ArenaKind>(&self, arena: &mut Arena<K>, tops: &mut Vec<u32>, refs: &Refs) {
+        if refs.markers.is_empty() {
+            return;
+        }
+        let by_marker: FxHashMap<u32, &[u32]> = refs
+            .markers
             .iter()
-            .filter_map(|c| resolved.get(c).copied().unwrap_or(Some(*c)))
+            .map(|(marker, targets)| (*marker, targets.as_slice()))
             .collect();
-        Ok(())
+        let expand = |list: &[u32]| -> Vec<u32> {
+            let mut out = Vec::with_capacity(list.len());
+            for &c in list {
+                match by_marker.get(&c) {
+                    Some(targets) => out.extend(
+                        targets
+                            .iter()
+                            .copied()
+                            .filter(|t| !self.removed.contains(t)),
+                    ),
+                    None => out.push(c),
+                }
+            }
+            out
+        };
+        let mut holders: Vec<u32> = Vec::new();
+        for &(marker, _) in &refs.markers {
+            let holder = arena.get_node(marker).parent;
+            if holder != NONE && !holders.contains(&holder) {
+                holders.push(holder);
+            }
+        }
+        for holder in holders {
+            let list = expand(arena.get_children(holder));
+            arena.set_children(holder, &list);
+        }
+        *tops = expand(tops);
+    }
+
+    /// `anchor` becomes `src` where it stands, keeping its id.
+    fn take_over<K: ArenaKind>(&mut self, arena: &mut Arena<K>, anchor: u32, src: u32) {
+        copy_fields(arena, anchor, src);
+        let children = arena.get_children(src).to_vec();
+        self.set(arena, anchor, &children);
+    }
+
+    fn unlink<K: ArenaKind>(&mut self, arena: &mut Arena<K>, id: u32) {
+        let parent = arena.get_node(id).parent;
+        if parent == NONE {
+            return;
+        }
+        self.lists.unlink(arena, parent, id);
+        arena.get_node_mut(id).parent = NONE;
+    }
+
+    fn clear<K: ArenaKind>(&mut self, arena: &mut Arena<K>, parent: u32) {
+        for child in self.lists.children(arena, parent) {
+            if arena.get_node(child).parent == parent {
+                arena.get_node_mut(child).parent = NONE;
+            }
+        }
+        self.lists.reset(arena, parent);
+    }
+
+    fn set<K: ArenaKind>(&mut self, arena: &mut Arena<K>, parent: u32, children: &[u32]) {
+        self.clear(arena, parent);
+        self.insert_before(arena, parent, NONE, children);
+    }
+
+    /// Link detached `nodes` under `parent` before `at`, or last when `at` is `NONE`.
+    fn insert_before<K: ArenaKind>(
+        &mut self,
+        arena: &mut Arena<K>,
+        parent: u32,
+        at: u32,
+        nodes: &[u32],
+    ) {
+        self.lists.insert_before(arena, parent, at, nodes);
+        for &id in nodes {
+            arena.get_node_mut(id).parent = parent;
+        }
     }
 }
 
-const DETACHED: u32 = u32::MAX;
+#[derive(Default)]
+struct Refs {
+    /// Each ref or keep-children marker in the payload, with the nodes it stands for.
+    markers: Vec<(u32, Vec<u32>)>,
+    names_anchor: bool,
+}
+
+/// Child lists edited this pass, linked so an edit beside a node costs the same at any width.
+#[derive(Default)]
+struct ChildLists {
+    /// First and last child of each parent whose list is linked.
+    heads: FxHashMap<u32, (u32, u32)>,
+    prev: Vec<u32>,
+    next: Vec<u32>,
+}
+
+impl ChildLists {
+    fn open<K: ArenaKind>(&mut self, arena: &Arena<K>, parent: u32) -> (u32, u32) {
+        if let Some(&head) = self.heads.get(&parent) {
+            return head;
+        }
+        self.grow(arena.len());
+        let mut last = NONE;
+        for &child in arena.get_children(parent) {
+            self.prev[child as usize] = last;
+            if last != NONE {
+                self.next[last as usize] = child;
+            }
+            last = child;
+        }
+        if last != NONE {
+            self.next[last as usize] = NONE;
+        }
+        let head = (
+            arena.get_children(parent).first().copied().unwrap_or(NONE),
+            last,
+        );
+        self.heads.insert(parent, head);
+        head
+    }
+
+    fn grow(&mut self, len: usize) {
+        if self.prev.len() < len {
+            self.prev.resize(len, NONE);
+            self.next.resize(len, NONE);
+        }
+    }
+
+    fn children<K: ArenaKind>(&self, arena: &Arena<K>, parent: u32) -> Vec<u32> {
+        let Some(&(first, _)) = self.heads.get(&parent) else {
+            return arena.get_children(parent).to_vec();
+        };
+        let mut out = Vec::new();
+        let mut cur = first;
+        while cur != NONE {
+            out.push(cur);
+            cur = self.next[cur as usize];
+        }
+        out
+    }
+
+    fn first_child<K: ArenaKind>(&mut self, arena: &Arena<K>, parent: u32) -> u32 {
+        self.open(arena, parent).0
+    }
+
+    fn next_sibling<K: ArenaKind>(&mut self, arena: &Arena<K>, parent: u32, id: u32) -> u32 {
+        self.open(arena, parent);
+        self.next[id as usize]
+    }
+
+    fn unlink<K: ArenaKind>(&mut self, arena: &Arena<K>, parent: u32, id: u32) {
+        let (first, _) = self.open(arena, parent);
+        let (prev, next) = (self.prev[id as usize], self.next[id as usize]);
+        let linked = if prev == NONE {
+            first == id
+        } else {
+            self.next[prev as usize] == id
+        };
+        if !linked {
+            return;
+        }
+        let head = self.heads.get_mut(&parent).expect("opened above");
+        if prev == NONE {
+            head.0 = next;
+        } else {
+            self.next[prev as usize] = next;
+        }
+        if next == NONE {
+            head.1 = prev;
+        } else {
+            self.prev[next as usize] = prev;
+        }
+    }
+
+    fn reset<K: ArenaKind>(&mut self, arena: &Arena<K>, parent: u32) {
+        self.grow(arena.len());
+        self.heads.insert(parent, (NONE, NONE));
+    }
+
+    fn insert_before<K: ArenaKind>(
+        &mut self,
+        arena: &Arena<K>,
+        parent: u32,
+        at: u32,
+        nodes: &[u32],
+    ) {
+        if nodes.is_empty() {
+            return;
+        }
+        let (_, last) = self.open(arena, parent);
+        self.grow(arena.len());
+        let before = if at == NONE {
+            last
+        } else {
+            self.prev[at as usize]
+        };
+        let mut prev = before;
+        for &id in nodes {
+            self.prev[id as usize] = prev;
+            if prev != NONE {
+                self.next[prev as usize] = id;
+            }
+            prev = id;
+        }
+        self.next[prev as usize] = at;
+        let head = self.heads.get_mut(&parent).expect("opened above");
+        if before == NONE {
+            head.0 = nodes[0];
+        }
+        if at == NONE {
+            head.1 = prev;
+        } else {
+            self.prev[at as usize] = prev;
+        }
+    }
+
+    fn drain(&mut self) -> Vec<(u32, Vec<u32>)> {
+        let heads = std::mem::take(&mut self.heads);
+        heads
+            .into_iter()
+            .map(|(parent, (first, _))| {
+                let mut list = Vec::new();
+                let mut cur = first;
+                while cur != NONE {
+                    list.push(cur);
+                    cur = self.next[cur as usize];
+                }
+                (parent, list)
+            })
+            .collect()
+    }
+}
 
 /// Whether `id` hangs from the root, rather than from something detached.
 pub fn in_tree<K: ArenaKind>(arena: &Arena<K>, mut id: u32) -> bool {
     let mut steps = arena.len();
     while id != 0 {
         id = arena.get_node(id).parent;
-        if id == DETACHED || steps == 0 {
+        if id == NONE || steps == 0 {
             return false;
         }
         steps -= 1;
@@ -624,13 +821,15 @@ pub fn in_tree<K: ArenaKind>(arena: &Arena<K>, mut id: u32) -> bool {
     true
 }
 
-/// `anchor` becomes `src` where it stands, keeping its id.
-fn take_over<K: ArenaKind>(arena: &mut Arena<K>, anchor: u32, src: u32) {
+fn is_marker(node_type: u8) -> bool {
+    node_type == REF_NODE_TYPE || node_type == KEEP_CHILDREN_NODE_TYPE
+}
+
+/// Give `dst` the shape of `src` (type, type_data, position, node_data), leaving children alone.
+fn copy_fields<K: ArenaKind>(arena: &mut Arena<K>, dst: u32, src: u32) {
     let src_node = *arena.get_node(src);
-    let children = arena.get_children(src).to_vec();
-    detach_all_children(arena, anchor);
     {
-        let node = arena.get_node_mut(anchor);
+        let node = arena.get_node_mut(dst);
         node.node_type = src_node.node_type;
         node.data_offset = src_node.data_offset;
         node.data_len = src_node.data_len;
@@ -641,15 +840,30 @@ fn take_over<K: ArenaKind>(arena: &mut Arena<K>, anchor: u32, src: u32) {
         node.end_line = src_node.end_line;
         node.end_column = src_node.end_column;
     }
-    arena.set_children(anchor, &children);
-    match arena.node_data.remove(&src) {
+    match arena.node_data.get(&src).cloned() {
         Some(data) => {
-            arena.node_data.insert(anchor, data);
+            arena.node_data.insert(dst, data);
         }
         None => {
-            arena.node_data.remove(&anchor);
+            arena.node_data.remove(&dst);
         }
     }
+}
+
+/// An empty document keeps its root type so it still serializes.
+fn clear_root_fields<K: ArenaKind>(arena: &mut Arena<K>) {
+    {
+        let root = arena.get_node_mut(0);
+        root.data_offset = 0;
+        root.data_len = 0;
+        root.start_offset = 0;
+        root.end_offset = 0;
+        root.start_line = 0;
+        root.start_column = 0;
+        root.end_line = 0;
+        root.end_column = 0;
+    }
+    arena.node_data.remove(&0);
 }
 
 fn is_ancestor_or_self<K: ArenaKind>(arena: &Arena<K>, ancestor: u32, mut id: u32) -> bool {
@@ -657,7 +871,7 @@ fn is_ancestor_or_self<K: ArenaKind>(arena: &Arena<K>, ancestor: u32, mut id: u3
         if id == ancestor {
             return true;
         }
-        if id == 0 || id == DETACHED {
+        if id == 0 || id == NONE {
             return false;
         }
         id = arena.get_node(id).parent;
@@ -669,78 +883,10 @@ fn ref_target<K: ArenaKind>(arena: &Arena<K>, ref_id: u32) -> Result<u32, Comman
         return Err(unsupported("ref node with short type_data"));
     };
     let target = u32::from_le_bytes([a, b, c, d]);
-    if target as usize >= arena.len() || arena.get_node(target).node_type == REF_NODE_TYPE {
+    if target as usize >= arena.len() || is_marker(arena.get_node(target).node_type) {
         return Err(CommandError::InvalidNodeId(target));
     }
     Ok(target)
-}
-
-fn position<K: ArenaKind>(arena: &Arena<K>, parent: u32, child: u32) -> usize {
-    arena
-        .get_children(parent)
-        .iter()
-        .position(|&c| c == child)
-        .expect("an in-tree node is listed by its parent")
-}
-
-fn detach<K: ArenaKind>(arena: &mut Arena<K>, id: u32) {
-    let parent = arena.get_node(id).parent;
-    if parent == DETACHED {
-        return;
-    }
-    let node = *arena.get_node(parent);
-    let start = node.children_start as usize;
-    let count = node.children_count as usize;
-    let slice = &mut arena.children[start..start + count];
-    if let Some(i) = slice.iter().position(|&c| c == id) {
-        slice.copy_within(i + 1.., i);
-        arena.get_node_mut(parent).children_count -= 1;
-    }
-    arena.get_node_mut(id).parent = DETACHED;
-}
-
-fn detach_all_children<K: ArenaKind>(arena: &mut Arena<K>, id: u32) {
-    let children = arena.get_children(id).to_vec();
-    for child in children {
-        if arena.get_node(child).parent == id {
-            arena.get_node_mut(child).parent = DETACHED;
-        }
-    }
-    arena.get_node_mut(id).children_count = 0;
-}
-
-fn splice<K: ArenaKind>(
-    arena: &mut Arena<K>,
-    parent: u32,
-    index: usize,
-    remove: usize,
-    insert: &[u32],
-) {
-    let node = *arena.get_node(parent);
-    let start = node.children_start as usize;
-    let count = node.children_count as usize;
-    for i in index..index + remove {
-        let old = arena.children[start + i];
-        if arena.get_node(old).parent == parent {
-            arena.get_node_mut(old).parent = DETACHED;
-        }
-    }
-    if insert.len() <= remove {
-        let slice = &mut arena.children[start..start + count];
-        slice[index..index + insert.len()].copy_from_slice(insert);
-        slice.copy_within(index + remove.., index + insert.len());
-        arena.get_node_mut(parent).children_count = (count - remove + insert.len()) as u32;
-        for &id in insert {
-            arena.get_node_mut(id).parent = parent;
-        }
-    } else {
-        let current = arena.get_children(parent);
-        let mut list = Vec::with_capacity(count - remove + insert.len());
-        list.extend_from_slice(&current[..index]);
-        list.extend_from_slice(insert);
-        list.extend_from_slice(&current[index + remove..]);
-        arena.set_children(parent, &list);
-    }
 }
 
 fn materialize<K: ArenaKind>(
@@ -791,7 +937,7 @@ fn copy_subtree<K: ArenaKind>(arena: &mut Arena<K>, sub: &Arena<K>, root: u32, b
     let mut i = 0;
     while i < order.len() {
         let id = order[i];
-        if sub.get_node(id).node_type != REF_NODE_TYPE {
+        if !is_marker(sub.get_node(id).node_type) {
             order.extend_from_slice(sub.get_children(id));
         }
         i += 1;
@@ -802,7 +948,7 @@ fn copy_subtree<K: ArenaKind>(arena: &mut Arena<K>, sub: &Arena<K>, root: u32, b
     }
     for &id in &order {
         let children = sub.get_children(id);
-        if !children.is_empty() && sub.get_node(id).node_type != REF_NODE_TYPE {
+        if !children.is_empty() && !is_marker(sub.get_node(id).node_type) {
             let ids: Vec<u32> = children.iter().map(|c| map[c]).collect();
             arena.set_children(map[&id], &ids);
         }
@@ -824,7 +970,7 @@ fn copy_node_fields<K: ArenaKind>(arena: &mut Arena<K>, sub: &Arena<K>, id: u32,
     }
     let type_data = sub.get_type_data(id);
     if !type_data.is_empty() {
-        if base != 0 && node.node_type != REF_NODE_TYPE {
+        if base != 0 && !is_marker(node.node_type) {
             let mut remapped = type_data.to_vec();
             remap_string_refs::<K>(&mut remapped, node.node_type, base);
             arena.set_type_data(new_id, &remapped);

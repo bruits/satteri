@@ -268,15 +268,15 @@ function emitHastTree(
   if (!ok) throw unencodableContentError(node);
 }
 
-/** Replace `id` with several nodes in one command, root-wrapped so the engine
- *  splices the children in place of the node. */
-function emitHastMultiReplace(
+/** Several nodes as one edit, root-wrapped so the engine splices them in at the target. */
+function emitHastSequence(
   buffer: CommandBuffer,
+  cmd: number,
   id: number,
   nodes: readonly HastContent[],
   refs: NodeRefs,
 ): void {
-  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
+  const ok = buffer.emitOpstreamCommand(cmd, id, () => {
     buffer.open(HAST_ROOT);
     for (const n of nodes) if (!emitHastOp(buffer, n, false, refs)) return false;
     buffer.close();
@@ -411,6 +411,8 @@ function emitHastProp(w: PropSink, name: string, value: unknown): void {
 class HastVisitorContextImpl implements HastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: HastDiagnostic[];
+  /** Value nodes edited this pass, whose own return can no longer be sent as a value-only edit. */
+  #editedValueNodes: Set<number> | undefined;
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
@@ -474,7 +476,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
         return;
       }
       if (id === ROOT_NODE_ID) throw rootReplacementError(nodes);
-      emitHastMultiReplace(this.#commandBuffer, id, nodes, this.#refs);
+      emitHastSequence(this.#commandBuffer, STRUCTURAL_CMD.replace, id, nodes, this.#refs);
       return;
     }
     if (id === ROOT_NODE_ID) {
@@ -482,6 +484,17 @@ class HastVisitorContextImpl implements HastVisitorContext {
     } else {
       emitHastTree(this.#commandBuffer, "replace", id, onlyReplacement, this.#refs, true);
     }
+    this.#noteEdit(node, id);
+  }
+
+  #noteEdit(node: HastNode, id: number): void {
+    if (node.type === "text" || node.type === "comment" || node.type === "raw") {
+      (this.#editedValueNodes ??= new Set()).add(id);
+    }
+  }
+
+  editedThisPass(id: number): boolean {
+    return this.#editedValueNodes?.has(id) ?? false;
   }
 
   #splice(anchorId: number, content: HastContent | HastContent[], op: StructuralOp): void {
@@ -490,11 +503,10 @@ class HastVisitorContextImpl implements HastVisitorContext {
       if (getNodeId(n, this.#refs) === anchorId) throw selfInsertError(op);
     }
     this.removals.inserted(anchorId, content);
-    // Each item lands right next to the anchor, so these two go last-first to keep the array's order.
-    const ordered = op === "insertAfter" || op === "prependChild" ? nodes.toReversed() : nodes;
-    for (const n of ordered) {
-      emitHastTree(this.#commandBuffer, op, anchorId, n, this.#refs, true);
-    }
+    if (nodes.length === 1)
+      emitHastTree(this.#commandBuffer, op, anchorId, nodes[0]!, this.#refs, true);
+    else if (nodes.length > 1)
+      emitHastSequence(this.#commandBuffer, STRUCTURAL_CMD[op], anchorId, nodes, this.#refs);
   }
 
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
@@ -552,6 +564,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   setProperty(node: HastNode, key: string, value: unknown): void {
     const id = requireNid(node, "setProperty", this.#refs);
+    this.#noteEdit(node, id);
     if (key === "children") {
       this.removals.rebuilt(id, value);
       if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
@@ -579,6 +592,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   setField(node: HastNode, key: string, value: unknown): void {
     const id = requireNid(node, "setField", this.#refs);
+    this.#noteEdit(node, id);
     if (key === "children") {
       this.removals.rebuilt(id, value);
       if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
@@ -770,40 +784,41 @@ const METHOD_TO_TYPE: Record<string, number> = Object.fromEntries(
 function applyHastVisitResult(
   result: HastVisitorResult,
   nodeId: number,
-  buffer: CommandBuffer,
+  ctx: HastVisitorContextImpl,
   originalNode: HastNode,
   refs: NodeRefs,
-  removals?: RemovalTracker<HastNode>,
 ): void {
   if (result == null) return;
   if (result === originalNode) return;
   if (Array.isArray(result)) {
-    applyHastArrayResult(result, nodeId, buffer, originalNode, refs, removals);
+    applyHastArrayResult(result, nodeId, ctx, originalNode, refs);
     return;
   }
-  if (isTextValueSwap(result, originalNode)) {
+  const buffer = ctx.getCommandBuffer();
+  // A value-only edit stands in for the replacement only while nothing else has edited the node.
+  if (isTextValueSwap(result, originalNode) && !ctx.editedThisPass(nodeId)) {
     buffer.setProperty(nodeId, "value", (result as { value: string }).value);
     return;
   }
-  removals?.rebuilt(nodeId, result);
+  ctx.removals.rebuilt(nodeId, result);
   emitHastTree(buffer, "replace", nodeId, result, refs, true);
 }
 
 function applyHastArrayResult(
   result: HastContent[],
   nodeId: number,
-  buffer: CommandBuffer,
+  ctx: HastVisitorContextImpl,
   originalNode: HastNode,
   refs: NodeRefs,
-  removals?: RemovalTracker<HastNode>,
 ): void {
   if (result.length === 1) {
-    applyHastVisitResult(result[0], nodeId, buffer, originalNode, refs, removals);
+    applyHastVisitResult(result[0], nodeId, ctx, originalNode, refs);
     return;
   }
-  removals?.returned(nodeId, result);
+  ctx.removals.returned(nodeId, result);
+  const buffer = ctx.getCommandBuffer();
   if (result.length === 0) buffer.removeNode(nodeId);
-  else emitHastMultiReplace(buffer, nodeId, result, refs);
+  else emitHastSequence(buffer, STRUCTURAL_CMD.replace, nodeId, result, refs);
 }
 
 // Explicit field checks avoid allocating Object.keys on the per-text-node hot path.
@@ -833,7 +848,6 @@ function dispatchMatches(
   const matchCount = matchView.getUint32(0, true);
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
   let settling: Promise<void>[] | null = null;
-  const removals = ctx.removals;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -848,18 +862,11 @@ function dispatchMatches(
       // An async visitor's return is its last edit, so it queues when the visitor settles.
       (settling ??= []).push(
         result.then((settled) => {
-          applyHastVisitResult(
-            settled,
-            nodeId,
-            ctx.getCommandBuffer(),
-            node,
-            resolver.refs,
-            removals,
-          );
+          applyHastVisitResult(settled, nodeId, ctx, node, resolver.refs);
         }),
       );
     } else if (result !== undefined) {
-      applyHastVisitResult(result, nodeId, ctx.getCommandBuffer(), node, resolver.refs, removals);
+      applyHastVisitResult(result, nodeId, ctx, node, resolver.refs);
     }
   }
 

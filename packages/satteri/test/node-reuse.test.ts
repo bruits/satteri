@@ -2087,3 +2087,90 @@ test("replacing a node with one it just replaced moves it back, so the other is 
   });
   expect(markdownToHtml("# a\n\npara\n", { mdastPlugins: [plugin] }).html).toBe("<h1>a</h1>\n");
 });
+
+test("a returned text replaces a node another edit replaced or changed earlier in the pass", () => {
+  const mdast = defineMdastPlugin({
+    name: "replace-then-return-text",
+    paragraph(node, ctx) {
+      const [text] = node.children;
+      if (text?.type === "text") ctx.replaceNode(text, { type: "emphasis", children: [] });
+    },
+    text: (node) => ({ ...node, value: node.value.toUpperCase() }),
+  });
+  const hast = defineHastPlugin({
+    name: "hast-replace-then-return-text",
+    element: {
+      filter: ["p"],
+      visit(node, ctx) {
+        const [text] = node.children;
+        if (text?.type === "text") {
+          ctx.replaceNode(text, {
+            type: "element",
+            tagName: "input",
+            properties: {},
+            children: [],
+          });
+        }
+      },
+    },
+    text: (node) => ({ ...node, value: node.value.toUpperCase() }),
+  });
+  const dataThenReturn = defineMdastPlugin({
+    name: "data-then-return-text",
+    text(node, ctx) {
+      ctx.setField(node, "data", { hName: "mark" });
+      return { ...node, value: node.value.toUpperCase() };
+    },
+  });
+  expect(markdownToHtml("a\n", { mdastPlugins: [mdast] }).html).toBe("<p>A</p>\n");
+  expect(markdownToHtml("a\n", { hastPlugins: [hast] }).html).toBe("<p>A</p>\n");
+  expect(markdownToHtml("a\n", { mdastPlugins: [dataThenReturn] }).html).toBe("<p>A</p>\n");
+});
+
+test("adding children to a node that cannot hold any fails the compile", () => {
+  const plugins = [
+    defineMdastPlugin({
+      name: "append-into-text",
+      text(node, ctx) {
+        ctx.appendChild(node as never, { type: "text", value: "x" });
+      },
+    }),
+    defineMdastPlugin({
+      name: "append-into-replaced",
+      paragraph(node, ctx) {
+        ctx.replaceNode(node, { type: "thematicBreak" });
+        ctx.appendChild(node, { type: "text", value: "x" });
+      },
+    }),
+  ];
+  for (const plugin of plugins) {
+    expect(() => markdownToHtml("a\n", { mdastPlugins: [plugin] }), plugin.name).toThrow(
+      /cannot hold children, so nothing can be inserted into it/,
+    );
+  }
+  const hast = defineHastPlugin({
+    name: "append-into-void",
+    element: {
+      filter: ["hr"],
+      visit(node, ctx) {
+        ctx.appendChild(node, { type: "text", value: "x" });
+      },
+    },
+  });
+  expect(() => markdownToHtml("---\n", { hastPlugins: [hast] })).toThrow(
+    "the <hr> at 1:1 cannot hold children",
+  );
+});
+
+test("an array insert is one edit, so naming a node twice in it fails the compile", () => {
+  const plugin = defineMdastPlugin({
+    name: "insert-array-twice",
+    blockquote(node, ctx) {
+      const [first] = node.children;
+      if (first) ctx.insertAfter(node, [first, first]);
+    },
+  });
+  expect(() => markdownToHtml("> a\n", { mdastPlugins: [plugin] })).toThrow(
+    /the paragraph at 1:3 is placed in two places/,
+  );
+});

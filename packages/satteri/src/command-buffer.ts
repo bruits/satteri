@@ -126,8 +126,9 @@ export class CommandBuffer extends OpWriter {
     return lenPos;
   }
 
-  /** Replace `nodeId` with `items` in one command; raw items are parsed in place. */
-  emitSequenceReplace(
+  /** One structural command carrying `items` in order; raw items are parsed in place. */
+  emitSequenceCommand(
+    cmd: number,
     nodeId: number,
     items: readonly unknown[],
     emitNode: (item: unknown) => boolean,
@@ -135,7 +136,7 @@ export class CommandBuffer extends OpWriter {
     this.#assertNotEncoding();
     const commandStart = this.n;
     this.ensure(10);
-    this.buf[this.n++] = CMD_REPLACE;
+    this.buf[this.n++] = cmd;
     this.writeU32(nodeId);
     this.buf[this.n++] = PAYLOAD_SEQUENCE;
     this.writeU32(items.length);

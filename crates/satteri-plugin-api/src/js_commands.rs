@@ -29,7 +29,8 @@ use satteri_ast::hast::{HastNodeType, is_void_element};
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::mdast::codec::*;
 use satteri_ast::patch::{
-    Patch, PatchApplier, PatchContent, REF_NODE_TYPE, graft_tree, in_tree, patch_anchor,
+    KEEP_CHILDREN_NODE_TYPE, Patch, PatchApplier, PatchContent, REF_NODE_TYPE, graft_tree, in_tree,
+    patch_anchor,
 };
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
@@ -1006,12 +1007,10 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                 if anchor >= original_len {
                     return Err(CommandError::InvalidNodeId(anchor));
                 }
-                let children = builder.arena_ref().get_children(anchor).to_vec();
-                for child in children {
-                    let ref_id = emit_ref_node(child, builder);
-                    if stack.is_empty() {
-                        roots.push(ref_id);
-                    }
+                let id = builder.open_node(KEEP_CHILDREN_NODE_TYPE);
+                builder.close_node();
+                if stack.is_empty() {
+                    roots.push(id);
                 }
             }
             OP_STR => {
@@ -1664,6 +1663,34 @@ fn hast_wrap_arena_from_html(_raw: &str) -> Result<Arena<Hast>, CommandError> {
     ))
 }
 
+/// A leaf renders without children, so content added to one would be walked but never shown.
+fn reject_children_on_leaf<K: ArenaKind>(
+    arena: &Arena<K>,
+    node_id: u32,
+    is_leaf: fn(&Arena<K>, u32) -> bool,
+) -> Result<(), CommandError> {
+    if is_leaf(arena, node_id) && in_tree(arena, node_id) {
+        return Err(CommandError::ChildrenOnLeaf(NodeLabel::of(arena, node_id)));
+    }
+    Ok(())
+}
+
+fn mdast_is_leaf(arena: &Arena<Mdast>, node_id: u32) -> bool {
+    is_mdast_leaf(arena.get_node(node_id).node_type)
+}
+
+fn hast_is_leaf(arena: &Arena<Hast>, node_id: u32) -> bool {
+    match HastNodeType::from_u8(arena.get_node(node_id).node_type) {
+        Some(HastNodeType::Element) => {
+            is_void_element(arena.get_str(decode_element_tag(arena.get_type_data(node_id))))
+        }
+        Some(
+            HastNodeType::Root | HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement,
+        ) => false,
+        _ => true,
+    }
+}
+
 /// Mirrors `LEAF_TYPES` in `mdast-materializer.ts`, so a raw wrapper is
 /// judged like a declarative one.
 fn is_mdast_leaf(node_type: u8) -> bool {
@@ -1880,15 +1907,15 @@ pub fn apply_mdast_commands_lenient_with_options(
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_anchor(original_len)?;
                 let parent_type = mdast_sibling_slot_parent_type(builder.arena_ref(), node_id);
-                let (mut new_tree, _) = read_mdast_payload(
+                let (new_tree, _) = read_mdast_replacement(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
                     original_len,
                     node_id,
                     options,
+                    parent_type,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
                 apply_patch(
                     &mut applier,
                     builder.arena_mut(),
@@ -1900,15 +1927,15 @@ pub fn apply_mdast_commands_lenient_with_options(
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_anchor(original_len)?;
                 let parent_type = mdast_sibling_slot_parent_type(builder.arena_ref(), node_id);
-                let (mut new_tree, _) = read_mdast_payload(
+                let (new_tree, _) = read_mdast_replacement(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
                     original_len,
                     node_id,
                     options,
+                    parent_type,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
                 apply_patch(
                     &mut applier,
                     builder.arena_mut(),
@@ -1919,16 +1946,17 @@ pub fn apply_mdast_commands_lenient_with_options(
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
+                reject_children_on_leaf(builder.arena_ref(), node_id, mdast_is_leaf)?;
                 let parent_type = builder.arena_ref().get_node(node_id).node_type;
-                let (mut child_tree, _) = read_mdast_payload(
+                let (child_tree, _) = read_mdast_replacement(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
                     original_len,
                     node_id,
                     options,
+                    parent_type,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut child_tree, parent_type);
                 apply_patch(
                     &mut applier,
                     builder.arena_mut(),
@@ -1942,16 +1970,17 @@ pub fn apply_mdast_commands_lenient_with_options(
 
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
+                reject_children_on_leaf(builder.arena_ref(), node_id, mdast_is_leaf)?;
                 let parent_type = builder.arena_ref().get_node(node_id).node_type;
-                let (mut child_tree, _) = read_mdast_payload(
+                let (child_tree, _) = read_mdast_replacement(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
                     original_len,
                     node_id,
                     options,
+                    parent_type,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut child_tree, parent_type);
                 apply_patch(
                     &mut applier,
                     builder.arena_mut(),
@@ -2016,6 +2045,7 @@ pub fn apply_mdast_commands_lenient_with_options(
 
             CMD_SET_CHILDREN => {
                 let node_id = reader.read_anchor(original_len)?;
+                reject_children_on_leaf(builder.arena_ref(), node_id, mdast_is_leaf)?;
                 let parent_type = builder.arena_ref().get_node(node_id).node_type;
                 let (mut new_children, _) = read_mdast_payload(
                     &mut reader,
@@ -2041,6 +2071,7 @@ pub fn apply_mdast_commands_lenient_with_options(
         }
     }
 
+    applier.finish(builder.arena_mut());
     Ok((builder.finish(), dropped))
 }
 
@@ -2146,6 +2177,7 @@ pub fn apply_hast_commands_lenient(
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
+                reject_children_on_leaf(builder.arena_ref(), node_id, hast_is_leaf)?;
                 let (child_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
                 apply_patch(
@@ -2161,6 +2193,7 @@ pub fn apply_hast_commands_lenient(
 
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
+                reject_children_on_leaf(builder.arena_ref(), node_id, hast_is_leaf)?;
                 let (child_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
                 apply_patch(
@@ -2208,6 +2241,7 @@ pub fn apply_hast_commands_lenient(
 
             CMD_SET_CHILDREN => {
                 let node_id = reader.read_anchor(original_len)?;
+                reject_children_on_leaf(builder.arena_ref(), node_id, hast_is_leaf)?;
                 let (new_children, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
                 apply_patch(
@@ -2225,6 +2259,7 @@ pub fn apply_hast_commands_lenient(
         }
     }
 
+    applier.finish(builder.arena_mut());
     Ok((builder.finish(), dropped))
 }
 
@@ -2406,7 +2441,7 @@ mod tests {
     }
 
     #[test]
-    fn opstream_keep_children_splices_original_children() {
+    fn opstream_keep_children_keeps_the_anchors_children_as_they_are_when_it_applies() {
         // orig: root > paragraph > text("Hello"); replace the paragraph with
         // heading(2) keeping its children.
         let orig = test_parse_markdown("Hello");
@@ -2428,9 +2463,20 @@ mod tests {
         assert_eq!(decode_heading_data(arena.get_type_data(heading)).depth, 2);
         let children = arena.get_children(heading).to_vec();
         assert_eq!(children.len(), 1);
-        assert_eq!(arena.get_node(children[0]).node_type, REF_NODE_TYPE);
-        let td = arena.get_type_data(children[0]);
-        assert_eq!(u32::from_le_bytes(td[..4].try_into().unwrap()), orig_text);
+        assert_eq!(
+            arena.get_node(children[0]).node_type,
+            KEEP_CHILDREN_NODE_TYPE
+        );
+
+        let mut buf = Vec::new();
+        push_opstream_replace(&mut buf, para, &ops);
+        let result = apply_mdast_commands(orig, &buf, &test_parse_markdown).unwrap();
+        assert_eq!(result.get_children(0), &[para]);
+        assert_eq!(
+            result.get_node(para).node_type,
+            MdastNodeType::Heading as u8
+        );
+        assert_eq!(result.get_children(para), &[orig_text]);
     }
 
     #[test]
