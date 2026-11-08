@@ -445,8 +445,6 @@ declare module "satteri" {
 
 An existing node passed to an insert or a replacement moves there, and its old place loses it; pass `structuredClone(node)` to insert a copy instead.
 
-`insertChildAt` and `removeChildAt` read `index` the way arrays do: a negative one counts from the end, as in `splice` and `at`. An `index` out of range makes `insertChildAt` insert at the nearer end and `removeChildAt` do nothing.
-
 `wrapNode` places the wrapped node as `parentNode`'s **first** child. If `parentNode` declares its own children, they are kept after it. Wrapping a heading in a `<div>` that holds an anchor link yields `<div><h2>…</h2><a>…</a></div>`. To put the node at an arbitrary position instead, return a replacement from the visitor.
 
 `wrapNode` wraps the node where it is when the wrap applies, including after a replacement by one new node. Calling it twice on one node nests the wrappers, the first one outermost. Removing the node after wrapping it leaves the wrapper empty, and a wrap made after the node is removed is dropped with a warning.

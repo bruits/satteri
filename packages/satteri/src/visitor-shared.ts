@@ -75,12 +75,6 @@ export function asArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
-/** Resolve an insert index the way `Array.prototype.splice` resolves its start. */
-export function insertIndex(index: number, length: number): number {
-  const at = Math.trunc(index) || 0;
-  return at < 0 ? Math.max(length + at, 0) : Math.min(at, length);
-}
-
 const COMMAND_ERROR = "command error: ";
 
 export function pluginLabel(plugin: object | null | undefined): string {
