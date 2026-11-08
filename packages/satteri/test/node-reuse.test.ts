@@ -2174,3 +2174,22 @@ test("an array insert is one edit, so naming a node twice in it fails the compil
     /the paragraph at 1:3 is placed in two places/,
   );
 });
+
+test("raw replacement content takes the node out of the tree even when it parses to one block", () => {
+  const plugin = defineMdastPlugin({
+    name: "raw-then-edit",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, { raw: "**b**" });
+      ctx.setField(node, "data", { hName: "div" });
+    },
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(markdownToHtml("a\n", { mdastPlugins: [plugin] }).html).toBe(
+      "<p><strong>b</strong></p>\n",
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+  } finally {
+    warn.mockRestore();
+  }
+});

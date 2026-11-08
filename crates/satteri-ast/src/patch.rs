@@ -391,9 +391,10 @@ impl PatchApplier {
             return Ok(());
         }
         let parent = arena.get_node(anchor).parent;
+        let fragment = is_fragment(arena, content);
         let mut tops = materialize(arena, content, Top::Splice);
-        let one_new_node =
-            matches!(*tops.as_slice(), [only] if !is_marker(arena.get_node(only).node_type));
+        let one_new_node = !fragment
+            && matches!(*tops.as_slice(), [only] if !is_marker(arena.get_node(only).node_type));
         let refs = self.claim_refs(arena, &tops, parent, anchor, true)?;
         if one_new_node && !refs.names_anchor {
             self.place_refs(arena, &mut tops, &refs);
@@ -819,6 +820,16 @@ pub fn in_tree<K: ArenaKind>(arena: &Arena<K>, mut id: u32) -> bool {
         steps -= 1;
     }
     true
+}
+
+/// A root-wrapped payload, such as parsed raw content, is a list of nodes even when it holds one.
+fn is_fragment<K: ArenaKind>(arena: &Arena<K>, content: &PatchContent<K>) -> bool {
+    match content {
+        PatchContent::Tree(sub) => !sub.is_empty() && sub.get_node(0).node_type == K::ROOT_TAG,
+        PatchContent::Grafted(roots) => {
+            matches!(*roots.as_slice(), [only] if arena.get_node(only).node_type == K::ROOT_TAG)
+        }
+    }
 }
 
 fn is_marker(node_type: u8) -> bool {
