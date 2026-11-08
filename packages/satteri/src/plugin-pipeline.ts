@@ -32,13 +32,13 @@ import {
 } from "./mdast/mdast-visitor.js";
 import type { HastPluginDefinition, MdastPluginDefinition } from "./plugin.js";
 import type { Data, SourceFormat } from "./types.js";
-import { withPluginErrors } from "./visitor-shared.js";
+import { listNodes, pluginLabel, withPluginErrors } from "./visitor-shared.js";
 
 export type MdastPipelineResult = {
   handle: MdastHandle;
   // Deferring the final apply lets the caller fuse it with rendering or compilation.
   pendingCommands?: Uint8Array;
-  // Attribute dropped-transform warnings to the plugin whose apply was deferred.
+  // Attribute dropped-edit warnings to the plugin whose apply was deferred.
   lastPlugin?: { name?: string };
 };
 
@@ -48,17 +48,16 @@ export function releaseHandle(handle: AnyHandle, invalidateStubs: boolean): void
   dropHandle(handle);
 }
 
-export function warnIfDroppedTransforms(
-  dropped: number | undefined,
+/** `dropped` labels the nodes whose edits applied after they had left the tree. */
+export function warnIfDroppedEdits(
+  dropped: readonly string[] | null | undefined,
   plugin: { name?: string } | null | undefined,
-  kind: "mdast" | "hast",
 ): void {
-  if (!dropped || !plugin) return;
-  const name = plugin.name ?? "<anonymous>";
-  const noun = dropped === 1 ? "transform" : "transforms";
+  if (!dropped || dropped.length === 0 || !plugin) return;
+  const which = dropped.length === 1 ? "that node was" : "those nodes were";
   console.warn(
-    `satteri: plugin "${name}" queued ${dropped} ${kind} ${noun} on node(s) that a plugin had ` +
-      `already removed or replaced; ${dropped === 1 ? "it was" : "they were"} dropped.`,
+    `${pluginLabel(plugin)}: its edits to ${listNodes(dropped)} were dropped, because by the ` +
+      `time they applied ${which} no longer in the tree.`,
   );
 }
 
@@ -110,7 +109,7 @@ export function runMdastPluginsOnHandle(
       const dropped = withPluginErrors(plugin, () =>
         applyCommandsToMdastHandle(handle, r.commandBuffer),
       );
-      warnIfDroppedTransforms(dropped, plugin, "mdast");
+      warnIfDroppedEdits(dropped, plugin);
     };
 
     const before = typeof plugin.before === "function" ? plugin.before : undefined;
@@ -120,12 +119,25 @@ export function runMdastPluginsOnHandle(
     const diagnostics: MdastDiagnostic[] = [];
     const runHook = (hook: MdastHookFn, isFinalPass: boolean) => () =>
       settle(
-        visitMdastHook(handle, plugin, hook, getSource, fileURL, data, sourceFormat, diagnostics),
+        withPluginErrors(plugin, () =>
+          visitMdastHook(handle, plugin, hook, getSource, fileURL, data, sourceFormat, diagnostics),
+        ),
         (r) => apply(r, isFinalPass),
       );
     const runVisitors = (isFinalPass: boolean) => () =>
       settle(
-        visitMdastHandle(handle, plugin, subs, getSource, fileURL, data, sourceFormat, diagnostics),
+        withPluginErrors(plugin, () =>
+          visitMdastHandle(
+            handle,
+            plugin,
+            subs,
+            getSource,
+            fileURL,
+            data,
+            sourceFormat,
+            diagnostics,
+          ),
+        ),
         (r) => apply(r, isFinalPass),
       );
 
@@ -155,7 +167,7 @@ export const EMPTY_COMMAND_BUFFER = new Uint8Array(0);
 
 export type CollectedHastCommands = {
   commands: Uint8Array;
-  // Attribute dropped-transform warnings to the plugin whose apply was deferred.
+  // Attribute dropped-edit warnings to the plugin whose apply was deferred.
   lastPlugin: { name?: string } | null;
 };
 
@@ -194,27 +206,29 @@ export function runHastPluginsCollectLast(
       const diagnostics: HastDiagnostic[] = [];
       const runPass = (pass: HastHookFn | "visitors", passIndex: number) => () =>
         settle(
-          pass === "visitors"
-            ? visitHastHandleCollect(
-                handle,
-                plugin,
-                subs,
-                source,
-                fileURL,
-                data,
-                sourceFormat,
-                diagnostics,
-              )
-            : visitHastHookCollect(
-                handle,
-                plugin,
-                pass,
-                source,
-                fileURL,
-                data,
-                sourceFormat,
-                diagnostics,
-              ),
+          withPluginErrors(plugin, () =>
+            pass === "visitors"
+              ? visitHastHandleCollect(
+                  handle,
+                  plugin,
+                  subs,
+                  source,
+                  fileURL,
+                  data,
+                  sourceFormat,
+                  diagnostics,
+                )
+              : visitHastHookCollect(
+                  handle,
+                  plugin,
+                  pass,
+                  source,
+                  fileURL,
+                  data,
+                  sourceFormat,
+                  diagnostics,
+                ),
+          ),
           (commands) => {
             if (isLastPlugin && passIndex === passes.length - 1) {
               collected = { commands, lastPlugin: plugin };
@@ -223,7 +237,7 @@ export function runHastPluginsCollectLast(
               const dropped = withPluginErrors(plugin, () =>
                 applyCommandsToHandle(handle, commands),
               );
-              warnIfDroppedTransforms(dropped, plugin, "hast");
+              warnIfDroppedEdits(dropped, plugin);
             }
           },
         );

@@ -32,7 +32,10 @@ use satteri_ast::patch::{
     KEEP_CHILDREN_NODE_TYPE, Patch, PatchApplier, PatchContent, REF_NODE_TYPE, graft_tree, in_tree,
 };
 #[cfg(feature = "mdx")]
-use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
+use satteri_ast::shared::{
+    MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
+    PROP_EXPRESSION,
+};
 use satteri_ast::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_NULL, PROP_SPACE_SEP, PROP_STRING,
     PROP_TOKEN_LIST,
@@ -392,9 +395,13 @@ fn apply_hast_set_property(
         .ok_or_else(|| CommandError::UnknownNodeType(format!("hast type 0x{raw_type:02x}")))?;
 
     match node_type {
-        HastNodeType::Element => {
+        HastNodeType::Element if value_type <= PROP_TOKEN_LIST => {
             apply_hast_element_property(arena, node_id, prop_name, value_type, value_str)
         }
+        HastNodeType::Element => Err(CommandError::InvalidPropertyValue {
+            node_type: node_type.name().to_string(),
+            name: prop_name.to_string(),
+        }),
 
         HastNodeType::Text
         | HastNodeType::Comment
@@ -770,9 +777,15 @@ fn apply_mdx_jsx_attribute<K: ArenaKind>(
     // Map the binary value-type to a JSX attribute (kind, value).
     let (kind, val_ref) = match value_type {
         PROP_BOOL_TRUE | PROP_NULL => (MDX_ATTR_BOOLEAN_PROP, StringRef::empty()),
-        PROP_BOOL_FALSE => (MDX_ATTR_LITERAL_PROP, arena.alloc_string("false")),
-        _ if value_str.is_empty() => (MDX_ATTR_LITERAL_PROP, StringRef::empty()),
-        _ => (MDX_ATTR_LITERAL_PROP, arena.alloc_string(value_str)),
+        PROP_EXPRESSION => (MDX_ATTR_EXPRESSION_PROP, arena.alloc_string(value_str)),
+        PROP_STRING if value_str.is_empty() => (MDX_ATTR_LITERAL_PROP, StringRef::empty()),
+        PROP_STRING => (MDX_ATTR_LITERAL_PROP, arena.alloc_string(value_str)),
+        _ => {
+            return Err(CommandError::InvalidPropertyValue {
+                node_type: NodeLabel::of(arena, node_id).node_type,
+                name: attr_name.to_string(),
+            });
+        }
     };
 
     let mut attrs: Vec<(u8, StringRef, StringRef)> = Vec::with_capacity(attr_count as usize + 1);
@@ -3266,7 +3279,7 @@ mod tests {
         ));
         assert_eq!(
             err.to_string(),
-            "cannot set property 'value' on a 'heading' node"
+            "a \"heading\" node has no \"value\" to set"
         );
     }
 
@@ -3287,7 +3300,7 @@ mod tests {
         ));
         assert_eq!(
             err.to_string(),
-            "property 'depth' on a 'heading' node cannot hold a value of this type"
+            "\"depth\" on a \"heading\" node cannot hold a value of this type"
         );
     }
 

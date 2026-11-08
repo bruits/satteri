@@ -54,7 +54,7 @@ test.each(["mdast", "hast"] as const)(
           JSON.parse(JSON.stringify(node)) as Text,
         ]) {
           expect(copy).toStrictEqual(node);
-          expect(() => edit(copy, "invalid")).toThrow("invalid node id");
+          expect(() => edit(copy, "invalid")).toThrow("is not in the tree being edited");
         }
         saved = node;
       },
@@ -72,7 +72,7 @@ test.each(["mdast", "hast"] as const)(
         (node, edit) => {
           const retained = saved;
           if (!retained) throw new Error("Expected retained node");
-          expect(() => edit(retained, "wrong document")).toThrow("invalid node id");
+          expect(() => edit(retained, "wrong document")).toThrow("is not in the tree being edited");
           edit(node, "correct document");
         },
       ]);

@@ -1364,6 +1364,11 @@ pub const PROP_KINDS: WireTable = WireTable {
             8,
             "typed, escaped NUL-terminated tokens with a comma-padding flag; joined by schema",
         ),
+        wc(
+            "PROP_EXPRESSION",
+            9,
+            "MDX JSX attribute expression source (UTF-8); SET_ATTRIBUTE only",
+        ),
     ],
 };
 

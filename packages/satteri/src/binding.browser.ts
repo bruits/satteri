@@ -25,6 +25,7 @@ export {
   markdownToJsFast,
   mdastTextContentHandle,
   mdxToJsFast,
+  nodeLabels,
   parseEsm,
   parseExpression,
   parseToHtml,
