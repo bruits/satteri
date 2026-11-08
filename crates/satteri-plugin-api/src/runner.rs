@@ -92,14 +92,17 @@ impl PluginRunner {
 
             if has_cmds {
                 let patches = commands_to_patches(commands.iter().collect(), &current_arena);
-                if !patches.is_empty()
-                    && let Err(err) = apply_patches_strict(&mut current_arena, &patches)
-                {
-                    all_diagnostics.push(Diagnostic {
-                        message: format!("invalid patch combination: {err}"),
-                        node_id: None,
-                        severity: Severity::Error,
-                    });
+                if !patches.is_empty() {
+                    // A failing patch leaves the earlier ones applied, so patch a copy.
+                    let mut patched = current_arena.clone();
+                    match apply_patches_strict(&mut patched, &patches) {
+                        Ok(()) => current_arena = patched,
+                        Err(err) => all_diagnostics.push(Diagnostic {
+                            message: format!("invalid patch combination: {err}"),
+                            node_id: None,
+                            severity: Severity::Error,
+                        }),
+                    }
                 }
                 all_commands.extend(commands);
             }

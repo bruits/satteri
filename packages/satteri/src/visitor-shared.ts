@@ -1,7 +1,6 @@
 // Keep hot decoders separate so MDAST and HAST objects do not make their call sites polymorphic.
 
 import { releaseCommandBuffer, type CommandBuffer } from "./command-buffer.js";
-import type { MdxJsxAttributeUnion } from "./types.js";
 
 /** Fields representable by named-value commands or explicit structured-field handlers. */
 type ScalarFieldValue = string | number | boolean | null;
@@ -42,27 +41,6 @@ export type SettableFieldKey<N, IsMdast extends boolean = false> = {
             : never
           : never;
 }[keyof N & string];
-
-/** Return a replacement copy with one named MDX JSX attribute upserted at the end. */
-export function withMdxJsxAttribute<
-  N extends { attributes: MdxJsxAttributeUnion[] | null | undefined },
->(node: N, name: string, value: unknown): N {
-  const attributes: MdxJsxAttributeUnion[] = [...(node.attributes ?? [])];
-  const index = attributes.findIndex(
-    (attribute) => attribute.type === "mdxJsxAttribute" && attribute.name === name,
-  );
-  if (index !== -1) attributes.splice(index, 1);
-  const attrValue =
-    value === true || value === null || value === undefined
-      ? null
-      : typeof value === "string"
-        ? value
-        : Array.isArray(value)
-          ? value.join(" ")
-          : String(value);
-  attributes.push({ type: "mdxJsxAttribute", name, value: attrValue });
-  return { ...node, attributes };
-}
 
 /** Plugin-level configuration, set via `options` on a plugin definition. */
 export interface PluginOptions {
@@ -182,14 +160,6 @@ export class RemovalTracker<TNode> {
   returned(targetId: number, result: unknown): void {
     if (Array.isArray(result) && result.length === 0) this.removed(targetId);
     else this.rebuilt(targetId, result);
-  }
-
-  /** Checks an async visitor's result on settling, against the removals made by then. */
-  returnedOnSettling<T>(targetId: number, result: Promise<T>): Promise<T> {
-    return result.then((settled) => {
-      this.returned(targetId, settled);
-      return settled;
-    });
   }
 
   warn(plugin: object, kind: "mdast" | "hast"): void {
@@ -328,19 +298,9 @@ export function makeRequireNid<TNode>(
   };
 }
 
-export function collectCommands(
-  returnBuffer: CommandBuffer,
-  contextBuffer: CommandBuffer,
-): Uint8Array {
-  let merged = EMPTY_BYTES;
-  const length = returnBuffer.length + contextBuffer.length;
-  if (length > 0) {
-    merged = new Uint8Array(length);
-    merged.set(returnBuffer.getBuffer());
-    merged.set(contextBuffer.getBuffer(), returnBuffer.length);
-  }
+export function takeCommands(buffer: CommandBuffer): Uint8Array {
   // Copy before releasing: later passes reuse the backing storage.
-  releaseCommandBuffer(returnBuffer);
-  releaseCommandBuffer(contextBuffer);
-  return merged;
+  const bytes = buffer.length > 0 ? buffer.getBuffer().slice() : EMPTY_BYTES;
+  releaseCommandBuffer(buffer);
+  return bytes;
 }

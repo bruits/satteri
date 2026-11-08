@@ -46,7 +46,7 @@ export function classifyReturn(value: unknown): ReturnClass {
 
 const INITIAL_SIZE = 4096;
 
-// collectCommands copies bytes before release, so pooled buffers cannot invalidate returned commands.
+// takeCommands copies bytes before release, so pooled buffers cannot invalidate returned commands.
 const COMMAND_BUFFER_POOL_MAX = 8;
 /** Backings above this are dropped on release so one huge compile does not retain megabytes forever. */
 export const COMMAND_BUFFER_RETAIN_MAX = 1 << 20;

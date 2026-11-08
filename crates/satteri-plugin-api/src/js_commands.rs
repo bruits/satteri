@@ -20,7 +20,6 @@
 //! both kinds would silently misroute nodes. The phantom-typed `Arena<K>`
 //! signature on each entry point makes a cross-kind call a compile error.
 
-use rustc_hash::{FxHashMap, FxHashSet};
 use satteri_arena::{
     Arena, ArenaBuilder, ArenaKind, Document, Hast, Mdast, NodePosition, StringRef,
 };
@@ -30,7 +29,7 @@ use satteri_ast::hast::{HastNodeType, is_void_element};
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::mdast::codec::*;
 use satteri_ast::patch::{
-    EditTarget, Patch, PatchContent, REF_NODE_TYPE, graft_tree, replacement_edit_target,
+    Patch, PatchApplier, PatchContent, REF_NODE_TYPE, graft_tree, in_tree, patch_anchor,
 };
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
@@ -343,22 +342,10 @@ impl Default for MdastCommandOptions {
 }
 
 /// Emit a reference placeholder: a `REF_NODE_TYPE` node carrying the target
-/// original id (u32 LE) in its type_data. The apply resolves it by splicing
-/// that original subtree and applying any pending patch on it.
+/// original id (u32 LE) in its type_data, which the apply moves there.
 fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u32 {
     let id = builder.open_node(REF_NODE_TYPE);
     builder.set_data_current(&ref_id.to_le_bytes());
-    builder.close_node();
-    id
-}
-
-/// A `keep_children` expansion names each child's *position*, so it must carry
-/// whatever else was spliced there rather than the child alone.
-fn emit_slot_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u32 {
-    let id = builder.open_node(REF_NODE_TYPE);
-    let mut data = ref_id.to_le_bytes().to_vec();
-    data.push(satteri_ast::patch::REF_KIND_SLOT);
-    builder.set_data_current(&data);
     builder.close_node();
     id
 }
@@ -1021,7 +1008,7 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                 }
                 let children = builder.arena_ref().get_children(anchor).to_vec();
                 for child in children {
-                    let ref_id = emit_slot_ref_node(child, builder);
+                    let ref_id = emit_ref_node(child, builder);
                     if stack.is_empty() {
                         roots.push(ref_id);
                     }
@@ -1376,158 +1363,16 @@ fn apply_hast_field(
     }
 }
 
-#[derive(Clone, Copy)]
-struct FieldEditAt {
-    node_id: u32,
-    offset: u32,
-    /// Landed in place on `node_id` as it was read.
-    applied: bool,
-}
-
-/// Decides where edits on existing nodes land once every command is read, so their order does not matter.
-struct EditLanding<K: ArenaKind> {
-    original_len: u32,
-    /// The index of the last replacement of each replaced node.
-    replaced: FxHashMap<u32, usize>,
-    removed: FxHashSet<u32>,
-    fields: Vec<FieldEditAt>,
-    kind: std::marker::PhantomData<K>,
-}
-
-fn read_field_command(buf: &[u8], offset: u32) -> Result<(u8, u8, &str, &str), CommandError> {
-    let mut reader = BufReader {
-        data: buf,
-        pos: offset as usize,
-    };
-    let cmd = reader.read_u8()?;
-    reader.read_u32()?;
-    let value_type = reader.read_u8()?;
-    let name_len = reader.read_u32()? as usize;
-    let name = reader.read_str(name_len)?;
-    let value_len = reader.read_u32()? as usize;
-    let value = reader.read_str(value_len)?;
-    Ok((cmd, value_type, name, value))
-}
-
-impl<K: ArenaKind> EditLanding<K> {
-    fn new(original_len: u32) -> Self {
-        Self {
-            original_len,
-            replaced: FxHashMap::default(),
-            removed: FxHashSet::default(),
-            fields: Vec::new(),
-            kind: std::marker::PhantomData,
-        }
+fn apply_patch<K: ArenaKind>(
+    applier: &mut PatchApplier,
+    arena: &mut Arena<K>,
+    dropped: &mut Vec<u32>,
+    patch: Patch<K>,
+) -> Result<(), CommandError> {
+    if !applier.apply(arena, &patch)? {
+        dropped.push(patch_anchor(&patch));
     }
-
-    fn replace(&mut self, node_id: u32, patch_index: usize) {
-        self.replaced.insert(node_id, patch_index);
-    }
-
-    fn remove(&mut self, node_id: u32) {
-        self.removed.insert(node_id);
-    }
-
-    fn field(
-        &mut self,
-        node_id: u32,
-        offset: usize,
-        apply: impl FnOnce() -> Result<(), CommandError>,
-    ) -> Result<(), CommandError> {
-        let applied = !self.removed.contains(&node_id) && !self.replaced.contains_key(&node_id);
-        if applied {
-            apply()?;
-        }
-        self.fields.push(FieldEditAt {
-            node_id,
-            offset: offset as u32,
-            applied,
-        });
-        Ok(())
-    }
-
-    /// Follows replacements through the existing nodes they move in; a chain longer than the replacements is a cycle the apply rejects.
-    fn follow(
-        &self,
-        arena: &Arena<K>,
-        patches: &[Patch<K>],
-        node_id: u32,
-    ) -> (u32, Option<EditTarget>) {
-        let mut id = node_id;
-        for _ in 0..=self.replaced.len() {
-            if self.removed.contains(&id) {
-                return (id, Some(EditTarget::Nowhere));
-            }
-            let Some(&pi) = self.replaced.get(&id) else {
-                return (id, None);
-            };
-            let Patch::Replace { new_tree, .. } = &patches[pi] else {
-                return (id, None);
-            };
-            match replacement_edit_target(arena, id, new_tree) {
-                EditTarget::Node(next) if next < self.original_len => id = next,
-                target => return (id, Some(target)),
-            }
-        }
-        (id, Some(EditTarget::Nowhere))
-    }
-
-    /// Redoes field edits whose node was replaced or removed and re-anchors child edits; returns the edits with nowhere to land.
-    fn finish(
-        self,
-        arena: &mut Arena<K>,
-        patches: &mut [Patch<K>],
-        buf: &[u8],
-        apply: impl Fn(&mut Arena<K>, u8, u32, &str, u8, &str) -> Result<(), CommandError>,
-    ) -> Result<Vec<u32>, CommandError> {
-        if self.replaced.is_empty() && self.removed.is_empty() {
-            return Ok(Vec::new());
-        }
-        let anchors: Vec<(usize, u32)> = patches
-            .iter()
-            .enumerate()
-            .filter_map(|(pi, patch)| match patch {
-                Patch::PrependChild { node_id, .. }
-                | Patch::AppendChild { node_id, .. }
-                | Patch::SetChildren { node_id, .. } => {
-                    Some((pi, self.follow(arena, patches, *node_id).0))
-                }
-                _ => None,
-            })
-            .collect();
-        for (pi, anchor) in anchors {
-            if let Patch::PrependChild { node_id, .. }
-            | Patch::AppendChild { node_id, .. }
-            | Patch::SetChildren { node_id, .. } = &mut patches[pi]
-            {
-                *node_id = anchor;
-            }
-        }
-        let mut lost = Vec::new();
-        for edit in &self.fields {
-            let target = match self.follow(arena, patches, edit.node_id) {
-                (_, Some(EditTarget::Nowhere)) => {
-                    lost.push(edit.node_id);
-                    continue;
-                }
-                (_, Some(EditTarget::Node(new_node))) => new_node,
-                (id, _) => id,
-            };
-            if edit.applied && target == edit.node_id {
-                continue;
-            }
-            let (cmd, value_type, name, value) = read_field_command(buf, edit.offset)?;
-            match apply(arena, cmd, target, name, value_type, value) {
-                Err(
-                    CommandError::UnknownField { .. } | CommandError::InvalidPropertyValue { .. },
-                ) if target != edit.node_id => {
-                    lost.push(edit.node_id);
-                }
-                result => result?,
-            }
-        }
-        Ok(lost)
-    }
+    Ok(())
 }
 
 /// A replacement payload, normalized for a slot under `parent_type`. A sequence of
@@ -1584,7 +1429,7 @@ fn read_mdast_replacement(
 
 fn mdast_sibling_slot_parent_type(arena: &Arena<Mdast>, node_id: u32) -> u8 {
     let node = arena.get_node(node_id);
-    if node_id == 0 {
+    if node_id == 0 || node.parent == u32::MAX {
         node.node_type
     } else {
         arena.get_node(node.parent).node_type
@@ -1915,9 +1760,9 @@ fn reject_void_wrap_parent(
     Ok(())
 }
 
-/// Apply a command buffer to an MDAST arena. Set-property mutations are
-/// applied in-place; structural mutations are collected as `Patch<Mdast>`
-/// objects and applied in place via `apply_patches_in_place`.
+/// Apply a command buffer to an MDAST arena, each command in buffer order to the
+/// tree the earlier ones left. Errors if a command's node is no longer in the tree
+/// when it applies; [`apply_mdast_commands_lenient`] skips it instead.
 ///
 /// `parse_markdown` avoids a circular dependency on the parser crate; it
 /// is invoked for `RAW_MARKDOWN` and `RAW_HTML` payloads.
@@ -1967,12 +1812,8 @@ pub fn apply_mdast_commands_with_options(
     Ok(arena)
 }
 
-/// Like [`apply_mdast_commands`], but rather than erroring when a patch targets
-/// a node inside a removed/replaced subtree, drops it and returns the dropped
-/// anchors. Such a patch is moot — the plugin discarded that subtree. A
-/// *passed-through* child is not dropped: it rides a `_ref` placeholder that
-/// splices it back with its id intact, so a transform queued on a nested node
-/// (e.g. a `:::tip` inside a `:::note`) still applies, in the same pass.
+/// Like [`apply_mdast_commands`], but a command whose node is no longer in the
+/// tree is skipped, and its node returned among the dropped ids.
 pub fn apply_mdast_commands_lenient(
     arena: Arena<Mdast>,
     command_buf: &[u8],
@@ -2004,8 +1845,8 @@ pub fn apply_mdast_commands_lenient_with_options(
     let original_len = arena.len() as u32;
     let mut builder =
         ArenaBuilder::from_arena(std::mem::replace(&mut arena, Arena::new(String::new())));
-    let mut patches: Vec<Patch<Mdast>> = Vec::new();
-    let mut fields = EditLanding::new(original_len);
+    let mut applier = PatchApplier::default();
+    let mut dropped: Vec<u32> = Vec::new();
     let mut reader = BufReader::new(command_buf);
 
     while reader.remaining() > 0 {
@@ -2014,21 +1855,26 @@ pub fn apply_mdast_commands_lenient_with_options(
         match cmd {
             CMD_REMOVE => {
                 let node_id = reader.read_anchor(original_len)?;
-                fields.remove(node_id);
-                patches.push(Patch::Remove { node_id });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::Remove { node_id },
+                )?;
             }
 
             CMD_SET_PROPERTY | CMD_SET_FIELD | CMD_SET_ATTRIBUTE => {
-                let offset = reader.pos - 1;
                 let node_id = reader.read_anchor(original_len)?;
                 let value_type = reader.read_u8()?;
                 let name_len = reader.read_u32()? as usize;
                 let name = reader.read_str(name_len)?;
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
-                fields.field(node_id, offset, || {
-                    apply_mdast_field(builder.arena_mut(), cmd, node_id, name, value_type, value)
-                })?;
+                if in_tree(builder.arena_ref(), node_id) {
+                    apply_mdast_field(builder.arena_mut(), cmd, node_id, name, value_type, value)?;
+                } else {
+                    dropped.push(node_id);
+                }
             }
 
             CMD_INSERT_BEFORE => {
@@ -2043,7 +1889,12 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                 )?;
                 normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
-                patches.push(Patch::InsertBefore { node_id, new_tree });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::InsertBefore { node_id, new_tree },
+                )?;
             }
 
             CMD_INSERT_AFTER => {
@@ -2058,7 +1909,12 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                 )?;
                 normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
-                patches.push(Patch::InsertAfter { node_id, new_tree });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::InsertAfter { node_id, new_tree },
+                )?;
             }
 
             CMD_PREPEND_CHILD => {
@@ -2073,10 +1929,15 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                 )?;
                 normalize_mdast_raw_payload_for_parent(&mut child_tree, parent_type);
-                patches.push(Patch::PrependChild {
-                    node_id,
-                    child_tree,
-                });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::PrependChild {
+                        node_id,
+                        child_tree,
+                    },
+                )?;
             }
 
             CMD_APPEND_CHILD => {
@@ -2091,10 +1952,15 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                 )?;
                 normalize_mdast_raw_payload_for_parent(&mut child_tree, parent_type);
-                patches.push(Patch::AppendChild {
-                    node_id,
-                    child_tree,
-                });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::AppendChild {
+                        node_id,
+                        child_tree,
+                    },
+                )?;
             }
 
             CMD_WRAP => {
@@ -2113,10 +1979,15 @@ pub fn apply_mdast_commands_lenient_with_options(
                     }
                     grafted => grafted,
                 };
-                patches.push(Patch::Wrap {
-                    node_id,
-                    parent_tree,
-                });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::Wrap {
+                        node_id,
+                        parent_tree,
+                    },
+                )?;
             }
 
             CMD_REPLACE => {
@@ -2131,12 +2002,16 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                     parent_type,
                 )?;
-                fields.replace(node_id, patches.len());
-                patches.push(Patch::Replace {
-                    node_id,
-                    new_tree,
-                    keep_children,
-                });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::Replace {
+                        node_id,
+                        new_tree,
+                        keep_children,
+                    },
+                )?;
             }
 
             CMD_SET_CHILDREN => {
@@ -2151,36 +2026,27 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                 )?;
                 normalize_mdast_raw_payload_for_parent(&mut new_children, parent_type);
-                patches.push(Patch::SetChildren {
-                    node_id,
-                    new_children,
-                });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::SetChildren {
+                        node_id,
+                        new_children,
+                    },
+                )?;
             }
 
             other => return Err(CommandError::UnknownCommand(other)),
         }
     }
 
-    let lost = fields.finish(
-        builder.arena_mut(),
-        &mut patches,
-        command_buf,
-        apply_mdast_field,
-    )?;
-    let mut arena = builder.finish();
-    let mut dropped = if patches.is_empty() {
-        Vec::new()
-    } else {
-        satteri_ast::patch::apply_patches_in_place(&mut arena, &patches)?
-    };
-    dropped.extend(lost);
-    Ok((arena, dropped))
+    Ok((builder.finish(), dropped))
 }
 
-/// Apply a command buffer to a HAST arena. Set-property mutations are
-/// applied in-place; structural mutations are collected as `Patch<Hast>`
-/// objects and applied in place via `apply_patches_in_place`. Errors if a patch is stranded inside a
-/// removed/replaced subtree; [`apply_hast_commands_lenient`] drops it instead.
+/// Apply a command buffer to a HAST arena, each command in buffer order to the
+/// tree the earlier ones left. Errors if a command's node is no longer in the tree
+/// when it applies; [`apply_hast_commands_lenient`] skips it instead.
 ///
 /// HAST plugins inject sub-trees via `PAYLOAD_OPSTREAM` only — there is
 /// no `parse_markdown` callback because HAST has no source-level grammar.
@@ -2207,11 +2073,8 @@ pub fn apply_hast_commands(
     Ok(arena)
 }
 
-/// Like [`apply_hast_commands`], but rather than erroring when a patch targets a
-/// node inside a removed/replaced subtree, drops it and returns the dropped
-/// anchors — mirroring [`apply_mdast_commands_lenient`]. Such a patch is moot:
-/// the plugin discarded that subtree. A passed-through child keeps its identity
-/// (via `_ref`) and so is never stranded this way.
+/// Like [`apply_hast_commands`], but a command whose node is no longer in the
+/// tree is skipped, and its node returned among the dropped ids.
 pub fn apply_hast_commands_lenient(
     mut arena: Arena<Hast>,
     command_buf: &[u8],
@@ -2225,8 +2088,8 @@ pub fn apply_hast_commands_lenient(
     let original_len = arena.len() as u32;
     let mut builder =
         ArenaBuilder::from_arena(std::mem::replace(&mut arena, Arena::new(String::new())));
-    let mut patches: Vec<Patch<Hast>> = Vec::new();
-    let mut fields = EditLanding::new(original_len);
+    let mut applier = PatchApplier::default();
+    let mut dropped: Vec<u32> = Vec::new();
     let mut reader = BufReader::new(command_buf);
 
     while reader.remaining() > 0 {
@@ -2235,55 +2098,80 @@ pub fn apply_hast_commands_lenient(
         match cmd {
             CMD_REMOVE => {
                 let node_id = reader.read_anchor(original_len)?;
-                fields.remove(node_id);
-                patches.push(Patch::Remove { node_id });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::Remove { node_id },
+                )?;
             }
 
             CMD_SET_PROPERTY | CMD_SET_FIELD | CMD_SET_ATTRIBUTE => {
-                let offset = reader.pos - 1;
                 let node_id = reader.read_anchor(original_len)?;
                 let value_type = reader.read_u8()?;
                 let name_len = reader.read_u32()? as usize;
                 let name = reader.read_str(name_len)?;
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
-                fields.field(node_id, offset, || {
-                    apply_hast_field(builder.arena_mut(), cmd, node_id, name, value_type, value)
-                })?;
+                if in_tree(builder.arena_ref(), node_id) {
+                    apply_hast_field(builder.arena_mut(), cmd, node_id, name, value_type, value)?;
+                } else {
+                    dropped.push(node_id);
+                }
             }
 
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                patches.push(Patch::InsertBefore { node_id, new_tree });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::InsertBefore { node_id, new_tree },
+                )?;
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                patches.push(Patch::InsertAfter { node_id, new_tree });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::InsertAfter { node_id, new_tree },
+                )?;
             }
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (child_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                patches.push(Patch::PrependChild {
-                    node_id,
-                    child_tree,
-                });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::PrependChild {
+                        node_id,
+                        child_tree,
+                    },
+                )?;
             }
 
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (child_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                patches.push(Patch::AppendChild {
-                    node_id,
-                    child_tree,
-                });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::AppendChild {
+                        node_id,
+                        child_tree,
+                    },
+                )?;
             }
 
             CMD_WRAP => {
@@ -2291,52 +2179,53 @@ pub fn apply_hast_commands_lenient(
                 let (parent_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, true)?;
                 reject_void_wrap_parent(&parent_tree, builder.arena_mut())?;
-                patches.push(Patch::Wrap {
-                    node_id,
-                    parent_tree,
-                });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::Wrap {
+                        node_id,
+                        parent_tree,
+                    },
+                )?;
             }
 
             CMD_REPLACE => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, keep_children) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                fields.replace(node_id, patches.len());
-                patches.push(Patch::Replace {
-                    node_id,
-                    new_tree,
-                    keep_children,
-                });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::Replace {
+                        node_id,
+                        new_tree,
+                        keep_children,
+                    },
+                )?;
             }
 
             CMD_SET_CHILDREN => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (new_children, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                patches.push(Patch::SetChildren {
-                    node_id,
-                    new_children,
-                });
+                apply_patch(
+                    &mut applier,
+                    builder.arena_mut(),
+                    &mut dropped,
+                    Patch::SetChildren {
+                        node_id,
+                        new_children,
+                    },
+                )?;
             }
 
             other => return Err(CommandError::UnknownCommand(other)),
         }
     }
 
-    let lost = fields.finish(
-        builder.arena_mut(),
-        &mut patches,
-        command_buf,
-        apply_hast_field,
-    )?;
-    let mut arena = builder.finish();
-    let mut dropped = if patches.is_empty() {
-        Vec::new()
-    } else {
-        satteri_ast::patch::apply_patches_in_place(&mut arena, &patches)?
-    };
-    dropped.extend(lost);
-    Ok((arena, dropped))
+    Ok((builder.finish(), dropped))
 }
 
 #[cfg(test)]
@@ -2542,11 +2431,6 @@ mod tests {
         assert_eq!(arena.get_node(children[0]).node_type, REF_NODE_TYPE);
         let td = arena.get_type_data(children[0]);
         assert_eq!(u32::from_le_bytes(td[..4].try_into().unwrap()), orig_text);
-        assert_eq!(
-            td.get(4),
-            Some(&satteri_ast::patch::REF_KIND_SLOT),
-            "keep_children names each child's position, not the child alone"
-        );
     }
 
     #[test]
@@ -3226,8 +3110,9 @@ mod tests {
         ));
     }
 
+    /// The replacement was built before a field edit made ahead of it, so only an edit after it lands.
     #[test]
-    fn a_field_edit_lands_on_a_one_node_replacement_whichever_came_first() {
+    fn a_field_edit_after_a_one_node_replacement_lands_on_it() {
         let arena = build_hello_world();
         let heading = arena.get_children(0)[0];
         let mut after = Vec::new();
@@ -3237,35 +3122,30 @@ mod tests {
         push_set_property(&mut before, heading, PROP_STRING, "data", DATA);
         push_opstream_replace(&mut before, heading, &one_paragraph_ops());
 
-        for buf in [after, before] {
+        for (buf, lands) in [(after, true), (before, false)] {
             let (result, dropped) =
                 apply_mdast_commands_lenient(arena.clone(), &buf, &test_parse_markdown).unwrap();
             assert!(dropped.is_empty(), "{dropped:?}");
             let replacement = result.get_children(0)[0];
+            assert_eq!(replacement, heading);
             assert_eq!(
                 result.get_node(replacement).node_type,
                 MdastNodeType::Paragraph as u8
             );
-            assert!(result.get_node_data(replacement).is_some());
+            assert_eq!(result.get_node_data(replacement).is_some(), lands);
         }
     }
 
     #[test]
-    fn a_field_edit_with_no_one_node_to_land_on_is_dropped() {
+    fn a_field_edit_after_a_replacement_by_several_nodes_is_dropped() {
         let arena = build_hello_world();
         let heading = arena.get_children(0)[0];
-        let mut after = Vec::new();
-        push_opstream_replace(&mut after, heading, &two_item_ops(None));
-        push_set_property(&mut after, heading, PROP_STRING, "data", DATA);
-        let mut before = Vec::new();
-        push_set_property(&mut before, heading, PROP_STRING, "data", DATA);
-        push_opstream_replace(&mut before, heading, &two_item_ops(None));
+        let mut buf = Vec::new();
+        push_opstream_replace(&mut buf, heading, &two_item_ops(None));
+        push_set_property(&mut buf, heading, PROP_STRING, "data", DATA);
 
-        for buf in [after, before] {
-            let (_, dropped) =
-                apply_mdast_commands_lenient(arena.clone(), &buf, &test_parse_markdown).unwrap();
-            assert_eq!(dropped, vec![heading]);
-        }
+        let (_, dropped) = apply_mdast_commands_lenient(arena, &buf, &test_parse_markdown).unwrap();
+        assert_eq!(dropped, vec![heading]);
     }
 
     #[test]
@@ -3304,15 +3184,18 @@ mod tests {
         assert!(result.get_node_data(heading).is_some());
     }
 
+    /// Only one new node takes over the replaced node's id, so a later edit to it is dropped.
     #[test]
-    fn a_child_edit_follows_its_node_replaced_by_an_existing_one() {
+    fn a_child_edit_after_its_node_is_replaced_by_an_existing_one_is_dropped() {
         let arena = build_hello_world();
         let heading = arena.get_children(0)[0];
         let paragraph = arena.get_children(0)[1];
+        let paragraph_children = arena.get_children(paragraph).to_vec();
         let mut ref_ops = Vec::new();
         ref_ops.push(OP_REF);
         push_u32(&mut ref_ops, paragraph);
         let mut buf = Vec::new();
+        push_opstream_replace(&mut buf, heading, &ref_ops);
         buf.push(CMD_APPEND_CHILD);
         push_u32(&mut buf, heading);
         buf.push(PAYLOAD_OPSTREAM);
@@ -3324,14 +3207,12 @@ mod tests {
         };
         push_u32(&mut buf, break_ops.len() as u32);
         buf.extend_from_slice(&break_ops);
-        push_opstream_replace(&mut buf, heading, &ref_ops);
 
         let (result, dropped) =
             apply_mdast_commands_lenient(arena, &buf, &test_parse_markdown).unwrap();
-        assert!(dropped.is_empty(), "{dropped:?}");
+        assert_eq!(dropped, vec![heading]);
         assert_eq!(result.get_children(0), &[paragraph]);
-        let last = *result.get_children(paragraph).last().unwrap();
-        assert_eq!(result.get_node(last).node_type, MdastNodeType::Break as u8);
+        assert_eq!(result.get_children(paragraph), paragraph_children);
     }
 
     #[test]

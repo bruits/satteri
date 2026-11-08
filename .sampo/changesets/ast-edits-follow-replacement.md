@@ -2,4 +2,4 @@
 cargo/satteri-ast: patch
 ---
 
-Changed child edits on a node replaced by one new node to apply to that node, and wraps and child edits with nowhere to land to be reported as dropped instead of failing, removing `CommandError::WrapOnRemovedNode` and `CommandError::ChildPatchOnRemovedNode`.
+Changed patches to apply one at a time in order, each to the tree the earlier ones left, adding `PatchApplier` and removing `REF_KIND_SLOT`, `CommandError::WrapOnRemovedNode` and `CommandError::ChildPatchOnRemovedNode`.

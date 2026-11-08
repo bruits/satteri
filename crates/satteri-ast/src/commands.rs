@@ -106,10 +106,9 @@ pub enum CommandError {
     UnencodableNodeType(&'static str),
     /// An op-stream nests OPENs deeper than the replay supports.
     OpstreamTooDeep(usize),
-    /// A patch has nowhere to land: its anchor lives inside a removed subtree,
-    /// or it edits a node that is removed, or replaced by content that cannot take the edit.
+    /// A patch has nowhere to land: by the time it applies, its node is no longer in the tree.
     PatchOnRemovedSubtree(NodeLabel),
-    /// Payloads place or arrange the same node twice; a node can only be in one place.
+    /// One payload names the same node twice; a node can only be in one place.
     NodePlacedTwice(NodeLabel),
     /// Content placed into or next to a node, or replacing the root, contains that node.
     NodeInsideItself(NodeLabel),
@@ -118,8 +117,6 @@ pub enum CommandError {
         ancestor: NodeLabel,
         node: NodeLabel,
     },
-    /// Edits to two nodes each place the other, so neither can settle first.
-    CircularPlacement(NodeLabel, NodeLabel),
     /// An op-stream's `OP_OPEN`s and `OP_CLOSE`s did not pair up.
     UnbalancedOpstream,
     /// A document op-stream is not the one `root` wrapping the tree that
@@ -130,8 +127,7 @@ pub enum CommandError {
     /// A stored node's `type_data` is shorter than its declared layout, so a
     /// field write would spill into the next node's data.
     TypeDataTooShort,
-    /// A structurally valid but re-entrant patch shape (e.g. a payload ref
-    /// naming its own anchor's ancestor) that in-place application rejects.
+    /// A patch shape the apply cannot place, such as a sibling insert on the root.
     UnsupportedPatchShape(&'static str),
     /// A `wrapNode` `{raw}` payload with no usable wrapper; the string
     /// says why.
@@ -208,13 +204,9 @@ impl std::fmt::Display for CommandError {
                 f,
                 "{ancestor} is placed next to or inside {node}, which it contains"
             ),
-            Self::CircularPlacement(a, b) => write!(
-                f,
-                "the edits to {a} and {b} each place the other, so neither can go first; to reorder siblings, set their parent's children instead"
-            ),
             Self::PatchOnRemovedSubtree(node) => write!(
                 f,
-                "an edit to {node} has nowhere to land: the node, or a subtree holding it, is removed or replaced"
+                "an edit to {node} has nowhere to land: by then the node, or a subtree holding it, was removed or replaced"
             ),
             Self::InvalidRawWrapper(reason) => {
                 write!(f, "wrapNode: {{raw}} wrapper {reason}")
