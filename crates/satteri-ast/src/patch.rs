@@ -914,7 +914,8 @@ mod tests {
     use super::*;
     use crate::mdast::MdastNodeType;
 
-    fn apply_strict<K: ArenaKind>(
+    /// Old `rebuild` contract on a fresh clone: dropped -> error.
+    fn rebuild<K: ArenaKind>(
         arena: &Arena<K>,
         patches: &[Patch<K>],
     ) -> Result<Arena<K>, CommandError> {
@@ -923,7 +924,7 @@ mod tests {
         Ok(arena)
     }
 
-    fn apply_lenient<K: ArenaKind>(
+    fn rebuild_lenient<K: ArenaKind>(
         arena: &Arena<K>,
         patches: &[Patch<K>],
     ) -> Result<(Arena<K>, Vec<u32>), CommandError> {
@@ -1028,14 +1029,14 @@ mod tests {
     #[test]
     fn empty_patches_preserves_structure() {
         let orig = build_hello_world();
-        let patched = apply_strict(&orig, &[]).expect("apply failed");
+        let rebuilt = rebuild(&orig, &[]).expect("rebuild failed");
         assert_eq!(
-            reachable_count(&patched),
+            reachable_count(&rebuilt),
             orig.len(),
             "node count must be the same"
         );
         // Root still has 2 children
-        assert_eq!(patched.get_children(0).len(), 2);
+        assert_eq!(rebuilt.get_children(0).len(), 2);
     }
 
     #[test]
@@ -1059,22 +1060,22 @@ mod tests {
             node_id: heading_id,
             new_children: PatchContent::Tree(new_children),
         }];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        let new_heading_id = patched.get_children(0)[0];
+        let new_heading_id = rebuilt.get_children(0)[0];
         assert_eq!(
-            patched.get_node(new_heading_id).node_type,
+            rebuilt.get_node(new_heading_id).node_type,
             MdastNodeType::Heading as u8
         );
         assert_eq!(
-            decode_heading_data(patched.get_type_data(new_heading_id)).depth,
+            decode_heading_data(rebuilt.get_type_data(new_heading_id)).depth,
             3
         );
 
-        let heading_children = patched.get_children(new_heading_id);
+        let heading_children = rebuilt.get_children(new_heading_id);
         assert_eq!(heading_children.len(), 1);
         assert_eq!(
-            patched.get_node(heading_children[0]).node_type,
+            rebuilt.get_node(heading_children[0]).node_type,
             MdastNodeType::Break as u8
         );
     }
@@ -1121,22 +1122,22 @@ mod tests {
             node_id: 1,
             parent_tree: PatchContent::Tree(wrapper),
         }];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
         // Should be: root -> div -> h1 -> text
-        assert_eq!(reachable_count(&patched), 4);
-        let root_children = patched.get_children(0);
+        assert_eq!(reachable_count(&rebuilt), 4);
+        let root_children = rebuilt.get_children(0);
         assert_eq!(root_children.len(), 1);
         let div_id = root_children[0];
         assert_eq!(
-            patched.get_node(div_id).node_type,
+            rebuilt.get_node(div_id).node_type,
             HastNodeType::Element as u8
         );
-        let div_children = patched.get_children(div_id);
+        let div_children = rebuilt.get_children(div_id);
         assert_eq!(div_children.len(), 1);
         let h1_id = div_children[0];
         assert_eq!(
-            patched.get_node(h1_id).node_type,
+            rebuilt.get_node(h1_id).node_type,
             HastNodeType::Element as u8
         );
     }
@@ -1158,7 +1159,7 @@ mod tests {
             node_id: heading_id,
             parent_tree: PatchContent::Tree(payload),
         }];
-        match apply_strict(&orig, &patches) {
+        match rebuild(&orig, &patches) {
             Err(CommandError::UnsupportedPatchShape(_)) => {}
             other => panic!("expected UnsupportedPatchShape, got {other:?}"),
         }
@@ -1197,14 +1198,14 @@ mod tests {
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
         // Root: Heading, ThematicBreak, Break, Blockquote, Paragraph
-        let root_children = patched.get_children(0);
+        let root_children = rebuilt.get_children(0);
         assert_eq!(root_children.len(), 5);
         let types: Vec<u8> = root_children
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -1234,13 +1235,13 @@ mod tests {
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        let root_children = patched.get_children(0);
+        let root_children = rebuilt.get_children(0);
         assert_eq!(root_children.len(), 4);
         let types: Vec<u8> = root_children
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -1276,15 +1277,15 @@ mod tests {
             },
             Patch::Remove { node_id: para_id },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
         // Root should be: Heading, ThematicBreak, Break, Blockquote
         // (Paragraph removed, but the inserts around it stay.)
-        let root_children = patched.get_children(0);
+        let root_children = rebuilt.get_children(0);
         assert_eq!(root_children.len(), 4);
         let types: Vec<u8> = root_children
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -1324,14 +1325,14 @@ mod tests {
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
         // Root: ThematicBreak, Paragraph (was Heading), Break, Paragraph (orig)
-        let root_children = patched.get_children(0);
+        let root_children = rebuilt.get_children(0);
         assert_eq!(root_children.len(), 4);
         let types: Vec<u8> = root_children
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -1373,12 +1374,12 @@ mod tests {
                 new_tree: PatchContent::Tree(second),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        let root_children = patched.get_children(0);
+        let root_children = rebuilt.get_children(0);
         assert_eq!(root_children.len(), 2);
         assert_eq!(
-            patched.get_node(root_children[0]).node_type,
+            rebuilt.get_node(root_children[0]).node_type,
             MdastNodeType::Break as u8,
             "the second Replace should win"
         );
@@ -1408,13 +1409,13 @@ mod tests {
                 child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Paragraph)),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        let new_heading_id = patched.get_children(0)[0];
-        let heading_children = patched.get_children(new_heading_id);
+        let new_heading_id = rebuilt.get_children(0)[0];
+        let heading_children = rebuilt.get_children(new_heading_id);
         let types: Vec<u8> = heading_children
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -1428,97 +1429,104 @@ mod tests {
         );
     }
 
+    /// An edit on a node no longer in the tree is dropped and reported, and the rest still applies.
     #[test]
-    fn a_wrap_or_child_edit_after_its_node_is_removed_is_dropped_and_reported() {
-        let orig = build_hello_world();
-        let heading_id = orig.get_children(0)[0];
-        let edits: [fn(u32) -> Patch<Mdast>; 3] = [
-            |node_id| Patch::Wrap {
-                node_id,
-                parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
-            },
-            |node_id| Patch::PrependChild {
-                node_id,
-                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
-            },
-            |node_id| Patch::AppendChild {
-                node_id,
-                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
-            },
+    fn an_edit_on_a_node_that_left_the_tree_is_dropped_and_reported() {
+        let mut orig = build_hello_world();
+        let heading = orig.get_children(0)[0];
+        let text_in_heading = orig.get_children(heading)[0];
+        let para = orig.get_children(0)[1];
+        let text_in_para = orig.get_children(para)[0];
+        let orphan = orig.alloc_node(MdastNodeType::Paragraph as u8);
+        let node = |node_type| PatchContent::Tree(single_node_arena(node_type));
+        let remove = |node_id| Patch::Remove { node_id };
+        let replace = |node_id, node_type| Patch::Replace {
+            node_id,
+            new_tree: node(node_type),
+        };
+        let append_break = |node_id| Patch::AppendChild {
+            node_id,
+            child_tree: node(MdastNodeType::Break),
+        };
+        // (patches, dropped nodes, root children left)
+        let cases = [
+            (
+                vec![
+                    remove(heading),
+                    Patch::Wrap {
+                        node_id: heading,
+                        parent_tree: node(MdastNodeType::Blockquote),
+                    },
+                ],
+                vec![heading],
+                1,
+            ),
+            (
+                vec![
+                    remove(heading),
+                    Patch::PrependChild {
+                        node_id: heading,
+                        child_tree: node(MdastNodeType::Break),
+                    },
+                ],
+                vec![heading],
+                1,
+            ),
+            (
+                vec![remove(heading), append_break(heading)],
+                vec![heading],
+                1,
+            ),
+            (
+                vec![
+                    remove(heading),
+                    Patch::InsertBefore {
+                        node_id: text_in_heading,
+                        new_tree: node(MdastNodeType::Break),
+                    },
+                ],
+                vec![text_in_heading],
+                1,
+            ),
+            (
+                vec![
+                    replace(heading, MdastNodeType::Paragraph),
+                    replace(text_in_heading, MdastNodeType::Break),
+                ],
+                vec![text_in_heading],
+                2,
+            ),
+            (
+                vec![replace(0, MdastNodeType::Paragraph), append_break(heading)],
+                vec![heading],
+                0,
+            ),
+            (vec![remove(orphan), append_break(orphan)], vec![orphan], 2),
+            (
+                vec![
+                    remove(heading),
+                    remove(para),
+                    replace(text_in_heading, MdastNodeType::Break),
+                    Patch::InsertBefore {
+                        node_id: text_in_para,
+                        new_tree: node(MdastNodeType::Break),
+                    },
+                ],
+                vec![text_in_heading, text_in_para],
+                0,
+            ),
         ];
-        for edit in edits {
-            let patches = vec![
-                Patch::Remove {
-                    node_id: heading_id,
-                },
-                edit(heading_id),
-            ];
-            let (arena, dropped) = apply_lenient(&orig, &patches).unwrap();
-            assert_eq!(dropped, vec![heading_id]);
-            assert_eq!(arena.get_children(0), &orig.get_children(0)[1..]);
-            match apply_strict(&orig, &patches) {
-                Err(CommandError::PatchOnRemovedSubtree(node)) => assert_eq!(node.id, heading_id),
-                other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
+        for (case, (patches, expected, root_children)) in cases.into_iter().enumerate() {
+            let (arena, dropped) = rebuild_lenient(&orig, &patches).expect("rebuild failed");
+            assert_eq!(dropped, expected, "case {case}");
+            assert_eq!(arena.get_children(0).len(), root_children, "case {case}");
+            match rebuild(&orig, &patches) {
+                Err(CommandError::PatchOnRemovedSubtree(node)) => {
+                    assert_eq!(node.id, expected[0], "case {case}")
+                }
+                other => panic!("case {case}: expected PatchOnRemovedSubtree, got {other:?}"),
             }
         }
-    }
-
-    /// Patching a descendant of a removed subtree: the descendant's anchor
-    /// is never reached during the walk because we don't recurse into
-    /// removed nodes. Caught post-walk as `PatchOnRemovedSubtree`.
-    #[test]
-    fn patch_on_descendant_of_removed_node_errors() {
-        let orig = build_hello_world();
-        let heading_id = orig.get_children(0)[0]; // heading
-        let text_in_heading = orig.get_children(heading_id)[0]; // text inside heading
-
-        let patches = vec![
-            Patch::Remove {
-                node_id: heading_id,
-            },
-            Patch::InsertBefore {
-                node_id: text_in_heading,
-                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
-            },
-        ];
-        match apply_strict(&orig, &patches) {
-            Err(CommandError::PatchOnRemovedSubtree(node)) => assert_eq!(node.id, text_in_heading),
-            other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
-        }
-    }
-
-    /// A patch inside a subtree an earlier patch replaced is dropped and reported; the rest still applies.
-    #[test]
-    fn a_patch_inside_a_replaced_subtree_is_dropped_and_reported() {
-        let orig = build_hello_world();
-        let heading_id = orig.get_children(0)[0];
-        let text_in_heading = orig.get_children(heading_id)[0];
-
-        // Replace the heading (dropping its subtree), and also replace the text
-        // inside it, the kind of pair a nested-directive transform produces.
-        let mut replacement = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
-        replacement.open_node(MdastNodeType::Paragraph as u8);
-        replacement.close_node();
-        let replacement = replacement.finish();
-
-        let patches = vec![
-            Patch::Replace {
-                node_id: heading_id,
-                new_tree: PatchContent::Tree(replacement),
-            },
-            Patch::Replace {
-                node_id: text_in_heading,
-                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
-            },
-        ];
-        let (arena, dropped) = apply_lenient(&orig, &patches).expect("apply failed");
-        assert_eq!(dropped, vec![text_in_heading]);
-        // The heading replacement still applied: root's first child is the new Paragraph.
-        let root_children = arena.get_children(0);
-        assert_eq!(
-            arena.get_node(root_children[0]).node_type,
-            MdastNodeType::Paragraph as u8
-        );
     }
 
     /// A replacement naming the original child keeps it in the tree, so a later patch on it still applies.
@@ -1548,7 +1556,7 @@ mod tests {
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
             },
         ];
-        let (arena, dropped) = apply_lenient(&orig, &patches).expect("apply failed");
+        let (arena, dropped) = rebuild_lenient(&orig, &patches).expect("rebuild failed");
         assert!(
             dropped.is_empty(),
             "the named child stays in the tree: {dropped:?}"
@@ -1565,35 +1573,6 @@ mod tests {
             arena.get_node(bq_children[0]).node_type,
             MdastNodeType::Break as u8
         );
-    }
-
-    #[test]
-    fn every_patch_inside_a_removed_subtree_is_reported() {
-        // Root(0) -> Heading(1) -> Text(2), Paragraph(3) -> Text(4)
-        let orig = build_hello_world();
-        let heading_id = orig.get_children(0)[0];
-        let text_in_heading = orig.get_children(heading_id)[0];
-        let para_id = orig.get_children(0)[1];
-        let text_in_para = orig.get_children(para_id)[0];
-
-        let patches = vec![
-            Patch::Remove {
-                node_id: heading_id,
-            },
-            Patch::Remove { node_id: para_id },
-            Patch::Replace {
-                node_id: text_in_heading,
-                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
-            },
-            Patch::InsertBefore {
-                node_id: text_in_para,
-                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
-            },
-        ];
-        let (arena, dropped) = apply_lenient(&orig, &patches).expect("apply failed");
-        assert_eq!(dropped, vec![text_in_heading, text_in_para]);
-        // Both removals applied: the root is now empty.
-        assert_eq!(arena.get_children(0).len(), 0);
     }
 
     /// A replacement that keeps the node's children leaves them in the tree, so edits to them still apply.
@@ -1618,13 +1597,13 @@ mod tests {
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
         // The new wrapper has Break + Text inside.
-        let new_wrapper = patched.get_children(0)[0];
-        let inside = patched.get_children(new_wrapper);
+        let new_wrapper = rebuilt.get_children(0)[0];
+        let inside = rebuilt.get_children(new_wrapper);
         let types: Vec<u8> = inside
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -1659,7 +1638,7 @@ mod tests {
             node_id: heading_id,
             new_tree: PatchContent::Tree(ref_arena(0, Some(MdastNodeType::Paragraph))),
         }];
-        match apply_strict(&orig, &patches) {
+        match rebuild(&orig, &patches) {
             Err(CommandError::AncestorPlacedInside { ancestor, node }) => {
                 assert_eq!((ancestor.id, node.id), (0, heading_id));
             }
@@ -1677,7 +1656,7 @@ mod tests {
             node_id: para_id,
             new_tree: PatchContent::Tree(ref_arena(0, None)),
         }];
-        match apply_strict(&orig, &patches) {
+        match rebuild(&orig, &patches) {
             Err(CommandError::AncestorPlacedInside { ancestor, node }) => {
                 assert_eq!((ancestor.id, node.id), (0, para_id));
             }
@@ -1715,27 +1694,6 @@ mod tests {
         }
     }
 
-    /// A never-attached anchor (parent == u32::MAX) is not in the tree, so an edit to it is dropped.
-    #[test]
-    fn an_edit_to_a_detached_anchor_is_dropped() {
-        let mut orig = build_hello_world();
-        let orphan = orig.alloc_node(MdastNodeType::Paragraph as u8);
-
-        let (arena, dropped) = apply_lenient(
-            &orig,
-            &[
-                Patch::Remove { node_id: orphan },
-                Patch::AppendChild {
-                    node_id: orphan,
-                    child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
-                },
-            ],
-        )
-        .expect("apply failed");
-        assert_eq!(dropped, vec![orphan]);
-        assert_eq!(arena.get_children(0), orig.get_children(0));
-    }
-
     /// Naming a node moves it from wherever it is, including from outside the tree.
     #[test]
     fn a_ref_to_a_detached_node_moves_it_in() {
@@ -1747,7 +1705,7 @@ mod tests {
             node_id: para_id,
             new_tree: PatchContent::Tree(ref_arena(orphan, None)),
         }];
-        let arena = apply_strict(&orig, &patches).expect("apply failed");
+        let arena = rebuild(&orig, &patches).expect("rebuild failed");
         assert_eq!(arena.get_children(0)[2], orphan);
         assert_eq!(arena.get_node(orphan).parent, 0);
     }
@@ -1762,7 +1720,7 @@ mod tests {
             new_tree: PatchContent::Tree(ref_arena(orig.len() as u32, None)),
         }];
         assert!(matches!(
-            apply_strict(&orig, &patches),
+            rebuild(&orig, &patches),
             Err(CommandError::InvalidNodeId(_))
         ));
     }
@@ -1777,14 +1735,14 @@ mod tests {
             node_id: 0,
             new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Paragraph)),
         }];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
         assert_eq!(
-            patched.get_node(0).node_type,
+            rebuilt.get_node(0).node_type,
             MdastNodeType::Paragraph as u8
         );
-        assert_eq!(patched.get_children(0).len(), 0);
-        assert_eq!(reachable_count(&patched), 1);
+        assert_eq!(rebuilt.get_children(0).len(), 0);
+        assert_eq!(reachable_count(&rebuilt), 1);
     }
 
     /// `Replace` on the root with a Root-typed payload: node 0 takes the
@@ -1806,13 +1764,13 @@ mod tests {
             node_id: 0,
             new_tree: PatchContent::Tree(replacement),
         }];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        assert_eq!(patched.get_node(0).node_type, MdastNodeType::Root as u8);
-        let types: Vec<u8> = patched
+        assert_eq!(rebuilt.get_node(0).node_type, MdastNodeType::Root as u8);
+        let types: Vec<u8> = rebuilt
             .get_children(0)
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -1834,22 +1792,22 @@ mod tests {
                 MdastNodeType::Blockquote,
             ))),
         }];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
         assert_eq!(
-            patched.get_node(0).node_type,
+            rebuilt.get_node(0).node_type,
             MdastNodeType::Blockquote as u8
         );
-        let types: Vec<u8> = patched
+        let types: Vec<u8> = rebuilt
             .get_children(0)
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
             vec![MdastNodeType::Heading as u8, MdastNodeType::Paragraph as u8]
         );
-        assert_eq!(reachable_count(&patched), orig.len());
+        assert_eq!(reachable_count(&rebuilt), orig.len());
     }
 
     /// An edit on a kept child applies whether it comes before or after a root replacement keeping it.
@@ -1870,16 +1828,16 @@ mod tests {
                 ))),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
         assert_eq!(
-            patched.get_node(0).node_type,
+            rebuilt.get_node(0).node_type,
             MdastNodeType::Blockquote as u8
         );
-        let types: Vec<u8> = patched
+        let types: Vec<u8> = rebuilt
             .get_children(0)
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -1897,11 +1855,11 @@ mod tests {
         let orig = build_hello_world();
 
         let patches = vec![Patch::Remove { node_id: 0 }];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        assert_eq!(patched.get_node(0).node_type, MdastNodeType::Root as u8);
-        assert_eq!(patched.get_children(0).len(), 0);
-        assert_eq!(reachable_count(&patched), 1);
+        assert_eq!(rebuilt.get_node(0).node_type, MdastNodeType::Root as u8);
+        assert_eq!(rebuilt.get_children(0).len(), 0);
+        assert_eq!(reachable_count(&rebuilt), 1);
     }
 
     /// `Wrap` on the root: the wrapper takes over node 0 and the old root
@@ -1914,30 +1872,30 @@ mod tests {
             node_id: 0,
             parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
         }];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
         assert_eq!(
-            patched.get_node(0).node_type,
+            rebuilt.get_node(0).node_type,
             MdastNodeType::Blockquote as u8
         );
-        let wrapped = patched.get_children(0);
+        let wrapped = rebuilt.get_children(0);
         assert_eq!(wrapped.len(), 1);
         let old_root = wrapped[0];
         assert_eq!(
-            patched.get_node(old_root).node_type,
+            rebuilt.get_node(old_root).node_type,
             MdastNodeType::Root as u8
         );
-        let types: Vec<u8> = patched
+        let types: Vec<u8> = rebuilt
             .get_children(old_root)
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
             vec![MdastNodeType::Heading as u8, MdastNodeType::Paragraph as u8]
         );
         // Everything reachable: wrapper + old root + heading + text + para + text.
-        assert_eq!(reachable_count(&patched), orig.len() + 1);
+        assert_eq!(reachable_count(&rebuilt), orig.len() + 1);
     }
 
     /// `Wrap` composes with the root's own child edits: the append lands
@@ -1957,13 +1915,13 @@ mod tests {
                 parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        let old_root = patched.get_children(0)[0];
-        let types: Vec<u8> = patched
+        let old_root = rebuilt.get_children(0)[0];
+        let types: Vec<u8> = rebuilt
             .get_children(old_root)
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -1991,13 +1949,13 @@ mod tests {
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        let old_root = patched.get_children(0)[0];
-        let types: Vec<u8> = patched
+        let old_root = rebuilt.get_children(0)[0];
+        let types: Vec<u8> = rebuilt
             .get_children(old_root)
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -2017,7 +1975,7 @@ mod tests {
             node_id: 0,
             new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
         }];
-        match apply_strict(&orig, &patches) {
+        match rebuild(&orig, &patches) {
             Err(CommandError::UnsupportedPatchShape(
                 "sibling insert on root (root has no siblings)",
             )) => {}
@@ -2033,54 +1991,11 @@ mod tests {
             node_id: 0,
             new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
         }];
-        match apply_strict(&orig, &patches) {
+        match rebuild(&orig, &patches) {
             Err(CommandError::UnsupportedPatchShape(
                 "sibling insert on root (root has no siblings)",
             )) => {}
             other => panic!("expected sibling-insert-on-root error, got {other:?}"),
-        }
-    }
-
-    /// A root replace that does not name a descendant takes it out of the tree, so a later edit to it is dropped.
-    #[test]
-    fn replace_root_drops_a_later_patch_on_an_old_descendant() {
-        let orig = build_hello_world();
-        let heading_id = orig.get_children(0)[0];
-
-        let patches = vec![
-            Patch::Replace {
-                node_id: 0,
-                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Paragraph)),
-            },
-            Patch::AppendChild {
-                node_id: heading_id,
-                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
-            },
-        ];
-        let (arena, dropped) = apply_lenient(&orig, &patches).expect("apply failed");
-        assert_eq!(dropped, vec![heading_id]);
-        assert_eq!(arena.get_node(0).node_type, MdastNodeType::Paragraph as u8);
-    }
-
-    #[test]
-    fn strict_errors_on_a_patch_whose_node_left_the_tree() {
-        let orig = build_hello_world();
-        let heading_id = orig.get_children(0)[0];
-        let text_in_heading = orig.get_children(heading_id)[0];
-
-        let mut work = orig.clone();
-        let patches = vec![
-            Patch::Remove {
-                node_id: heading_id,
-            },
-            Patch::Replace {
-                node_id: text_in_heading,
-                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
-            },
-        ];
-        match apply_patches_strict(&mut work, &patches) {
-            Err(CommandError::PatchOnRemovedSubtree(node)) => assert_eq!(node.id, text_in_heading),
-            other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
         }
     }
 
@@ -2109,12 +2024,12 @@ mod tests {
                 new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Code)),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        let types: Vec<u8> = patched
+        let types: Vec<u8> = rebuilt
             .get_children(0)
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -2145,12 +2060,12 @@ mod tests {
                 child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        let heading_children = patched.get_children(patched.get_children(0)[0]);
+        let heading_children = rebuilt.get_children(rebuilt.get_children(0)[0]);
         let types: Vec<u8> = heading_children
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
@@ -2181,17 +2096,17 @@ mod tests {
                 ))),
             },
         ];
-        let patched = apply_strict(&orig, &patches).expect("apply failed");
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
 
-        let wrapper = patched.get_children(0)[0];
+        let wrapper = rebuilt.get_children(0)[0];
         assert_eq!(
-            patched.get_node(wrapper).node_type,
+            rebuilt.get_node(wrapper).node_type,
             MdastNodeType::Paragraph as u8
         );
-        let types: Vec<u8> = patched
+        let types: Vec<u8> = rebuilt
             .get_children(wrapper)
             .iter()
-            .map(|&id| patched.get_node(id).node_type)
+            .map(|&id| rebuilt.get_node(id).node_type)
             .collect();
         assert_eq!(
             types,
