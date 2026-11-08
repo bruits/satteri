@@ -239,9 +239,8 @@ test("mdast round-trip: empty strings ride OP_STR", () => {
   } satisfies MdastNode);
 });
 
-test("mdast round-trip: depth and start at their stored maxima", () => {
-  // Use the u8 wire boundary even though MDAST heading depths are restricted to 1–6.
-  expectMdastRoundTrip(rawMdast({ type: "heading", depth: 255, children: [] }));
+test("mdast round-trip: depth and start at their maxima", () => {
+  expectMdastRoundTrip({ type: "heading", depth: 6, children: [] });
   expectMdastRoundTrip({
     type: "list",
     ordered: true,

@@ -139,6 +139,16 @@ pub enum CommandError {
     VoidWrapParent(String),
 }
 
+/// `a "paragraph" node`, `an "element" node`.
+fn node_of_type(node_type: &str) -> String {
+    let article = if node_type.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    };
+    format!("{article} \"{node_type}\" node")
+}
+
 impl std::fmt::Display for CommandError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -152,11 +162,12 @@ impl std::fmt::Display for CommandError {
             Self::InvalidJson(e) => write!(f, "invalid JSON in command payload: {e}"),
             Self::UnknownNodeType(t) => write!(f, "unknown node type: {t}"),
             Self::UnknownField { node_type, name } => {
-                write!(f, "cannot set property '{name}' on a '{node_type}' node")
+                write!(f, "{} has no \"{name}\" to set", node_of_type(node_type))
             }
             Self::InvalidPropertyValue { node_type, name } => write!(
                 f,
-                "property '{name}' on a '{node_type}' node cannot hold a value of this type"
+                "\"{name}\" on {} cannot hold a value of this type",
+                node_of_type(node_type)
             ),
             Self::PropertyValueOutOfRange {
                 node_type,
@@ -165,7 +176,8 @@ impl std::fmt::Display for CommandError {
                 max,
             } => write!(
                 f,
-                "value {value} for property '{name}' on a '{node_type}' node must be an integer between 0 and {max}"
+                "\"{name}\" on {} is a whole number from 0 to {max}, not {value}",
+                node_of_type(node_type)
             ),
             Self::InvalidPropertyValueType(t) => {
                 write!(f, "unknown set-property value type: 0x{t:02x}")

@@ -22,7 +22,7 @@ import {
   releaseHandle,
   runHastPluginsCollectLast,
   runMdastPluginsOnHandle,
-  warnIfDroppedTransforms,
+  warnIfDroppedEdits,
   type CollectedHastCommands,
   type HastWithFrontmatter,
   type MdastPipelineResult,
@@ -134,10 +134,10 @@ export function markdownToHtml(
       const finishMdast = (r: MdastPipelineResult): MarkdownToHtmlResult => {
         try {
           const commands = r.pendingCommands ?? EMPTY_COMMAND_BUFFER;
-          const { html, frontmatter, droppedTransforms } = withPluginErrors(r.lastPlugin, () =>
+          const { html, frontmatter, droppedEdits } = withPluginErrors(r.lastPlugin, () =>
             applyMdastCommandsAndConvertAndRender(r.handle, commands, nativeConvertOptions),
           );
-          warnIfDroppedTransforms(droppedTransforms, r.lastPlugin, "mdast");
+          warnIfDroppedEdits(droppedEdits, r.lastPlugin);
           return {
             html,
             frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null,
@@ -211,7 +211,7 @@ export function markdownToHtml(
         const transformed = withPluginErrors(collected.lastPlugin, () =>
           applyCommandsAndRenderHandle(h, collected.commands),
         );
-        warnIfDroppedTransforms(transformed.droppedTransforms, collected.lastPlugin, "hast");
+        warnIfDroppedEdits(transformed.droppedEdits, collected.lastPlugin);
         html = transformed.html;
       } else {
         html = renderHandle(h);
@@ -323,7 +323,7 @@ function toJsImpl(
       const finishMdast = (r: MdastPipelineResult): MdxToJsResult => {
         try {
           const commands = r.pendingCommands ?? EMPTY_COMMAND_BUFFER;
-          const { code, frontmatter, droppedTransforms } = withPluginErrors(r.lastPlugin, () =>
+          const { code, frontmatter, droppedEdits } = withPluginErrors(r.lastPlugin, () =>
             applyMdastCommandsAndConvertAndCompile(
               r.handle,
               commands,
@@ -331,7 +331,7 @@ function toJsImpl(
               nativeConvertOptions,
             ),
           );
-          warnIfDroppedTransforms(droppedTransforms, r.lastPlugin, "mdast");
+          warnIfDroppedEdits(droppedEdits, r.lastPlugin);
           return {
             code,
             frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null,
@@ -403,7 +403,7 @@ function toJsImpl(
         const transformed = withPluginErrors(collected.lastPlugin, () =>
           applyCommandsAndCompileHandle(h, collected.commands, mdxOptions),
         );
-        warnIfDroppedTransforms(transformed.droppedTransforms, collected.lastPlugin, "hast");
+        warnIfDroppedEdits(transformed.droppedEdits, collected.lastPlugin);
         code = transformed.code;
       } else {
         code = compileHandle(h, mdxOptions);
@@ -468,7 +468,7 @@ function applyCollectedHastCommands(
       const dropped = withPluginErrors(collected.lastPlugin, () =>
         applyCommandsToHandle(handle, collected.commands),
       );
-      warnIfDroppedTransforms(dropped, collected.lastPlugin, "hast");
+      warnIfDroppedEdits(dropped, collected.lastPlugin);
     } catch (err) {
       releaseHandle(handle, invalidateStubs);
       throw err;

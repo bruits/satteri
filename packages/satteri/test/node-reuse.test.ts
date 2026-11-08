@@ -1139,7 +1139,8 @@ test("a removed child listed again stays removed and the plugin is warned", () =
       expect(html, plugin.name).not.toContain("<p>a</p>");
       expect(warn, plugin.name).toHaveBeenCalledTimes(1);
       const message = warn.mock.calls[0]?.[0] as string;
-      expect(message).toContain(`plugin "${plugin.name}" listed 1 mdast node(s)`);
+      expect(message).toContain(`plugin "${plugin.name}": `);
+      expect(message).toContain("is named in new content after being removed");
       expect(message).toContain("stays removed");
     }
     warn.mockClear();
@@ -1561,7 +1562,7 @@ test("a field set on a node replaced by several nodes is dropped and reported", 
     expect(markdownToHtml("# h\n", { hastPlugins: [hast] }).html).toBe("<hr><hr>\n");
     expect(warn).toHaveBeenCalledTimes(2);
     expect(warn.mock.calls[0]?.[0]).toContain(
-      'plugin "replace-then-set-field" queued 1 mdast transform on node(s) that a plugin had already removed or replaced',
+      'plugin "replace-then-set-field": its edits to the heading at 1:1 were dropped',
     );
   } finally {
     warn.mockRestore();
@@ -1946,7 +1947,7 @@ test("an edit on a removed node is dropped with a warning instead of failing", (
     );
     expect(warn).toHaveBeenCalledTimes(2);
     expect(warn.mock.calls[1]?.[0]).toContain(
-      'plugin "append-into-removed" queued 1 mdast transform on node(s) that a plugin had already removed or replaced',
+      'plugin "append-into-removed": its edits to the blockquote at 1:1 were dropped',
     );
   } finally {
     warn.mockRestore();
@@ -2066,9 +2067,7 @@ test("a node removed by returning an empty array stays removed when listed elsew
       "<blockquote>\n<p>q</p>\n</blockquote>\n",
     );
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'plugin "return-empty-then-move" listed 1 mdast node(s) it also removed',
-      ),
+      expect.stringContaining("is named in new content after being removed"),
     );
   } finally {
     warn.mockRestore();

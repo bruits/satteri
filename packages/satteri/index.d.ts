@@ -25,19 +25,17 @@ export declare function applyCommandsAndConvertToHastHandle(handle: MdastHandle,
 export declare function applyCommandsAndRenderHandle(handle: HastHandle, commandBuf: Uint8Array): RenderHtmlOneShot
 
 /**
- * Apply a command buffer to a HAST handle's arena in-place. Returns how many
- * patches were dropped because their target lived inside a subtree this pass
- * removed or replaced (see the lenient note below); the JS pipeline warns when
- * non-zero. Mirrors `apply_commands_to_mdast_handle`.
+ * Apply a command buffer to a HAST handle's arena in-place. Returns the labels
+ * of the nodes whose edits were dropped, as `apply_commands_to_mdast_handle` does.
  */
-export declare function applyCommandsToHandle(handle: HastHandle, commandBuf: Uint8Array): number
+export declare function applyCommandsToHandle(handle: HastHandle, commandBuf: Uint8Array): Array<string> | null
 
 /**
- * Apply a command buffer to an MDAST handle in-place. Returns how many patches
- * were dropped because their target lived inside a subtree this pass removed or
- * replaced (see the lenient note below); the JS pipeline warns when non-zero.
+ * Apply a command buffer to an MDAST handle in-place. Returns the labels of the
+ * nodes whose edits were dropped because the node had left the tree by the time
+ * they applied; the JS pipeline warns when there are any.
  */
-export declare function applyCommandsToMdastHandle(handle: MdastHandle, commandBuf: Uint8Array): number
+export declare function applyCommandsToMdastHandle(handle: MdastHandle, commandBuf: Uint8Array): Array<string> | null
 
 /**
  * Fused tail for `mdxToJs` when there's an MDAST plugin but no HAST plugin.
@@ -58,7 +56,7 @@ export declare function compileHandle(handle: HastHandle, options?: JsMdxOptions
 /** Result of the fused apply + compile tail; see [`RenderHtmlOneShot`]. */
 export interface CompileJsOneShot {
   code: string
-  droppedTransforms: number
+  droppedEdits?: Array<string>
 }
 
 /** Compile MDX source directly to JavaScript. */
@@ -240,13 +238,13 @@ export interface JsTextContentOptions {
 
 /**
  * One-shot result returned by the no-plugin fast path and the MDAST-plugin
- * fused tail. `dropped_transforms` is only ever non-zero on the fused-tail
- * path (the fast path applies no commands).
+ * fused tail. `dropped_edits` is only ever set on the fused-tail path (the
+ * fast path applies no commands).
  */
 export interface MarkdownHtmlOneShot {
   html: string
   frontmatter?: JsFrontmatter
-  droppedTransforms: number
+  droppedEdits?: Array<string>
 }
 
 /**
@@ -277,7 +275,7 @@ export declare function mdastTextContentHandle(handle: MdastHandle, nodeId: numb
 export interface MdxJsOneShot {
   code: string
   frontmatter?: JsFrontmatter
-  droppedTransforms: number
+  droppedEdits?: Array<string>
 }
 
 /**
@@ -286,6 +284,9 @@ export interface MdxJsOneShot {
  * any plugins. Skips 5 of the 6 NAPI crossings the handle-based path makes.
  */
 export declare function mdxToJsFast(source: string, parseOptions: number, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
+
+/** Describe nodes the way command errors do ("the paragraph at 3:1"), for warnings raised in JS. */
+export declare function nodeLabels(handle: AnyHandle, nodeIds: Array<number>): Array<string>
 
 /** Parse ESM (import/export statements) and return ESTree-compatible AST as JSON. */
 export declare function parseEsm(source: string): string | null
@@ -316,14 +317,12 @@ export declare function renderHandle(handle: HastHandle): string
 export declare function renderHastOpstream(ops: Uint8Array): string
 
 /**
- * Result of the fused apply + render tail. `dropped_transforms` mirrors the
- * count `apply_commands_to_handle` returns: patches dropped because their
- * target lived inside a removed/replaced subtree; the JS pipeline warns when
- * non-zero.
+ * Result of the fused apply + render tail. `dropped_edits` mirrors what
+ * `apply_commands_to_handle` returns.
  */
 export interface RenderHtmlOneShot {
   html: string
-  droppedTransforms: number
+  droppedEdits?: Array<string>
 }
 
 /**

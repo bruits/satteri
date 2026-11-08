@@ -200,7 +200,7 @@ function mergeConvertOptions(
 
 export function applyCommandsToMdastHandle(handle: MdastHandle, commandBuf: Uint8Array): number {
   markHandleMutated(handle);
-  return napiApplyCommandsToMdastHandle(handle, commandBuf);
+  return napiApplyCommandsToMdastHandle(handle, commandBuf)?.length ?? 0;
 }
 
 export function convertMdastToHastHandle(
