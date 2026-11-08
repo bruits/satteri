@@ -490,10 +490,12 @@ describe("hastToHtml", () => {
       properties: {},
       children: [{ type: "root", children: [] }],
     } as unknown as HastNode;
-    expect(() => hastToHtml(tree)).toThrow(/cannot encode/);
+    expect(() => hastToHtml(tree)).toThrow(/a "root" node cannot be placed inside the tree/);
   });
 
   test("rejects a node type it cannot encode", () => {
-    expect(() => hastToHtml({ type: "nope" } as unknown as HastNode)).toThrow(/cannot encode/);
+    expect(() => hastToHtml({ type: "nope" } as unknown as HastNode)).toThrow(
+      /"nope" is not a node type this tree holds/,
+    );
   });
 });
