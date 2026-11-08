@@ -436,8 +436,40 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     if (MDAST_VALUE_ONLY_TYPES.has(node.type)) (this.#editedValueNodes ??= new Set()).add(id);
   }
 
-  editedThisPass(id: number): boolean {
-    return this.#editedValueNodes?.has(id) ?? false;
+  /** A visitor's return is its last edit, queued after its context calls. */
+  applyReturn(result: MdastVisitorResult, nodeId: number, originalNode: MdastNode): void {
+    // Returning the input node must not overwrite mutations queued through the context.
+    if (result === undefined || result === null || result === originalNode) return;
+    const buffer = this.#commandBuffer;
+    if (Array.isArray(result)) {
+      if (result.length === 1) {
+        this.applyReturn(result[0], nodeId, originalNode);
+        return;
+      }
+      this.removals.returned(nodeId, result);
+      if (result.length === 0) buffer.removeNode(nodeId);
+      else emitMdastSequence(buffer, STRUCTURAL_CMD.replace, nodeId, result, true, this.#refs);
+      return;
+    }
+    switch (classifyReturn(result)) {
+      case "raw_markdown":
+        buffer.replace(nodeId, result as unknown as RawMdastContent);
+        break;
+      case "raw_html":
+        buffer.replace(nodeId, result as unknown as RawHtmlMdastContent);
+        break;
+      case "structured_node": {
+        const node = result as MdastNode;
+        // A value-only edit stands in for the replacement only while nothing else has edited the node.
+        if (isMdastTextValueSwap(node, originalNode) && !this.#editedValueNodes?.has(nodeId)) {
+          buffer.setProperty(nodeId, "value", node.value);
+          break;
+        }
+        this.removals.rebuilt(nodeId, node);
+        emitMdastTree(buffer, "replace", nodeId, node as MdastContent, true, this.#refs, true);
+        break;
+      }
+    }
   }
 
   setField(node: Readonly<MdastTarget>, key: string, value: unknown): void {
@@ -682,8 +714,7 @@ function emitMdastSequence(
   forReplace: boolean,
   refs: NodeRefs,
 ): void {
-  const plain = nodes.every((n) => (forReplace ? isPlainReplacement(n) : !isRawMdastContent(n)));
-  const ok = plain
+  const ok = nodes.every(isPlainReplacement)
     ? buffer.emitOpstreamCommand(cmd, id, () => {
         buffer.open(MDAST_ROOT);
         for (const n of nodes) if (!emitMdastOp(buffer, n, false, forReplace, refs)) return false;
@@ -798,23 +829,6 @@ function emitMdastOp(
   return true;
 }
 
-function applyMdastArrayResult(
-  result: MdastContent[],
-  nodeId: number,
-  ctx: MdastVisitorContextImpl,
-  refs: NodeRefs,
-  originalNode: MdastNode,
-): void {
-  if (result.length === 1) {
-    applyMdastVisitResult(result[0], nodeId, ctx, refs, originalNode);
-    return;
-  }
-  ctx.removals.returned(nodeId, result);
-  const buffer = ctx.getCommandBuffer();
-  if (result.length === 0) buffer.removeNode(nodeId);
-  else emitMdastSequence(buffer, STRUCTURAL_CMD.replace, nodeId, result, true, refs);
-}
-
 function mdastListFieldJson(key: "attributes" | "align", value: unknown): string {
   if (key === "attributes") return attributesJson(value);
   return JSON.stringify(Array.isArray(value) ? value.map(alignCode) : []);
@@ -925,43 +939,6 @@ function isMdastTextValueSwap(
   );
 }
 
-// Returning the input node must not overwrite mutations queued through the context.
-function applyMdastVisitResult(
-  result: MdastVisitorResult,
-  nodeId: number,
-  ctx: MdastVisitorContextImpl,
-  refs: NodeRefs,
-  originalNode: MdastNode,
-): void {
-  if (result === undefined || result === null) return;
-  if (result === originalNode) return;
-  if (Array.isArray(result)) {
-    applyMdastArrayResult(result, nodeId, ctx, refs, originalNode);
-    return;
-  }
-  const buffer = ctx.getCommandBuffer();
-  const cls = classifyReturn(result);
-  switch (cls) {
-    case "raw_markdown":
-      buffer.replace(nodeId, result as unknown as RawMdastContent);
-      break;
-    case "raw_html":
-      buffer.replace(nodeId, result as unknown as RawHtmlMdastContent);
-      break;
-    case "structured_node": {
-      const node = result as MdastNode;
-      // A value-only edit stands in for the replacement only while nothing else has edited the node.
-      if (isMdastTextValueSwap(node, originalNode) && !ctx.editedThisPass(nodeId)) {
-        buffer.setProperty(nodeId, "value", node.value);
-        break;
-      }
-      ctx.removals.rebuilt(nodeId, node);
-      emitMdastTree(buffer, "replace", nodeId, node as MdastContent, true, refs, true);
-      break;
-    }
-  }
-}
-
 /**
  * Walk an MDAST handle in Rust, dispatch matched nodes to JS visitor functions,
  * and collect mutations for the caller to apply. No arena buffers cross NAPI.
@@ -1016,13 +993,9 @@ export function visitMdastHandle(
 
     if (result instanceof Promise) {
       // An async visitor's return is its last edit, so it queues when the visitor settles.
-      (settling ??= []).push(
-        result.then((settled) => {
-          applyMdastVisitResult(settled, nodeId, context, resolver.refs, node);
-        }),
-      );
+      (settling ??= []).push(result.then((settled) => context.applyReturn(settled, nodeId, node)));
     } else if (result !== undefined) {
-      applyMdastVisitResult(result, nodeId, context, resolver.refs, node);
+      context.applyReturn(result, nodeId, node);
     }
   }
 

@@ -133,7 +133,6 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
                 built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::Replace {
                     node_id: *node_id,
                     new_tree: PatchContent::Tree(sub),
-                    keep_children: false,
                 })
             }
             Command::Remove { node_id } => Some(Patch::Remove { node_id: *node_id }),

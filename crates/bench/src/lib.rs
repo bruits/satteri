@@ -1,7 +1,7 @@
 use satteri_arena::{Arena, ArenaBuilder, Hast, StringRef};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::hast::codec::encode_element_data;
-use satteri_ast::patch::{Patch, PatchContent};
+use satteri_ast::patch::{KEEP_CHILDREN_NODE_TYPE, Patch, PatchContent};
 
 /// One keep-children `<span class="link">` Replace per `<a>` element (the link-transform shape).
 pub fn link_replace_patches(hast: &Arena<Hast>) -> Vec<Patch<Hast>> {
@@ -21,11 +21,12 @@ pub fn link_replace_patches(hast: &Arena<Hast>) -> Vec<Patch<Hast>> {
         let val = b.alloc_string("link");
         b.open_node(HastNodeType::Element as u8);
         b.set_data_current(&encode_element_data(tag, &[(name, 0, val)]));
+        b.open_node(KEEP_CHILDREN_NODE_TYPE);
+        b.close_node();
         b.close_node();
         patches.push(Patch::Replace {
             node_id: id,
             new_tree: PatchContent::Tree(b.finish()),
-            keep_children: true,
         });
     }
     patches

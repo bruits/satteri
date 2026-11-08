@@ -493,8 +493,28 @@ class HastVisitorContextImpl implements HastVisitorContext {
     }
   }
 
-  editedThisPass(id: number): boolean {
-    return this.#editedValueNodes?.has(id) ?? false;
+  /** A visitor's return is its last edit, queued after its context calls. */
+  applyReturn(result: HastVisitorResult, nodeId: number, originalNode: HastNode): void {
+    // Returning the input node must not overwrite mutations queued through the context.
+    if (result == null || result === originalNode) return;
+    const buffer = this.#commandBuffer;
+    if (Array.isArray(result)) {
+      if (result.length === 1) {
+        this.applyReturn(result[0], nodeId, originalNode);
+        return;
+      }
+      this.removals.returned(nodeId, result);
+      if (result.length === 0) buffer.removeNode(nodeId);
+      else emitHastSequence(buffer, STRUCTURAL_CMD.replace, nodeId, result, this.#refs);
+      return;
+    }
+    // A value-only edit stands in for the replacement only while nothing else has edited the node.
+    if (isTextValueSwap(result, originalNode) && !this.#editedValueNodes?.has(nodeId)) {
+      buffer.setProperty(nodeId, "value", (result as { value: string }).value);
+      return;
+    }
+    this.removals.rebuilt(nodeId, result);
+    emitHastTree(buffer, "replace", nodeId, result, this.#refs, true);
   }
 
   #splice(anchorId: number, content: HastContent | HastContent[], op: StructuralOp): void {
@@ -780,47 +800,6 @@ const METHOD_TO_TYPE: Record<string, number> = Object.fromEntries(
   [...VISITOR_KEYS].map((name) => [name, NAME_TO_TYPE[name]!] as const),
 );
 
-// Returning the input node must not overwrite mutations queued through the context.
-function applyHastVisitResult(
-  result: HastVisitorResult,
-  nodeId: number,
-  ctx: HastVisitorContextImpl,
-  originalNode: HastNode,
-  refs: NodeRefs,
-): void {
-  if (result == null) return;
-  if (result === originalNode) return;
-  if (Array.isArray(result)) {
-    applyHastArrayResult(result, nodeId, ctx, originalNode, refs);
-    return;
-  }
-  const buffer = ctx.getCommandBuffer();
-  // A value-only edit stands in for the replacement only while nothing else has edited the node.
-  if (isTextValueSwap(result, originalNode) && !ctx.editedThisPass(nodeId)) {
-    buffer.setProperty(nodeId, "value", (result as { value: string }).value);
-    return;
-  }
-  ctx.removals.rebuilt(nodeId, result);
-  emitHastTree(buffer, "replace", nodeId, result, refs, true);
-}
-
-function applyHastArrayResult(
-  result: HastContent[],
-  nodeId: number,
-  ctx: HastVisitorContextImpl,
-  originalNode: HastNode,
-  refs: NodeRefs,
-): void {
-  if (result.length === 1) {
-    applyHastVisitResult(result[0], nodeId, ctx, originalNode, refs);
-    return;
-  }
-  ctx.removals.returned(nodeId, result);
-  const buffer = ctx.getCommandBuffer();
-  if (result.length === 0) buffer.removeNode(nodeId);
-  else emitHastSequence(buffer, STRUCTURAL_CMD.replace, nodeId, result, refs);
-}
-
 // Explicit field checks avoid allocating Object.keys on the per-text-node hot path.
 function isTextValueSwap(result: HastNode, original: HastNode): boolean {
   if (result.type !== original.type) return false;
@@ -860,13 +839,9 @@ function dispatchMatches(
     const result = sub.visitFn(node, ctx);
     if (result instanceof Promise) {
       // An async visitor's return is its last edit, so it queues when the visitor settles.
-      (settling ??= []).push(
-        result.then((settled) => {
-          applyHastVisitResult(settled, nodeId, ctx, node, resolver.refs);
-        }),
-      );
+      (settling ??= []).push(result.then((settled) => ctx.applyReturn(settled, nodeId, node)));
     } else if (result !== undefined) {
-      applyHastVisitResult(result, nodeId, ctx, node, resolver.refs);
+      ctx.applyReturn(result, nodeId, node);
     }
   }
 

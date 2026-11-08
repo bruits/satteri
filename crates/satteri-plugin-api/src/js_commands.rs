@@ -30,7 +30,6 @@ use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::mdast::codec::*;
 use satteri_ast::patch::{
     KEEP_CHILDREN_NODE_TYPE, Patch, PatchApplier, PatchContent, REF_NODE_TYPE, graft_tree, in_tree,
-    patch_anchor,
 };
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
@@ -1292,9 +1291,7 @@ fn replay_mdast_opstream(
     replay_opstream::<FieldCollector>(ops, builder, original_len, anchor, OpstreamScope::Patch)
 }
 
-/// Returns (arena, keep_children) for an MDAST sub-tree payload. `orig`/`anchor`
-/// are the arena and the command's target node, used by an op-stream's
-/// `KEEP_CHILDREN`.
+/// An MDAST sub-tree payload: raw markdown, or an op-stream replayed into `builder`.
 fn read_mdast_payload(
     reader: &mut BufReader<'_>,
     parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
@@ -1302,7 +1299,7 @@ fn read_mdast_payload(
     original_len: u32,
     anchor: u32,
     options: MdastCommandOptions,
-) -> Result<(PatchContent<Mdast>, bool), CommandError> {
+) -> Result<PatchContent<Mdast>, CommandError> {
     let payload_type = reader.read_u8()?;
 
     match payload_type {
@@ -1318,15 +1315,17 @@ fn read_mdast_payload(
             } else {
                 parse_markdown(raw)
             };
-            Ok((PatchContent::Tree(tree), false))
+            Ok(PatchContent::Tree(tree))
         }
         PAYLOAD_OPSTREAM => {
             let len = reader.read_u32()? as usize;
             let ops = reader.read_bytes(len)?;
-            Ok((
-                PatchContent::Grafted(replay_mdast_opstream(ops, builder, original_len, anchor)?),
-                false,
-            ))
+            Ok(PatchContent::Grafted(replay_mdast_opstream(
+                ops,
+                builder,
+                original_len,
+                anchor,
+            )?))
         }
         other => Err(CommandError::UnknownPayloadType(other)),
     }
@@ -1362,18 +1361,6 @@ fn apply_hast_field(
     }
 }
 
-fn apply_patch<K: ArenaKind>(
-    applier: &mut PatchApplier,
-    arena: &mut Arena<K>,
-    dropped: &mut Vec<u32>,
-    patch: Patch<K>,
-) -> Result<(), CommandError> {
-    if !applier.apply(arena, &patch)? {
-        dropped.push(patch_anchor(&patch));
-    }
-    Ok(())
-}
-
 /// A replacement payload, normalized for a slot under `parent_type`. A sequence of
 /// several nodes becomes one grafted slot, its raw items parsed in place.
 fn read_mdast_replacement(
@@ -1384,9 +1371,9 @@ fn read_mdast_replacement(
     anchor: u32,
     options: MdastCommandOptions,
     parent_type: u8,
-) -> Result<(PatchContent<Mdast>, bool), CommandError> {
+) -> Result<PatchContent<Mdast>, CommandError> {
     if reader.peek_u8() != Some(PAYLOAD_SEQUENCE) {
-        let (mut content, keep_children) = read_mdast_payload(
+        let mut content = read_mdast_payload(
             reader,
             parse_markdown,
             builder,
@@ -1395,13 +1382,13 @@ fn read_mdast_replacement(
             options,
         )?;
         normalize_mdast_raw_payload_for_parent(&mut content, parent_type);
-        return Ok((content, keep_children));
+        return Ok(content);
     }
     reader.read_u8()?;
     let count = reader.read_u32()?;
     let mut roots: Vec<u32> = Vec::new();
     for _ in 0..count {
-        let (mut item, _) = read_mdast_payload(
+        let mut item = read_mdast_payload(
             reader,
             parse_markdown,
             builder,
@@ -1423,7 +1410,7 @@ fn read_mdast_replacement(
             }
         }
     }
-    Ok((PatchContent::Grafted(roots), false))
+    Ok(PatchContent::Grafted(roots))
 }
 
 fn mdast_sibling_slot_parent_type(arena: &Arena<Mdast>, node_id: u32) -> u8 {
@@ -1617,7 +1604,7 @@ pub fn hast_arena_from_opstream(ops: &[u8]) -> Result<Arena<Hast>, CommandError>
     Ok(builder.finish())
 }
 
-/// Returns (arena, keep_children) for a HAST sub-tree payload: an op-stream,
+/// A HAST sub-tree payload: an op-stream,
 /// or (wrap only) `PAYLOAD_RAW` parsed as an HTML fragment. Other ops don't
 /// need raw: the `raw` node type covers opaque HTML.
 fn read_hast_payload(
@@ -1626,17 +1613,19 @@ fn read_hast_payload(
     original_len: u32,
     anchor: u32,
     for_wrap: bool,
-) -> Result<(PatchContent<Hast>, bool), CommandError> {
+) -> Result<PatchContent<Hast>, CommandError> {
     let payload_type = reader.read_u8()?;
 
     match payload_type {
         PAYLOAD_OPSTREAM => {
             let len = reader.read_u32()? as usize;
             let ops = reader.read_bytes(len)?;
-            Ok((
-                PatchContent::Grafted(replay_hast_opstream(ops, builder, original_len, anchor)?),
-                false,
-            ))
+            Ok(PatchContent::Grafted(replay_hast_opstream(
+                ops,
+                builder,
+                original_len,
+                anchor,
+            )?))
         }
         PAYLOAD_RAW if for_wrap => {
             // Flags (RAW_LITERAL_BRACES) are an MDX concern; HTML parsing has
@@ -1644,7 +1633,7 @@ fn read_hast_payload(
             let _flags = reader.read_u8()?;
             let len = reader.read_u32()? as usize;
             let raw = reader.read_str(len)?;
-            Ok((PatchContent::Tree(hast_wrap_arena_from_html(raw)?), false))
+            Ok(PatchContent::Tree(hast_wrap_arena_from_html(raw)?))
         }
         other => Err(CommandError::UnknownPayloadType(other)),
     }
@@ -1873,7 +1862,6 @@ pub fn apply_mdast_commands_lenient_with_options(
     let mut builder =
         ArenaBuilder::from_arena(std::mem::replace(&mut arena, Arena::new(String::new())));
     let mut applier = PatchApplier::default();
-    let mut dropped: Vec<u32> = Vec::new();
     let mut reader = BufReader::new(command_buf);
 
     while reader.remaining() > 0 {
@@ -1882,12 +1870,7 @@ pub fn apply_mdast_commands_lenient_with_options(
         match cmd {
             CMD_REMOVE => {
                 let node_id = reader.read_anchor(original_len)?;
-                apply_patch(
-                    &mut applier,
-                    builder.arena_mut(),
-                    &mut dropped,
-                    Patch::Remove { node_id },
-                )?;
+                applier.apply(builder.arena_mut(), &Patch::Remove { node_id })?;
             }
 
             CMD_SET_PROPERTY | CMD_SET_FIELD | CMD_SET_ATTRIBUTE => {
@@ -1897,17 +1880,15 @@ pub fn apply_mdast_commands_lenient_with_options(
                 let name = reader.read_str(name_len)?;
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
-                if in_tree(builder.arena_ref(), node_id) {
-                    apply_mdast_field(builder.arena_mut(), cmd, node_id, name, value_type, value)?;
-                } else {
-                    dropped.push(node_id);
-                }
+                applier.edit_node(builder.arena_mut(), node_id, |arena| {
+                    apply_mdast_field(arena, cmd, node_id, name, value_type, value)
+                })?;
             }
 
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_anchor(original_len)?;
                 let parent_type = mdast_sibling_slot_parent_type(builder.arena_ref(), node_id);
-                let (new_tree, _) = read_mdast_replacement(
+                let new_tree = read_mdast_replacement(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1916,18 +1897,16 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                     parent_type,
                 )?;
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::InsertBefore { node_id, new_tree },
+                    &Patch::InsertBefore { node_id, new_tree },
                 )?;
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_anchor(original_len)?;
                 let parent_type = mdast_sibling_slot_parent_type(builder.arena_ref(), node_id);
-                let (new_tree, _) = read_mdast_replacement(
+                let new_tree = read_mdast_replacement(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1936,11 +1915,9 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                     parent_type,
                 )?;
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::InsertAfter { node_id, new_tree },
+                    &Patch::InsertAfter { node_id, new_tree },
                 )?;
             }
 
@@ -1948,7 +1925,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                 let node_id = reader.read_anchor(original_len)?;
                 reject_children_on_leaf(builder.arena_ref(), node_id, mdast_is_leaf)?;
                 let parent_type = builder.arena_ref().get_node(node_id).node_type;
-                let (child_tree, _) = read_mdast_replacement(
+                let child_tree = read_mdast_replacement(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1957,11 +1934,9 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                     parent_type,
                 )?;
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::PrependChild {
+                    &Patch::PrependChild {
                         node_id,
                         child_tree,
                     },
@@ -1972,7 +1947,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                 let node_id = reader.read_anchor(original_len)?;
                 reject_children_on_leaf(builder.arena_ref(), node_id, mdast_is_leaf)?;
                 let parent_type = builder.arena_ref().get_node(node_id).node_type;
-                let (child_tree, _) = read_mdast_replacement(
+                let child_tree = read_mdast_replacement(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1981,11 +1956,9 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                     parent_type,
                 )?;
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::AppendChild {
+                    &Patch::AppendChild {
                         node_id,
                         child_tree,
                     },
@@ -1994,7 +1967,7 @@ pub fn apply_mdast_commands_lenient_with_options(
 
             CMD_WRAP => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (parent_tree, _) = read_mdast_payload(
+                let parent_tree = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -2008,11 +1981,9 @@ pub fn apply_mdast_commands_lenient_with_options(
                     }
                     grafted => grafted,
                 };
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::Wrap {
+                    &Patch::Wrap {
                         node_id,
                         parent_tree,
                     },
@@ -2022,7 +1993,7 @@ pub fn apply_mdast_commands_lenient_with_options(
             CMD_REPLACE => {
                 let node_id = reader.read_anchor(original_len)?;
                 let parent_type = mdast_sibling_slot_parent_type(builder.arena_ref(), node_id);
-                let (new_tree, keep_children) = read_mdast_replacement(
+                let new_tree = read_mdast_replacement(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -2031,23 +2002,14 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                     parent_type,
                 )?;
-                apply_patch(
-                    &mut applier,
-                    builder.arena_mut(),
-                    &mut dropped,
-                    Patch::Replace {
-                        node_id,
-                        new_tree,
-                        keep_children,
-                    },
-                )?;
+                applier.apply(builder.arena_mut(), &Patch::Replace { node_id, new_tree })?;
             }
 
             CMD_SET_CHILDREN => {
                 let node_id = reader.read_anchor(original_len)?;
                 reject_children_on_leaf(builder.arena_ref(), node_id, mdast_is_leaf)?;
                 let parent_type = builder.arena_ref().get_node(node_id).node_type;
-                let (mut new_children, _) = read_mdast_payload(
+                let mut new_children = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -2056,11 +2018,9 @@ pub fn apply_mdast_commands_lenient_with_options(
                     options,
                 )?;
                 normalize_mdast_raw_payload_for_parent(&mut new_children, parent_type);
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::SetChildren {
+                    &Patch::SetChildren {
                         node_id,
                         new_children,
                     },
@@ -2071,7 +2031,7 @@ pub fn apply_mdast_commands_lenient_with_options(
         }
     }
 
-    applier.finish(builder.arena_mut());
+    let dropped = applier.finish(builder.arena_mut());
     Ok((builder.finish(), dropped))
 }
 
@@ -2120,7 +2080,6 @@ pub fn apply_hast_commands_lenient(
     let mut builder =
         ArenaBuilder::from_arena(std::mem::replace(&mut arena, Arena::new(String::new())));
     let mut applier = PatchApplier::default();
-    let mut dropped: Vec<u32> = Vec::new();
     let mut reader = BufReader::new(command_buf);
 
     while reader.remaining() > 0 {
@@ -2129,12 +2088,7 @@ pub fn apply_hast_commands_lenient(
         match cmd {
             CMD_REMOVE => {
                 let node_id = reader.read_anchor(original_len)?;
-                apply_patch(
-                    &mut applier,
-                    builder.arena_mut(),
-                    &mut dropped,
-                    Patch::Remove { node_id },
-                )?;
+                applier.apply(builder.arena_mut(), &Patch::Remove { node_id })?;
             }
 
             CMD_SET_PROPERTY | CMD_SET_FIELD | CMD_SET_ATTRIBUTE => {
@@ -2144,47 +2098,39 @@ pub fn apply_hast_commands_lenient(
                 let name = reader.read_str(name_len)?;
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
-                if in_tree(builder.arena_ref(), node_id) {
-                    apply_hast_field(builder.arena_mut(), cmd, node_id, name, value_type, value)?;
-                } else {
-                    dropped.push(node_id);
-                }
+                applier.edit_node(builder.arena_mut(), node_id, |arena| {
+                    apply_hast_field(arena, cmd, node_id, name, value_type, value)
+                })?;
             }
 
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (new_tree, _) =
+                let new_tree =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::InsertBefore { node_id, new_tree },
+                    &Patch::InsertBefore { node_id, new_tree },
                 )?;
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (new_tree, _) =
+                let new_tree =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::InsertAfter { node_id, new_tree },
+                    &Patch::InsertAfter { node_id, new_tree },
                 )?;
             }
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
                 reject_children_on_leaf(builder.arena_ref(), node_id, hast_is_leaf)?;
-                let (child_tree, _) =
+                let child_tree =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::PrependChild {
+                    &Patch::PrependChild {
                         node_id,
                         child_tree,
                     },
@@ -2194,13 +2140,11 @@ pub fn apply_hast_commands_lenient(
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
                 reject_children_on_leaf(builder.arena_ref(), node_id, hast_is_leaf)?;
-                let (child_tree, _) =
+                let child_tree =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::AppendChild {
+                    &Patch::AppendChild {
                         node_id,
                         child_tree,
                     },
@@ -2209,14 +2153,12 @@ pub fn apply_hast_commands_lenient(
 
             CMD_WRAP => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (parent_tree, _) =
+                let parent_tree =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, true)?;
                 reject_void_wrap_parent(&parent_tree, builder.arena_mut())?;
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::Wrap {
+                    &Patch::Wrap {
                         node_id,
                         parent_tree,
                     },
@@ -2225,30 +2167,19 @@ pub fn apply_hast_commands_lenient(
 
             CMD_REPLACE => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (new_tree, keep_children) =
+                let new_tree =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                apply_patch(
-                    &mut applier,
-                    builder.arena_mut(),
-                    &mut dropped,
-                    Patch::Replace {
-                        node_id,
-                        new_tree,
-                        keep_children,
-                    },
-                )?;
+                applier.apply(builder.arena_mut(), &Patch::Replace { node_id, new_tree })?;
             }
 
             CMD_SET_CHILDREN => {
                 let node_id = reader.read_anchor(original_len)?;
                 reject_children_on_leaf(builder.arena_ref(), node_id, hast_is_leaf)?;
-                let (new_children, _) =
+                let new_children =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
-                apply_patch(
-                    &mut applier,
+                applier.apply(
                     builder.arena_mut(),
-                    &mut dropped,
-                    Patch::SetChildren {
+                    &Patch::SetChildren {
                         node_id,
                         new_children,
                     },
@@ -2259,7 +2190,7 @@ pub fn apply_hast_commands_lenient(
         }
     }
 
-    applier.finish(builder.arena_mut());
+    let dropped = applier.finish(builder.arena_mut());
     Ok((builder.finish(), dropped))
 }
 
