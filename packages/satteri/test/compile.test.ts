@@ -2969,7 +2969,7 @@ describe("nodes kept from another compile", () => {
     });
 
     expect(() => markdownToHtml("Document B paragraph.", { mdastPlugins: [edit] })).toThrow(
-      /is not in the tree being edited/,
+      /invalid node id/,
     );
   });
 
@@ -2987,7 +2987,7 @@ describe("nodes kept from another compile", () => {
 
     expect(() =>
       markdownToHtml("# Title\n\n> Quoted line.\n\nTail paragraph.", { mdastPlugins: [edit] }),
-    ).toThrow(/is not in the tree being edited/);
+    ).toThrow(/invalid node id/);
   });
 
   test("setProperty on a node kept from a previous compile is rejected", () => {
@@ -3000,7 +3000,7 @@ describe("nodes kept from another compile", () => {
     });
 
     expect(() => markdownToHtml("Document B paragraph.", { mdastPlugins: [edit] })).toThrow(
-      /is not in the tree being edited/,
+      /invalid node id/,
     );
   });
 
@@ -3030,7 +3030,7 @@ describe("nodes kept from another compile", () => {
     });
 
     expect(() => markdownToHtml("Document B paragraph.", { hastPlugins: [edit] })).toThrow(
-      /is not in the tree being edited/,
+      /invalid node id/,
     );
   });
 
@@ -3056,7 +3056,7 @@ describe("nodes kept from another compile", () => {
 
     expect(() =>
       markdownToHtml("A paragraph.", { mdastPlugins: [capture], hastPlugins: [edit] }),
-    ).toThrow(/is not in the tree being edited/);
+    ).toThrow(/invalid node id/);
   });
 
   test("a kept node that is only read still reads as the tree looked in its pass", () => {

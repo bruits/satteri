@@ -721,7 +721,7 @@ describe("mdast lifecycle hooks", () => {
           }),
         ],
       }),
-    ).toThrow(/a "root" node cannot be placed inside the tree/);
+    ).toThrow(/cannot encode replacement content of type "root"/);
   });
 
   test("replacing the root with a non-root node is rejected", () => {
@@ -739,7 +739,7 @@ describe("mdast lifecycle hooks", () => {
           }),
         ],
       }),
-    ).toThrow(/replaceNode: the document root takes a `root`, not a "paragraph" node/);
+    ).toThrow(/replaceNode on the document root takes a `root`, not "paragraph"/);
   });
 
   test("replacing the root with a non-root array tail is rejected", () => {
@@ -754,7 +754,7 @@ describe("mdast lifecycle hooks", () => {
           }),
         ],
       }),
-    ).toThrow(/replaceNode: the document root takes a `root`/);
+    ).toThrow(/replaceNode on the document root takes a `root`/);
   });
 
   test("replacing the root with a list of nodes is rejected before anything is queued", () => {
@@ -772,7 +772,7 @@ describe("mdast lifecycle hooks", () => {
           }),
         ],
       }),
-    ).toThrow(/replaceNode: the document root takes a `root`/);
+    ).toThrow(/replaceNode on the document root takes a `root`/);
   });
 
   test("a raw string replaces the whole document", () => {
@@ -889,7 +889,7 @@ describe("mdast lifecycle hooks", () => {
           }),
         ],
       }),
-    ).toThrow(/replaceNode: the document root takes a `root`/);
+    ).toThrow(/replaceNode on the document root takes a `root`/);
   });
 
   test("a later plugin's hooks survive every root mutation", () => {
@@ -965,7 +965,7 @@ describe("mdast lifecycle hooks", () => {
             }),
           ],
         }),
-      ).toThrow(/the document root has no siblings/);
+      ).toThrow(/sibling insert on root/);
     }
   });
 
@@ -1434,7 +1434,7 @@ describe("hast lifecycle hooks", () => {
           }),
         ],
       }),
-    ).toThrow(/a "root" node cannot be placed inside the tree/);
+    ).toThrow(/cannot encode replacement content of type "root"/);
   });
 
   test("replacing the root with a non-root node is rejected", () => {
@@ -1454,7 +1454,7 @@ describe("hast lifecycle hooks", () => {
           }),
         ],
       }),
-    ).toThrow(/replaceNode: the document root takes a `root`, not an "element" node/);
+    ).toThrow(/replaceNode on the document root takes a `root`, not "element"/);
   });
 
   test("replacing the root with a list of nodes is rejected before anything is queued", () => {
@@ -1472,7 +1472,7 @@ describe("hast lifecycle hooks", () => {
           }),
         ],
       }),
-    ).toThrow(/replaceNode: the document root takes a `root`/);
+    ).toThrow(/replaceNode on the document root takes a `root`/);
   });
 
   test("hooks fire for every hast plugin, not just the last", () => {
@@ -1552,7 +1552,7 @@ describe("hast lifecycle hooks", () => {
             }),
           ],
         }),
-      ).toThrow(/the document root has no siblings/);
+      ).toThrow(/sibling insert on root/);
     }
   });
 

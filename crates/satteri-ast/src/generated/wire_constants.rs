@@ -15,7 +15,6 @@ pub const PROP_INT: u8 = 5; // decimal string, parsed to i64
 pub const PROP_NULL: u8 = 6; // no value bytes
 pub const PROP_COMMA_SEP_NUM: u8 = 7; // comma-separated list, numeric items parsed to numbers
 pub const PROP_TOKEN_LIST: u8 = 8; // typed, escaped NUL-terminated tokens with a comma-padding flag; joined by schema
-pub const PROP_EXPRESSION: u8 = 9; // MDX JSX attribute expression source (UTF-8); SET_ATTRIBUTE only
 
 // MDX JSX attribute kinds (MDAST and HAST MDX JSX element type_data).
 #[cfg(feature = "mdx")]

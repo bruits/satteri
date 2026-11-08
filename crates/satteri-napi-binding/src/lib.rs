@@ -10,7 +10,6 @@ use std::result::Result as StdResult;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use satteri_arena::{Arena, ArenaKind, Document};
-use satteri_ast::commands::NodeLabel;
 use satteri_ast::hast::mdast_arena_to_hast_arena_into;
 #[cfg(feature = "mdx")]
 use satteri_mdxjs::{compile_hast_arena, parse_error_to_message, simplify_plain_mdx_nodes};
@@ -19,24 +18,6 @@ use satteri_pulldown_cmark::Options;
 use satteri_pulldown_cmark::document::parse_reusing;
 
 mod generated;
-
-/// Labels for the nodes whose queued edits an apply dropped, or `None` when it dropped none.
-fn dropped_labels<K: ArenaKind>(
-    arena: &Document<'_, K>,
-    mut dropped: Vec<u32>,
-) -> Option<Vec<String>> {
-    if dropped.is_empty() {
-        return None;
-    }
-    dropped.sort_unstable();
-    dropped.dedup();
-    Some(
-        dropped
-            .into_iter()
-            .map(|id| NodeLabel::of(arena, id).to_string())
-            .collect(),
-    )
-}
 
 // N-API can copy UTF-16 directly into V8; avoid V8 decoding large non-ASCII output.
 fn encode_output(value: String) -> Either<String, Utf16String> {
@@ -596,24 +577,6 @@ pub fn get_handle_source(handle: AnyHandle) -> Result<String> {
     Ok(s)
 }
 
-/// Describe nodes the way command errors do ("the paragraph at 3:1"), for warnings raised in JS.
-#[napi]
-pub fn node_labels(handle: AnyHandle, node_ids: Vec<u32>) -> Result<Vec<String>> {
-    fn labels<K: ArenaKind>(arena: &Mutex<Arena<K>>, node_ids: &[u32]) -> Result<Vec<String>> {
-        let arena = arena
-            .lock()
-            .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-        Ok(node_ids
-            .iter()
-            .map(|&id| NodeLabel::of(&arena, id).to_string())
-            .collect())
-    }
-    match handle {
-        Either::A(h) => labels(h, &node_ids),
-        Either::B(h) => labels(h, &node_ids),
-    }
-}
-
 /// Set the `data` blob (JSON bytes) for a node. Works for both MDAST and
 /// HAST handles — `node_data` is a per-node JSON blob with no kind-specific
 /// shape on the Rust side.
@@ -652,14 +615,14 @@ pub fn walk_mdast_handle<'env>(
     wire_out(env, satteri_ast::walk::walk_mdast(&arena, &subs))
 }
 
-/// Apply a command buffer to an MDAST handle in-place. Returns the labels of the
-/// nodes whose edits were dropped because the node had left the tree by the time
-/// they applied; the JS pipeline warns when there are any.
+/// Apply a command buffer to an MDAST handle in-place. Returns how many patches
+/// were dropped because their target lived inside a subtree this pass removed or
+/// replaced (see the lenient note below); the JS pipeline warns when non-zero.
 #[napi]
 pub fn apply_commands_to_mdast_handle(
     handle: &MdastHandle,
     command_buf: Uint8Array,
-) -> Result<Option<Vec<String>>> {
+) -> Result<u32> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -669,12 +632,10 @@ pub fn apply_commands_to_mdast_handle(
 }
 
 // A failed command application consumes the old tree, just like the fused tails.
+// Patches inside a subtree removed by the same pass are dropped, not fatal.
 // Inline this per-pass wrapper to avoid adding a hot call boundary.
 #[inline(always)]
-fn apply_mdast_commands(
-    arena: &mut Arena<Mdast>,
-    commands: &[u8],
-) -> Result<(Arena<Mdast>, Option<Vec<String>>)> {
+fn apply_mdast_commands(arena: &mut Arena<Mdast>, commands: &[u8]) -> Result<(Arena<Mdast>, u32)> {
     let owned = take(arena);
     let parse = make_parse_fn(owned.mdx, owned.parse_options);
     let options = satteri_plugin_api::MdastCommandOptions {
@@ -683,8 +644,7 @@ fn apply_mdast_commands(
     let (updated, dropped) =
         apply_mdast_commands_lenient_with_options(owned, commands, &parse, options)
             .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
-    let dropped = dropped_labels(&updated, dropped);
-    Ok((updated, dropped))
+    Ok((updated, dropped.len() as u32))
 }
 
 /// Convert an MDAST handle to a HAST handle. The MDAST handle is consumed (emptied).
@@ -793,7 +753,7 @@ pub fn apply_mdast_commands_and_convert_and_render(
     Ok(MarkdownHtmlOneShot {
         html: encode_output(html),
         frontmatter,
-        dropped_edits: dropped,
+        dropped_transforms: dropped,
     })
 }
 
@@ -825,7 +785,7 @@ pub fn apply_mdast_commands_and_convert_and_compile(
     Ok(MdxJsOneShot {
         code: encode_output(code),
         frontmatter,
-        dropped_edits: dropped,
+        dropped_transforms: dropped,
     })
 }
 
@@ -966,23 +926,25 @@ pub fn walk_handle<'env>(
     wire_out(env, satteri_ast::walk::walk_hast(&arena, &subs))
 }
 
-/// Apply a command buffer to a HAST handle's arena in-place. Returns the labels
-/// of the nodes whose edits were dropped, as `apply_commands_to_mdast_handle` does.
+/// Apply a command buffer to a HAST handle's arena in-place. Returns how many
+/// patches were dropped because their target lived inside a subtree this pass
+/// removed or replaced (see the lenient note below); the JS pipeline warns when
+/// non-zero. Mirrors `apply_commands_to_mdast_handle`.
 #[napi]
-pub fn apply_commands_to_handle(
-    handle: &HastHandle,
-    command_buf: Uint8Array,
-) -> Result<Option<Vec<String>>> {
+pub fn apply_commands_to_handle(handle: &HastHandle, command_buf: Uint8Array) -> Result<u32> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
 
     let owned = take(&mut *arena);
+    // Lenient: a patch stranded inside a subtree the same pass replaced or
+    // removed is dropped rather than fatal — the plugin discarded that subtree,
+    // so a transform queued on a node within it is moot. A passed-through child
+    // keeps its identity (via `_ref`) and so is never stranded this way.
     let (new_arena, dropped) = satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
-    let dropped = dropped_labels(&new_arena, dropped);
     *arena = new_arena;
-    Ok(dropped)
+    Ok(dropped.len() as u32)
 }
 
 /// Render a JS-built HAST tree, encoded as an op-stream document, to HTML.
@@ -1006,12 +968,14 @@ pub fn render_handle(handle: &HastHandle) -> Result<String> {
     Ok(satteri_ast::hast::hast_arena_to_html(&arena))
 }
 
-/// Result of the fused apply + render tail. `dropped_edits` mirrors what
-/// `apply_commands_to_handle` returns.
+/// Result of the fused apply + render tail. `dropped_transforms` mirrors the
+/// count `apply_commands_to_handle` returns: patches dropped because their
+/// target lived inside a removed/replaced subtree; the JS pipeline warns when
+/// non-zero.
 #[napi(object)]
 pub struct RenderHtmlOneShot {
     pub html: Either<String, Utf16String>,
-    pub dropped_edits: Option<Vec<String>>,
+    pub dropped_transforms: u32,
 }
 
 /// Fused tail step for `markdownToHtml` with a HAST plugin: apply the plugin's
@@ -1034,12 +998,11 @@ pub fn apply_commands_and_render_handle(
     let (new_arena, dropped) = satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let html = satteri_ast::hast::hast_arena_to_html(&new_arena);
-    let dropped_edits = dropped_labels(&new_arena, dropped);
     // The handle keeps the empty replacement; reclaiming here saves a `dropHandle` crossing.
     release_hast_arena(new_arena);
     Ok(RenderHtmlOneShot {
         html: encode_output(html),
-        dropped_edits,
+        dropped_transforms: dropped.len() as u32,
     })
 }
 
@@ -1048,7 +1011,7 @@ pub fn apply_commands_and_render_handle(
 #[napi(object)]
 pub struct CompileJsOneShot {
     pub code: Either<String, Utf16String>,
-    pub dropped_edits: Option<Vec<String>>,
+    pub dropped_transforms: u32,
 }
 
 /// Same as `apply_commands_and_render_handle` but for the MDX → JS path.
@@ -1067,23 +1030,22 @@ pub fn apply_commands_and_compile_handle(
     let (mut new_arena, dropped) =
         satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
             .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
-    let dropped_edits = dropped_labels(&new_arena, dropped);
     let code = compile_hast(&mut new_arena, options)?;
     release_hast_arena(new_arena);
     Ok(CompileJsOneShot {
         code: encode_output(code),
-        dropped_edits,
+        dropped_transforms: dropped.len() as u32,
     })
 }
 
 /// One-shot result returned by the no-plugin fast path and the MDAST-plugin
-/// fused tail. `dropped_edits` is only ever set on the fused-tail path (the
-/// fast path applies no commands).
+/// fused tail. `dropped_transforms` is only ever non-zero on the fused-tail
+/// path (the fast path applies no commands).
 #[napi(object)]
 pub struct MarkdownHtmlOneShot {
     pub html: Either<String, Utf16String>,
     pub frontmatter: Option<JsFrontmatter>,
-    pub dropped_edits: Option<Vec<String>>,
+    pub dropped_transforms: u32,
 }
 
 /// Fast path: parse markdown → MDAST → HAST → HTML, plus extract frontmatter,
@@ -1109,7 +1071,7 @@ pub fn markdown_to_html_fast(
         Ok(MarkdownHtmlOneShot {
             html: encode_output(html),
             frontmatter,
-            dropped_edits: None,
+            dropped_transforms: 0,
         })
     })
 }
@@ -1121,7 +1083,7 @@ pub fn markdown_to_html_fast(
 pub struct MdxJsOneShot {
     pub code: Either<String, Utf16String>,
     pub frontmatter: Option<JsFrontmatter>,
-    pub dropped_edits: Option<Vec<String>>,
+    pub dropped_transforms: u32,
 }
 
 /// Shared body of the `*ToJsFast` exports. `mdx` picks the parser; plain parses
@@ -1155,7 +1117,7 @@ fn to_js_fast_impl(
         Ok(MdxJsOneShot {
             code: encode_output(code),
             frontmatter,
-            dropped_edits: None,
+            dropped_transforms: 0,
         })
     })
 }

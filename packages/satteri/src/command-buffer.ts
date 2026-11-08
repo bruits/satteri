@@ -26,7 +26,6 @@ import {
   RAW_LITERAL_BRACES,
   PAYLOAD_OPSTREAM,
   PAYLOAD_SEQUENCE,
-  PROP_EXPRESSION,
 } from "./generated/wire-constants.js";
 
 type ReturnClass = "no_change" | "raw_markdown" | "raw_html" | "structured_node";
@@ -102,16 +101,17 @@ export class CommandBuffer extends OpWriter {
   }
 
   // Roll back failed payloads so the Rust decoder never sees a partial command.
-  emitOpstreamCommand(cmd: number, nodeId: number, emit: () => void): void {
+  emitOpstreamCommand(cmd: number, nodeId: number, emit: () => boolean): boolean {
     const commandStart = this.n;
     const lenPos = this.#beginOpstream(cmd, nodeId);
+    let ok = false;
     try {
-      emit();
-    } catch (error) {
-      this.#abortOpstream(commandStart);
-      throw error;
+      ok = emit();
+    } finally {
+      if (!ok) this.#abortOpstream(commandStart);
     }
-    this.#endOpstream(lenPos);
+    if (ok) this.#endOpstream(lenPos);
+    return ok;
   }
 
   #beginOpstream(cmd: number, nodeId: number): number {
@@ -131,8 +131,8 @@ export class CommandBuffer extends OpWriter {
     cmd: number,
     nodeId: number,
     items: readonly unknown[],
-    emitNode: (item: unknown) => void,
-  ): void {
+    emitNode: (item: unknown) => boolean,
+  ): boolean {
     this.#assertNotEncoding();
     const commandStart = this.n;
     this.ensure(10);
@@ -147,14 +147,16 @@ export class CommandBuffer extends OpWriter {
       const lenPos = this.n;
       this.n += 4;
       this.#inOpstream = true;
+      let ok = false;
       try {
-        emitNode(item);
-      } catch (error) {
-        this.#abortOpstream(commandStart);
-        throw error;
+        ok = emitNode(item);
+      } finally {
+        if (!ok) this.#abortOpstream(commandStart);
       }
+      if (!ok) return false;
       this.#endOpstream(lenPos);
     }
+    return true;
   }
 
   #endOpstream(lenPos: number): void {
@@ -182,17 +184,12 @@ export class CommandBuffer extends OpWriter {
     this.#writeNamedValue(CMD_SET_FIELD, nodeId, key, value);
   }
 
-  /** `value` is checked by the caller, so an object here is an MDX expression. */
   setAttribute(nodeId: number, name: string, value: unknown): void {
-    if (value !== null && typeof value === "object") {
-      const source = (value as { value: string }).value;
-      this.#writeNamed(CMD_SET_ATTRIBUTE, nodeId, PROP_EXPRESSION, name, source);
-      return;
-    }
     this.#writeNamedValue(CMD_SET_ATTRIBUTE, nodeId, name, value);
   }
 
   #writeNamedValue(cmd: number, nodeId: number, key: string, value: unknown): void {
+    this.#assertNotEncoding();
     let valueType: number;
     let str: string;
 
@@ -215,11 +212,7 @@ export class CommandBuffer extends OpWriter {
       valueType = PROP_STRING;
       str = String(value);
     }
-    this.#writeNamed(cmd, nodeId, valueType, key, str);
-  }
 
-  #writeNamed(cmd: number, nodeId: number, valueType: number, key: string, str: string): void {
-    this.#assertNotEncoding();
     this.ensure(6);
     this.buf[this.n++] = cmd;
     this.writeU32(nodeId);

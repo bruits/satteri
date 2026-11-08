@@ -1024,8 +1024,7 @@ test("a removed child listed again stays removed and the plugin is warned", () =
     expect(html, plugin.name).not.toContain("<p>a</p>");
     expect(warn, plugin.name).toHaveBeenCalledTimes(1);
     const message = warn.mock.calls[0]?.[0] as string;
-    expect(message).toContain(`plugin "${plugin.name}": `);
-    expect(message).toContain("is named in new content after being removed");
+    expect(message).toContain(`plugin "${plugin.name}" listed 1 mdast node(s) it also removed`);
     expect(message).toContain("stays removed");
   }
   warn.mockClear();
@@ -1495,7 +1494,9 @@ test("an edit on a node no longer in the tree is dropped with a warning", () => 
     warn.mockClear();
     expect(markdownToHtml(source, { mdastPlugins: [plugin] }).html, plugin.name).toBe(html);
     expect(warn, plugin.name).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain(`plugin "${plugin.name}": its edits to the `);
+    expect(warn.mock.calls[0]?.[0]).toContain(
+      `plugin "${plugin.name}" queued 1 mdast transform on node(s) that a plugin had already removed or replaced`,
+    );
   }
   warn.mockClear();
   expect(markdownToHtml("# h\n", { hastPlugins: [hast] }).html).toBe("<hr><hr>\n");

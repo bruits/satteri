@@ -58,7 +58,6 @@ export const PROP_INT = 5;
 export const PROP_NULL = 6;
 export const PROP_COMMA_SEP_NUM = 7;
 export const PROP_TOKEN_LIST = 8;
-export const PROP_EXPRESSION = 9;
 
 export const MDX_ATTR_BOOLEAN_PROP = 0;
 export const MDX_ATTR_LITERAL_PROP = 1;

@@ -1,7 +1,6 @@
 // Keep hot decoders separate so MDAST and HAST objects do not make their call sites polymorphic.
 
 import { releaseCommandBuffer, type CommandBuffer } from "./command-buffer.js";
-import { describeValue, isUsageError, usageError } from "./usage-errors.js";
 
 /** Fields representable by named-value commands or explicit structured-field handlers. */
 type ScalarFieldValue = string | number | boolean | null;
@@ -58,10 +57,12 @@ const EMPTY_BYTES = new Uint8Array(0);
 export const ROOT_NODE_ID = 0;
 
 export function rootReplacementError(content: unknown): Error {
-  return usageError(
-    `replaceNode: the document root takes a \`root\`, not ${describeValue(content)}. ` +
-      'Pass { type: "root", children: [...] } to swap the document, ' +
-      'or setField(root, "children", [...]) to swap only its children.',
+  const type = (content as { type?: unknown } | null)?.type;
+  return new Error(
+    `satteri: replaceNode on the document root takes a \`root\`${
+      typeof type === "string" ? `, not "${type}"` : ""
+    }. Pass { type: "root", children: [...] } to swap the document, ` +
+      'or setProperty(root, "children", [...]) to swap only its children.',
   );
 }
 
@@ -77,99 +78,24 @@ export function asArray<T>(value: T | T[]): T[] {
 
 const COMMAND_ERROR = "command error: ";
 
-export function pluginLabel(plugin: object | null | undefined): string {
-  const name = (plugin as { name?: unknown } | null | undefined)?.name;
-  return `satteri: plugin "${typeof name === "string" ? name : "<anonymous>"}"`;
-}
-
-/** Runs one plugin's pass or the apply of its edits, naming that plugin in the errors Sätteri raises there. */
-export function withPluginErrors<T>(plugin: object | null | undefined, run: () => T): T {
+/** Runs the apply of one plugin's queued edits, naming that plugin in place of the native error's prefix. */
+export function withPluginErrors<T>(plugin: object | null | undefined, apply: () => T): T {
   try {
-    const result = run();
-    if (result instanceof Promise) {
-      return result.catch((error: unknown) => {
-        throw namePlugin(plugin, error);
-      }) as T;
-    }
-    return result;
+    return apply();
   } catch (error) {
-    throw namePlugin(plugin, error);
+    if (!(error instanceof Error) || !error.message.startsWith(COMMAND_ERROR)) throw error;
+    const name = (plugin as { name?: unknown } | null | undefined)?.name;
+    const label = `satteri: plugin "${typeof name === "string" ? name : "<anonymous>"}"`;
+    throw new Error(`${label}: ${error.message.slice(COMMAND_ERROR.length)}`, { cause: error });
   }
 }
 
-/** Errors a plugin throws itself pass through as they are. */
-function namePlugin(plugin: object | null | undefined, error: unknown): unknown {
-  if (!(error instanceof Error)) return error;
-  let message: string;
-  if (error.message.startsWith(COMMAND_ERROR)) message = error.message.slice(COMMAND_ERROR.length);
-  else if (isUsageError(error)) message = error.message.replace(/^satteri: /, "");
-  else return error;
-  const Kind = error instanceof TypeError ? TypeError : Error;
-  return new Kind(`${pluginLabel(plugin)}: ${message}`, { cause: error });
-}
-
-/** A wrapper is one parent node, never a list. */
-export function requireWrapper(wrapper: unknown): void {
-  if (wrapper !== null && typeof wrapper === "object" && !Array.isArray(wrapper)) return;
-  throw usageError(`wrapNode: expected a parent node, not ${describeValue(wrapper)}`, TypeError);
-}
-
-/** Rejects what cannot be content before encoding, so the error points at the argument. */
-export function requireContent(method: string, content: unknown): void {
-  if (!Array.isArray(content)) {
-    if (content !== null && typeof content === "object") return;
-    throw usageError(
-      `${method}: expected a node or an array of nodes, not ${describeValue(content)}`,
-      TypeError,
-    );
-  }
-  for (let i = 0; i < content.length; i++) {
-    const item: unknown = content[i];
-    if (item !== null && typeof item === "object" && !Array.isArray(item)) continue;
-    throw usageError(
-      `${method}: item ${i} of the array is ${describeValue(item)}; pass nodes, in one flat array`,
-      TypeError,
-    );
-  }
-}
-
-/** A visitor's return, checked like a context method's content. */
-export function requireVisitorResult(
-  visited: { type: string },
-  result: unknown,
-  raw: boolean,
-): void {
-  if (!Array.isArray(result)) {
-    if (!isReturnItem(result, raw)) throw visitorResultError(visited, describeValue(result), raw);
-    return;
-  }
-  for (const item of result as unknown[]) {
-    if (!isReturnItem(item, raw)) {
-      throw visitorResultError(visited, `an array holding ${describeValue(item)}`, raw);
-    }
-  }
-}
-
-function isReturnItem(item: unknown, raw: boolean): boolean {
-  if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
-  const shaped = item as { type?: unknown; raw?: unknown; rawHtml?: unknown };
-  if (typeof shaped.type === "string") return true;
-  return raw && (typeof shaped.raw === "string" || typeof shaped.rawHtml === "string");
-}
-
-function visitorResultError(visited: { type: string }, what: string, raw: boolean): Error {
-  return usageError(
-    `the "${visited.type}" visitor returned ${what}; a visitor returns a node, an array of ` +
-      `nodes${raw ? ", { raw }" : ""}, or nothing`,
-    TypeError,
+export function unencodableContentError(content: unknown): Error {
+  const type = (content as { type?: unknown } | null)?.type;
+  return new Error(
+    `satteri: cannot encode replacement content${typeof type === "string" ? ` of type "${type}"` : ""} ` +
+      "into the structural op-stream — unsupported node type or out-of-range numeric field.",
   );
-}
-
-/** Joins node labels from Rust for a warning: "the paragraph at 3:1 and 2 more nodes". */
-export function listNodes(labels: readonly string[]): string {
-  if (labels.length === 1) return labels[0]!;
-  if (labels.length <= 3) return `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)!}`;
-  return `${labels.slice(0, 2).join(", ")} and ${labels.length - 2} more nodes`;
 }
 
 /** Per handle, so membership alone proves ownership and the read path needs no marker of its own. */
@@ -230,7 +156,7 @@ export class RemovalTracker<TNode> {
     else this.rebuilt(targetId, result);
   }
 
-  warn(plugin: object, labelNodes: (ids: number[]) => string[]): void {
+  warn(plugin: object, kind: "mdast" | "hast"): void {
     const removed = this.#removed;
     const inserted = this.#inserted;
     if (removed !== undefined && inserted !== undefined) {
@@ -238,13 +164,13 @@ export class RemovalTracker<TNode> {
         this.#collect(removed, inserted[i] as number, inserted[i + 1]);
       }
     }
-    const listed = this.#listed;
-    if (listed !== undefined && listed.size > 0) {
-      const ids = [...listed].toSorted((a, b) => a - b);
+    const name = (plugin as { name?: unknown }).name;
+    const label = `satteri: plugin "${typeof name === "string" ? name : "<anonymous>"}"`;
+    const listed = this.#listed?.size ?? 0;
+    if (listed > 0) {
       console.warn(
-        `${pluginLabel(plugin)}: ${listNodes(labelNodes(ids))} ${ids.length === 1 ? "is" : "are"} ` +
-          "named in new content after being removed, and a removed node stays removed. " +
-          "To move a node, insert it without calling removeNode.",
+        `${label} listed ${listed} ${kind} node(s) it also removed, and a removed node stays ` +
+          "removed. To move a node, insert it without calling removeNode.",
       );
     }
   }
@@ -325,20 +251,20 @@ export class RemovalTracker<TNode> {
 
 /** Inserting a node next to or into itself would leave it in two places. */
 export function selfInsertError(method: string): Error {
-  return usageError(
+  return new Error(
     `${method}: a node cannot be inserted next to or into itself. Pass structuredClone(node) to insert a copy.`,
   );
 }
 
 /** The wrapper becomes a new parent, so an existing node would end up in two places. */
 export function existingWrapperError(): Error {
-  return usageError(
+  return new Error(
     "wrapNode: the wrapper must be a new node, not one from the tree. Pass structuredClone(node) to wrap in a copy of an existing one.",
   );
 }
 
 export function foreignContentError(): Error {
-  return usageError(
+  return new Error(
     "satteri: content contains a node from another tree or pass; use structuredClone(node) to insert a detached copy.",
   );
 }
@@ -355,16 +281,10 @@ export function makeRequireNid<TNode>(
   nid: (node: TNode, refs: NodeRefs) => number | undefined,
 ): (node: TNode, method: string, refs: NodeRefs) => number {
   return (node, method, refs) => {
-    if (node === null || typeof node !== "object") {
-      throw usageError(
-        `${method}: expected a node from the tree, not ${describeValue(node)}`,
-        TypeError,
-      );
-    }
     const id = nid(node, refs);
     if (id !== undefined && id !== FOREIGN_REF) return id;
-    throw usageError(
-      `${method}: this node is not in the tree being edited. Either it was ` +
+    throw new Error(
+      `${method}: invalid node id — this node has no id in the tree being edited. Either it was ` +
         `built in JS, in which case pass it as new content (e.g. the second argument of ` +
         `insertAfter), or it was read from another tree (a different document, the mdast phase of ` +
         `this one, or an earlier compile), in which case match it again in this pass.`,

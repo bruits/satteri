@@ -19,13 +19,6 @@ import {
   MDX_ATTR_EXPRESSION_PROP,
   MDX_ATTR_SPREAD,
 } from "./generated/wire-constants.js";
-import {
-  dataJson,
-  describeValue,
-  requireDirectiveAttributeValue,
-  requireMdxAttributeValue,
-  usageError,
-} from "./usage-errors.js";
 
 export {
   OF_VALUE,
@@ -99,7 +92,11 @@ export class OpWriter extends ByteWriter {
   }
 
   data(value: unknown): void {
-    const json = dataJson(value);
+    const json = JSON.stringify(value);
+    // JSON.stringify can return undefined for functions and custom toJSON methods.
+    if (typeof json !== "string") {
+      throw new Error("node `data` is not JSON-serializable");
+    }
     this.ensure(1);
     this.buf[this.n++] = OP_DATA;
     this.utf8WithU32Len(json);
@@ -177,68 +174,36 @@ export class PropRows implements PropSink {
   }
 }
 
-/** An MDX JSX element's `attributes` as `[name, kind, value]` entries. */
-export function mdxAttributesJson(value: unknown): string {
-  if (value === null || value === undefined) return "[]";
-  if (!Array.isArray(value)) {
-    throw usageError(
-      `an MDX JSX element's "attributes" is an array of attributes, not ${describeValue(value)}`,
-      TypeError,
-    );
-  }
-  const rows = new PropRows();
-  for (const attribute of value) emitMdxAttr(rows, attribute);
-  return JSON.stringify(rows.rows);
-}
-
-/** A directive's `attributes` object as `[key, value]` pairs. */
-export function directiveAttributesJson(value: unknown): string {
-  if (value === null || value === undefined) return "[]";
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw usageError(
-      `a directive's "attributes" is an object of strings, not ${describeValue(value)}`,
-      TypeError,
-    );
+/** An MDX JSX attribute list as entries, or a directive's string map as `[key, value]` pairs. */
+export function attributesJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    const rows = new PropRows();
+    for (const a of value) emitMdxAttr(rows, a as Record<string, unknown>);
+    return JSON.stringify(rows.rows);
   }
   const pairs: [string, string][] = [];
-  for (const key in value as Record<string, unknown>) {
-    const v = (value as Record<string, unknown>)[key];
-    requireDirectiveAttributeValue(key, v, true);
-    if (typeof v === "string") pairs.push([key, v]);
+  if (value !== null && typeof value === "object") {
+    for (const key in value as Record<string, unknown>) {
+      const v = (value as Record<string, unknown>)[key];
+      if (typeof v === "string") pairs.push([key, v]);
+    }
   }
   return JSON.stringify(pairs);
 }
 
-export function emitMdxAttr(w: PropSink, attribute: unknown): void {
-  if (attribute === null || typeof attribute !== "object") {
-    throw usageError(
-      `an MDX attribute is { type: "mdxJsxAttribute", name, value }, not ${describeValue(attribute)}`,
-      TypeError,
-    );
-  }
-  const a = attribute as Record<string, unknown>;
+export function emitMdxAttr(w: PropSink, a: Record<string, unknown>): void {
   if (a.type === "mdxJsxExpressionAttribute") {
-    if (typeof a.value !== "string") {
-      throw usageError(
-        `a spread attribute's value is its expression source, a string, not ${describeValue(a.value)}`,
-        TypeError,
-      );
-    }
-    w.prop("", MDX_ATTR_SPREAD, a.value);
+    w.prop("", MDX_ATTR_SPREAD, typeof a.value === "string" ? a.value : "");
     return;
   }
-  const name = a.name;
-  if (typeof name !== "string" || name === "") {
-    throw usageError(
-      `an MDX attribute needs a name, not ${describeValue(name)}; a spread is ` +
-        '{ type: "mdxJsxExpressionAttribute", value: "...props" }',
-      TypeError,
-    );
-  }
+  const name = typeof a.name === "string" ? a.name : "";
   const val = a.value;
-  requireMdxAttributeValue(name, val);
-  if (typeof val === "string") w.prop(name, MDX_ATTR_LITERAL_PROP, val);
-  else if (val === null || val === undefined || val === true)
+  if (typeof val === "string") {
+    w.prop(name, MDX_ATTR_LITERAL_PROP, val);
+  } else if (val !== null && typeof val === "object" && !Array.isArray(val)) {
+    const expr = (val as Record<string, unknown>).value;
+    w.prop(name, MDX_ATTR_EXPRESSION_PROP, typeof expr === "string" ? expr : "");
+  } else {
     w.prop(name, MDX_ATTR_BOOLEAN_PROP, "");
-  else w.prop(name, MDX_ATTR_EXPRESSION_PROP, (val as { value: string }).value);
+  }
 }

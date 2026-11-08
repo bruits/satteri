@@ -1222,7 +1222,7 @@ describe("visitHastHandle - mutations", () => {
     });
     expect(() =>
       visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined),
-    ).toThrow(/is not in the tree being edited/);
+    ).toThrow(/invalid node id/);
   });
 });
 
@@ -1836,7 +1836,7 @@ test("a bare doctype as replacement content fails loudly", () => {
   });
   expect(() =>
     visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined),
-  ).toThrow(/a "doctype" node cannot be placed inside the tree/);
+  ).toThrow(/cannot encode replacement content of type "doctype"/);
 });
 
 test("a bare root as replacement content fails loudly", () => {
@@ -1852,7 +1852,7 @@ test("a bare root as replacement content fails loudly", () => {
   });
   expect(() =>
     visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined),
-  ).toThrow(/a "root" node cannot be placed inside the tree/);
+  ).toThrow(/cannot encode replacement content of type "root"/);
 });
 
 test("parent climbs from a nested element to the root", () => {
@@ -1958,5 +1958,5 @@ test("parent throws on plugin-built nodes, which have no id here", () => {
     },
   });
   visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
-  expect(error?.message).toMatch(/is not in the tree being edited/);
+  expect(error?.message).toMatch(/invalid node id/);
 });

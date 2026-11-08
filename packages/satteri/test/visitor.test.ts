@@ -845,7 +845,7 @@ test("setProperty on an invalid field throws an error naming the property and no
         ctx.setProperty(node, "value", "x");
       },
     });
-  expect(run).toThrow('a "heading" node has no "value" to set');
+  expect(run).toThrow(/cannot set property 'value' on a 'heading' node/);
 });
 
 function setupDirective(md: string) {
@@ -984,9 +984,7 @@ test("an out-of-range list start fails loudly instead of being silently masked",
       return { ...node, start: -1 };
     },
   });
-  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(
-    /a list's "start" is a whole number from 0 to 4294967295/,
-  );
+  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/out-of-range/);
 });
 
 test("a list start one past the u32 boundary fails loudly", () => {
@@ -996,9 +994,7 @@ test("a list start one past the u32 boundary fails loudly", () => {
       return { ...node, start: 4294967296 };
     },
   });
-  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(
-    /a list's "start" is a whole number from 0 to 4294967295/,
-  );
+  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/out-of-range/);
 });
 
 test("a non-integer list start fails loudly", () => {
@@ -1008,9 +1004,7 @@ test("a non-integer list start fails loudly", () => {
       return { ...node, start: 1.5 };
     },
   });
-  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(
-    /a list's "start" is a whole number from 0 to 4294967295/,
-  );
+  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/out-of-range/);
 });
 
 test("a heading depth past the u8 boundary fails loudly", () => {
@@ -1021,9 +1015,7 @@ test("a heading depth past the u8 boundary fails loudly", () => {
       return { ...node, depth: 256 as Heading["depth"], children: [] };
     },
   });
-  expect(() => visitAndRender("# Hello", plugin)).toThrow(
-    /a heading's "depth" is an integer from 1 to 6/,
-  );
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/out-of-range/);
 });
 
 test("a bare root as replacement content fails loudly", () => {
@@ -1033,22 +1025,18 @@ test("a bare root as replacement content fails loudly", () => {
       return { type: "root", children: [] } satisfies MdastNode;
     },
   });
-  expect(() => visitAndRender("# Hello", plugin)).toThrow(
-    /a "root" node cannot be placed inside the tree/,
-  );
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/cannot encode replacement content/);
 });
 
 test("setProperty with an out-of-range number fails at apply instead of masking bits", () => {
   const plugin = defineMdastPlugin({
-    name: "set-start-out-of-range",
-    list(node, ctx) {
+    name: "set-depth-out-of-range",
+    heading(node, ctx) {
       // An out-of-range value verifies native validation of setProperty’s binary payload.
-      ctx.setProperty(node, "start", 2 ** 33);
+      ctx.setProperty(node, "depth", 9999 as Heading["depth"]);
     },
   });
-  expect(() => visitAndRender("1. one", plugin)).toThrow(
-    '"start" on a "list" node is a whole number from 0 to 4294967295',
-  );
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/between 0 and 255/);
 });
 
 test("a replacement nested past the replay depth cap fails loudly", () => {
@@ -1071,7 +1059,7 @@ test("context mutations reject plugin-built nodes, which have no id here", () =>
       ctx.removeNode({ type: "text", value: "x" });
     },
   });
-  expect(() => visitAndRender("# Hello", plugin)).toThrow(/is not in the tree being edited/);
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/invalid node id/);
 });
 
 test("setProperty(node, 'children', ...) rides the op-stream", () => {
@@ -1445,7 +1433,7 @@ test("parent throws on plugin-built nodes, which have no id here", () => {
     },
   });
   visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
-  expect(error?.message).toMatch(/is not in the tree being edited/);
+  expect(error?.message).toMatch(/invalid node id/);
 });
 
 test("parent called after a non-mutating pass resolves from the pass snapshot", () => {
@@ -1686,7 +1674,7 @@ test("the plugin-built object itself stays id-less across passes", () => {
     },
   });
   markdownToHtml("# Title\n", { mdastPlugins: [inserted, observe] });
-  expect(error?.message).toMatch(/is not in the tree being edited/);
+  expect(error?.message).toMatch(/invalid node id/);
 });
 
 test("indexOf ignores buffered mutations within the same pass", () => {

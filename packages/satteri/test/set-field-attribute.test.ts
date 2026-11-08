@@ -175,7 +175,7 @@ describe("setAttribute", () => {
         // @ts-expect-error directive attributes only accept strings
         ctx.setAttribute(node, "class", ["a", "b"]);
       }),
-    ).toThrow(/directive attribute "class" takes a string, not an array/);
+    ).toThrow(/directive attributes must be strings/);
   });
 });
 

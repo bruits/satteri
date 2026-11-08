@@ -133,7 +133,6 @@ module.exports.markdownToHtmlFast = __napiModule.exports.markdownToHtmlFast
 module.exports.markdownToJsFast = __napiModule.exports.markdownToJsFast
 module.exports.mdastTextContentHandle = __napiModule.exports.mdastTextContentHandle
 module.exports.mdxToJsFast = __napiModule.exports.mdxToJsFast
-module.exports.nodeLabels = __napiModule.exports.nodeLabels
 module.exports.parseEsm = __napiModule.exports.parseEsm
 module.exports.parseExpression = __napiModule.exports.parseExpression
 module.exports.parseHastWire = __napiModule.exports.parseHastWire
