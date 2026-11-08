@@ -1075,13 +1075,14 @@ describe("visitHastHandle - mutations", () => {
     expect(html).toContain("<h1>Hello XY<em>world</em></h1>");
   });
 
-  test("context.insertChildAt() treats a negative index as a prepend", () => {
-    const { handle, source } = setup("# Hello");
+  test("context.insertChildAt() counts a negative index from the end, stopping at the start", () => {
+    const { handle, source } = setup("# Hello *world*");
     const plugin = defineHastPlugin({
-      name: "prepend-via-negative-index",
+      name: "insert-at-negative-index",
       element: {
         filter: ["h1"],
         visit(node, ctx) {
+          ctx.insertChildAt(node, -1, { type: "text", value: "X" });
           ctx.insertChildAt(node, -3, { type: "text", value: ">> " });
         },
       },
@@ -1089,7 +1090,7 @@ describe("visitHastHandle - mutations", () => {
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
-    expect(html).toContain("<h1>&gt;&gt; Hello</h1>");
+    expect(html).toContain("<h1>&gt;&gt; Hello X<em>world</em></h1>");
   });
 
   test("context.setProperty(node, 'children', ...) keeps reused children", () => {
@@ -1129,10 +1130,10 @@ describe("visitHastHandle - mutations", () => {
     expect(html).toContain("<h1></h1>");
   });
 
-  test("context.removeChildAt() is a no-op for an out-of-range or negative index", () => {
-    const { handle, source } = setup("# Hello");
+  test("context.removeChildAt() counts a negative index from the end and ignores one out of range", () => {
+    const { handle, source } = setup("# Hello *world*");
     const plugin = defineHastPlugin({
-      name: "remove-child-noop-out-of-range",
+      name: "remove-child-at-negative-index",
       element: {
         filter: ["h1"],
         visit(node, ctx) {
@@ -1144,7 +1145,7 @@ describe("visitHastHandle - mutations", () => {
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
-    expect(html).toContain("<h1>Hello</h1>");
+    expect(html).toContain("<h1>Hello </h1>");
   });
 
   test("context.insertBefore() accepts an array of siblings", () => {

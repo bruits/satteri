@@ -53,6 +53,7 @@ import type { HastHandle } from "../handles.js";
 import { LazyChildResolver, markHandleMutated } from "../lazy-child-resolver.js";
 import {
   asArray,
+  insertIndex,
   collectCommands,
   FOREIGN_REF,
   foreignContentError,
@@ -124,13 +125,18 @@ export interface HastVisitorContext {
   ): void;
   prependChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
   appendChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
-  /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
+  /**
+   * Insert one node or an array before the `index`-th child. `index` works as in
+   * `Array.prototype.splice`: a negative one counts from the end, and one out of
+   * range inserts at the nearer end.
+   */
   insertChildAt(
     node: Readonly<HastNode>,
     index: number,
     childNode: HastContent | HastContent[],
   ): void;
-  /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
+  /** Remove the `index`-th child of `node`, counting from the end when negative as in
+   *  `Array.prototype.at`; a no-op when there is no such child. */
   removeChildAt(node: Readonly<HastNode>, index: number): void;
   /** Replace a supported field on the node, including scalars and structured fields. */
   setField<N extends HastNode, K extends SettableFieldKey<N>>(
@@ -517,17 +523,18 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
     const children = "children" in node ? node.children : [];
+    const at = insertIndex(index, children.length);
     const [anchor, op] =
-      index <= 0 || children.length === 0
-        ? ([node, "prependChild"] as const)
-        : index >= children.length
-          ? ([node, "appendChild"] as const)
-          : ([children[index]!, "insertBefore"] as const);
+      at === children.length
+        ? ([node, "appendChild"] as const)
+        : at === 0
+          ? ([node, "prependChild"] as const)
+          : ([children[at]!, "insertBefore"] as const);
     this.#splice(requireNid(anchor, "insertChildAt", this.#refs), childNode, op);
   }
 
   removeChildAt(node: HastNode, index: number): void {
-    const child = "children" in node ? node.children[index] : undefined;
+    const child = "children" in node ? node.children.at(index) : undefined;
     if (child) this.removeNode(child);
   }
 
