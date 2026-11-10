@@ -29,6 +29,22 @@
       "browser": "./dist/index.js",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./mdast-reader": {
+      "types": "./dist/mdast/mdast-reader.d.ts",
+      "default": "./dist/mdast/mdast-reader.js"
+    },
+    "./mdast-materializer": {
+      "types": "./dist/mdast/mdast-materializer.d.ts",
+      "default": "./dist/mdast/mdast-materializer.js"
+    },
+    "./hast-reader": {
+      "types": "./dist/hast/hast-reader.d.ts",
+      "default": "./dist/hast/hast-reader.js"
+    },
+    "./hast-materializer": {
+      "types": "./dist/hast/hast-materializer.d.ts",
+      "default": "./dist/hast/hast-materializer.js"
     }
   },
   "scripts": {
