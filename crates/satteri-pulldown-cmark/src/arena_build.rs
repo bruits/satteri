@@ -906,8 +906,13 @@ pub(crate) fn parse_document<'a>(
                             let cow = inner.allocs.take_cow(*cow_ix);
                             buf.push_str(&cow);
                         }
-                        ItemBody::SourceStrong => {
-                            buf.push_str(&source[item.start + 2..item.end - 2]);
+                        ItemBody::SourceStrong | ItemBody::SourceEmphasis => {
+                            let width = if matches!(item.body, ItemBody::SourceStrong) {
+                                2
+                            } else {
+                                1
+                            };
+                            buf.push_str(&source[item.start + width..item.end - width]);
                         }
                         ItemBody::SourceCode(padding) => {
                             buf.push_str(
@@ -1039,6 +1044,7 @@ pub(crate) fn parse_document<'a>(
                     ItemBody::Emphasis
                         | ItemBody::Strong
                         | ItemBody::SourceStrong
+                        | ItemBody::SourceEmphasis
                         | ItemBody::Strikethrough
                         | ItemBody::Code(_)
                         | ItemBody::SourceCode(_)
@@ -1928,23 +1934,28 @@ pub(crate) fn parse_document<'a>(
                         }
                         inner.tree.next_sibling(cur_ix);
                     }
-                    ItemBody::SourceStrong => {
-                        let strong = builder.add_leaf_with_position(
-                            MdastNodeType::Strong as u8,
-                            position,
-                            &[],
-                        );
-                        let sr = StringRef::new(start + 2, end - start - 4);
+                    ItemBody::SourceStrong | ItemBody::SourceEmphasis => {
+                        let (kind, width) = if matches!(item.body, ItemBody::SourceStrong) {
+                            (MdastNodeType::Strong, 2)
+                        } else {
+                            (MdastNodeType::Emphasis, 1)
+                        };
+                        let parent = builder.add_leaf_with_position(kind as u8, position, &[]);
+                        let sr = StringRef::new(start + width, end - start - width * 2);
                         builder.add_only_child_with_position(
-                            strong,
+                            parent,
                             MdastNodeType::Text as u8,
                             NodePosition {
-                                start_offset: start + 2,
-                                end_offset: end - 2,
+                                start_offset: start + width,
+                                end_offset: end - width,
                                 start_line,
-                                start_column: if start_line == 0 { 0 } else { start_col + 2 },
+                                start_column: if start_line == 0 {
+                                    0
+                                } else {
+                                    start_col + width
+                                },
                                 end_line,
-                                end_column: if end_line == 0 { 0 } else { end_col - 2 },
+                                end_column: if end_line == 0 { 0 } else { end_col - width },
                             },
                             &sr.as_bytes(),
                         );

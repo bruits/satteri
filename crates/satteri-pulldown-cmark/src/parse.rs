@@ -116,8 +116,9 @@ pub(crate) enum ItemBody {
     // These are inline items after resolution.
     Emphasis,
     Strong,
-    // Compact resolved strong with an inert source-text child.
+    // Compact resolved attention with an inert source-text child.
     SourceStrong,
+    SourceEmphasis,
     Strikethrough,
     Superscript,
     Subscript,
@@ -255,6 +256,7 @@ impl ItemBody {
                 | Emphasis
                 | Strong
                 | SourceStrong
+                | SourceEmphasis
                 | Strikethrough
                 | Math(..)
                 | Code(..)
@@ -743,9 +745,11 @@ impl<'input> ParserInner<'input> {
         let mut cur = start;
         while let Some(cur_ix) = cur {
             match self.tree[cur_ix].item.body {
-                // The first pass may have already resolved an inert strong
+                // The first pass may have already resolved an inert attention
                 // pair. Its tokenized marker still determines family order.
-                ItemBody::Strong | ItemBody::SourceStrong => return Some(b'*'),
+                ItemBody::Strong | ItemBody::SourceStrong | ItemBody::SourceEmphasis => {
+                    return Some(b'*');
+                }
                 ItemBody::MaybeEmphasis(..) => {
                     let c = bytes[self.tree[cur_ix].item.start];
                     if is_marker(c) {
@@ -4066,7 +4070,10 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::FootnoteReference(cow_ix) => {
             return Event::FootnoteReference(allocs.take_cow(cow_ix));
         }
-        ItemBody::LiteralAutolink(_) | ItemBody::LiteralLink { .. } | ItemBody::SourceStrong => {
+        ItemBody::LiteralAutolink(_)
+        | ItemBody::LiteralLink { .. }
+        | ItemBody::SourceStrong
+        | ItemBody::SourceEmphasis => {
             unreachable!("compact links are only produced for the arena consumer")
         }
         ItemBody::TaskListMarker(checked) => return Event::TaskListMarker(checked),
