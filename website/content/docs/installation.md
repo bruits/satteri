@@ -45,6 +45,26 @@ Cross-Origin-Embedder-Policy: require-corp
 
 See [napi-rs's server configuration guide](https://napi.rs/docs/concepts/webassembly#server-configuration) for more information.
 
+### Reusing a compiled module
+
+When `satteri` is first imported in a browser, the WASI build fetches and compiles `satteri_napi.wasm32-wasi.wasm`. To compile it once and share it, for example across Web Workers, set `globalThis.__SATTERI_WASM_MODULE__` to a `WebAssembly.Module` (or the file's bytes, or a promise of either) before importing `satteri`:
+
+```ts
+// Page: compile once, then hand the module to each worker.
+// wasmUrl is the URL of @bruits/satteri-wasm32-wasi/satteri_napi.wasm32-wasi.wasm
+const module = await WebAssembly.compileStreaming(fetch(wasmUrl));
+worker.postMessage(module);
+
+// Worker
+self.onmessage = async (event) => {
+  Object.assign(globalThis, { __SATTERI_WASM_MODULE__: event.data });
+  const { markdownToHtml } = await import("satteri");
+  // ...
+};
+```
+
+Use a dynamic `import()` here: a static `import` runs before the code that sets the global.
+
 ## Using with Vite
 
 `vite-plugin-satteri` lets you `import` `.md` and `.mdx` files directly in your Vite project. See [Usage with Vite](/docs/vite/) for more information.
