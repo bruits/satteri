@@ -1320,6 +1320,11 @@ pub const PAYLOADS: WireTable = WireTable {
             0x14,
             "[len: u32 LE][op bytes] — replayed straight into the arena",
         ),
+        wc(
+            "PAYLOAD_SEQUENCE",
+            0x15,
+            "[count: u32 LE] then count × [PAYLOAD_RAW or PAYLOAD_OPSTREAM payload] — one replacement, spliced in order",
+        ),
     ],
 };
 

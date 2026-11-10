@@ -378,7 +378,9 @@ fn emit_tail_encoder(
                 } else {
                     let _ = writeln!(out, "            {}", mdast_head());
                 }
-                out.push_str("            let attrs = intern_mdx_jsx_attrs(&c.props, builder);\n");
+                out.push_str(
+                    "            let attrs = intern_mdx_jsx_attrs(&c.props, builder.arena_mut());\n",
+                );
                 let _ = writeln!(
                     out,
                     "            Some({codec}(head, &attrs, c.explicit.unwrap_or(false)))"
@@ -390,16 +392,9 @@ fn emit_tail_encoder(
                 out.push_str(
                     "            let tag = builder.alloc_string(c.tag.unwrap_or(\"div\"));\n",
                 );
-                out.push_str("            let mut props = Vec::with_capacity(c.props.len());\n");
-                out.push_str("            for &(name, kind, value) in &c.props {\n");
-                out.push_str("                let n = builder.alloc_string(name);\n");
-                out.push_str("                let v = if kind == PROP_BOOL_TRUE || kind == PROP_BOOL_FALSE {\n");
-                out.push_str("                    StringRef::empty()\n");
-                out.push_str("                } else {\n");
-                out.push_str("                    builder.alloc_string(value)\n");
-                out.push_str("                };\n");
-                out.push_str("                props.push((n, kind, v));\n");
-                out.push_str("            }\n");
+                out.push_str(
+                    "            let props = intern_element_props(&c.props, builder.arena_mut());\n",
+                );
                 let _ = writeln!(out, "            Some({codec}(tag, &props))");
                 out.push_str("        }\n");
             }
@@ -495,19 +490,18 @@ pub fn encode_rs(
         "use crate::generated::wire_constants::{{{}}};",
         ofs.join(", ")
     );
-    if hast_js_tails.is_empty() {
-        out.push_str("use crate::js_commands::{FieldCollector, alloc_opt_str};\n");
-    } else {
-        out.push_str(
-            "use crate::js_commands::{FieldCollector, HastFieldCollector, alloc_opt_str};\n",
-        );
+    let mut js_items = vec!["FieldCollector"];
+    if !hast_js_tails.is_empty() {
+        js_items.push("HastFieldCollector");
     }
+    js_items.push("alloc_opt_str");
+    if has_element_props {
+        js_items.push("intern_element_props");
+    }
+    let _ = writeln!(out, "use crate::js_commands::{{{}}};", js_items.join(", "));
     let mut arena_items = vec!["ArenaBuilder", "Mdast"];
     if !hast_js_tails.is_empty() {
         arena_items.push("Hast");
-    }
-    if has_element_props {
-        arena_items.push("StringRef");
     }
     arena_items.sort();
     let _ = writeln!(out, "use satteri_arena::{{{}}};", arena_items.join(", "));
@@ -524,9 +518,6 @@ pub fn encode_rs(
             "use satteri_ast::hast::codec::{{{}}};",
             hast_codecs.join(", ")
         );
-    }
-    if has_element_props {
-        out.push_str("use satteri_ast::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE};\n");
     }
     if !mdx_codecs.is_empty() {
         let _ = writeln!(

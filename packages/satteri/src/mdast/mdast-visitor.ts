@@ -47,6 +47,7 @@ import type {
   MdxTextExpression,
 } from "../mdx-types.js";
 import {
+  attributesJson,
   emitMdxAttr,
   OF_ALT,
   OF_CHECKED,
@@ -83,18 +84,20 @@ import type {
 } from "../types.js";
 import {
   asArray,
-  collectCommands,
+  takeCommands,
   FOREIGN_REF,
   foreignContentError,
   makeRequireNid,
   requireRootReplacement,
+  RemovalTracker,
+  existingWrapperError,
   ROOT_NODE_ID,
   rootReplacementError,
+  selfInsertError,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
   type SettableFieldKey,
-  withMdxJsxAttribute,
 } from "../visitor-shared.js";
 import { ru32 } from "../wire-read.js";
 import { MDAST_OPSTREAM_TYPES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
@@ -261,11 +264,13 @@ const requireNid = makeRequireNid(getNodeId);
 class MdastVisitorContextImpl implements MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: MdastDiagnostic[];
-  readonly #pendingNodes: Map<number, MdastTarget> = new Map();
+  /** Value nodes edited this pass, whose own return can no longer be sent as a value-only edit. */
+  #editedValueNodes: Set<number> | undefined;
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
   readonly #refs: NodeRefs;
+  readonly removals: RemovalTracker<MdastNode>;
   readonly fileURL: URL | undefined;
   readonly data: Data;
   readonly sourceFormat: SourceFormat;
@@ -284,6 +289,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     this.fileURL = fileURL;
     this.#resolver = resolver;
     this.#refs = resolver.refs;
+    this.removals = new RemovalTracker(getNodeId, resolver.refs, resolver);
     this.data = data;
     this.sourceFormat = sourceFormat;
     this.#diagnostics = diagnostics;
@@ -298,7 +304,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   removeNode(node: Readonly<MdastTarget>): void {
     const id = requireNid(node as MdastNode, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
-    this.#pendingNodes.delete(id);
+    this.removals.removed(id);
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
@@ -314,8 +320,22 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   }
 
   #splice(anchorId: number, content: MdastContent | MdastContent[], op: StructuralOp): void {
-    for (const n of asArray(content)) {
-      emitMdastTree(this.#commandBuffer, op, anchorId, n, false, this.#refs, true);
+    const nodes = asArray(content);
+    for (const n of nodes) {
+      if (getNodeId(n as MdastNode, this.#refs) === anchorId) throw selfInsertError(op);
+    }
+    this.removals.inserted(anchorId, content);
+    if (nodes.length === 1) {
+      emitMdastTree(this.#commandBuffer, op, anchorId, nodes[0]!, false, this.#refs, true);
+    } else if (nodes.length > 1) {
+      emitMdastSequence(
+        this.#commandBuffer,
+        STRUCTURAL_CMD[op],
+        anchorId,
+        nodes,
+        false,
+        this.#refs,
+      );
     }
   }
 
@@ -325,6 +345,10 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   ): void {
     const id = requireNid(node as MdastNode, "wrapNode", this.#refs);
     assertMdastWrapParent(parentNode);
+    const wrapperId = getNodeId(parentNode as MdastNode, this.#refs);
+    if (wrapperId === FOREIGN_REF) throw foreignContentError();
+    if (wrapperId !== undefined) throw existingWrapperError();
+    this.removals.inserted(id, parentNode);
     emitMdastTree(this.#commandBuffer, "wrapNode", id, parentNode, false, this.#refs);
   }
 
@@ -378,121 +402,95 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
     ) {
       return;
     }
-    if (Array.isArray(newNode)) {
-      if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
-      // One command, so the node's replacement is its whole slot and a ref back
-      // to it resolves to all of it rather than to the last element.
-      if (id !== ROOT_NODE_ID && newNode.length > 1 && newNode.every(isPlainReplacement)) {
-        emitMdastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
+    this.removals.rebuilt(id, newNode);
+    if (onlyReplacement === undefined) {
+      const nodes = asArray(newNode);
+      if (nodes.length === 0) {
+        this.removeNode(node);
         return;
       }
-      let previous: MdastContent | undefined;
-      for (const n of newNode) {
-        if (previous !== undefined) {
-          emitMdastTree(this.#commandBuffer, "insertBefore", id, previous, false, this.#refs, true);
+      if (id === ROOT_NODE_ID) throw rootReplacementError(nodes);
+      emitMdastSequence(this.#commandBuffer, STRUCTURAL_CMD.replace, id, nodes, true, this.#refs);
+      return;
+    }
+    if (id === ROOT_NODE_ID && !isRawMdastContent(onlyReplacement)) {
+      emitMdastRootReplace(
+        this.#commandBuffer,
+        requireRootReplacement(onlyReplacement),
+        this.#refs,
+      );
+    } else {
+      emitMdastTree(this.#commandBuffer, "replace", id, onlyReplacement, true, this.#refs, true);
+    }
+    this.#noteEdit(node, id);
+  }
+
+  #noteEdit(node: Readonly<MdastTarget>, id: number): void {
+    if (MDAST_VALUE_ONLY_TYPES.has(node.type)) (this.#editedValueNodes ??= new Set()).add(id);
+  }
+
+  /** A visitor's return is its last edit, queued after its context calls. */
+  applyReturn(result: MdastVisitorResult, nodeId: number, originalNode: MdastNode): void {
+    // Returning the input node must not overwrite mutations queued through the context.
+    if (result === undefined || result === null || result === originalNode) return;
+    const buffer = this.#commandBuffer;
+    if (Array.isArray(result)) {
+      if (result.length === 1) {
+        this.applyReturn(result[0], nodeId, originalNode);
+        return;
+      }
+      this.removals.returned(nodeId, result);
+      if (result.length === 0) buffer.removeNode(nodeId);
+      else emitMdastSequence(buffer, STRUCTURAL_CMD.replace, nodeId, result, true, this.#refs);
+      return;
+    }
+    switch (classifyReturn(result)) {
+      case "raw_markdown":
+        buffer.replace(nodeId, result as unknown as RawMdastContent);
+        break;
+      case "raw_html":
+        buffer.replace(nodeId, result as unknown as RawHtmlMdastContent);
+        break;
+      case "structured_node": {
+        const node = result as MdastNode;
+        // A value-only edit stands in for the replacement only while nothing else has edited the node.
+        if (isMdastTextValueSwap(node, originalNode) && !this.#editedValueNodes?.has(nodeId)) {
+          buffer.setProperty(nodeId, "value", node.value);
+          break;
         }
-        previous = n;
+        this.removals.rebuilt(nodeId, node);
+        emitMdastTree(buffer, "replace", nodeId, node as MdastContent, true, this.#refs, true);
+        break;
       }
-      if (previous === undefined) {
-        this.removeNode(node);
-      } else if (id === ROOT_NODE_ID && !isRawMdastContent(previous)) {
-        emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
-      } else {
-        emitMdastTree(this.#commandBuffer, "replace", id, previous, true, this.#refs, true);
-      }
-      if (previous !== undefined && !isRawMdastContent(previous)) {
-        this.#pendingNodes.set(id, previous);
-      } else {
-        this.#pendingNodes.delete(id);
-      }
-      return;
     }
-    if (id === ROOT_NODE_ID && !isRawMdastContent(newNode)) {
-      emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
-      return;
-    }
-    if (isRawMdastContent(newNode)) this.#pendingNodes.delete(id);
-    else this.#pendingNodes.set(id, newNode);
-    emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs, true);
   }
 
   setField(node: Readonly<MdastTarget>, key: string, value: unknown): void {
     const id = requireNid(node as MdastNode, "setField", this.#refs);
-    if (this.#foldPendingField(node, id, key, value)) return;
+    this.#noteEdit(node, id);
     if (key === "children") {
+      this.removals.rebuilt(id, value);
       if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
       return;
     }
-    if (
-      (key === "attributes" && (isMdxJsxElement(node) || isDirective(node))) ||
-      (key === "align" && node.type === "table")
-    ) {
-      // These are structured node fields, so re-encode the node rather than a scalar command.
-      this.replaceNode(node, { ...node, [key]: value } as MdastTarget);
-      return;
-    }
     if (key === "data") value = value != null ? JSON.stringify(value) : null;
+    else if (key === "attributes" || key === "align") value = mdastListFieldJson(key, value);
     this.#commandBuffer.setField(id, key, value);
   }
 
   setAttribute(node: Readonly<MdastTarget>, name: string, value: unknown): void {
     const id = requireNid(node as MdastNode, "setAttribute", this.#refs);
-    const target = this.#pendingNodes.get(id) ?? node;
-    if (isDirective(target) && typeof value !== "string") {
+    if (isDirective(node) && typeof value !== "string") {
       throw new TypeError("setAttribute: directive attributes must be strings");
     }
-    if (this.#foldPendingAttribute(node, id, name, value)) return;
     this.#commandBuffer.setAttribute(id, name, value);
   }
 
-  /** A queued replacement would discard the field, so fold it into a fresh replacement. */
-  #foldPendingField(node: Readonly<MdastTarget>, id: number, key: string, value: unknown): boolean {
-    const pending = this.#pendingNodes.get(id);
-    if (pending === undefined) return false;
-    this.replaceNode(node, { ...pending, [key]: value } as MdastTarget);
-    return true;
-  }
-
-  /** A queued replacement would discard the attribute, so fold it in instead. */
-  #foldPendingAttribute(
-    node: Readonly<MdastTarget>,
-    id: number,
-    name: string,
-    value: unknown,
-  ): boolean {
-    const pending = this.#pendingNodes.get(id);
-    if (pending === undefined) return false;
-    if (isDirective(pending)) {
-      this.replaceNode(node, {
-        ...pending,
-        attributes: { ...pending.attributes, [name]: value as string },
-      });
-      return true;
-    }
-    if (isMdxJsxElement(pending)) {
-      this.replaceNode(node, withMdxJsxAttribute(pending, name, value));
-      return true;
-    }
-    return false;
-  }
-
   setProperty(node: Readonly<MdastTarget>, key: string, value: unknown): void {
-    const id = requireNid(node as MdastNode, "setProperty", this.#refs);
-    if (key === "children") {
-      if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
-        throw unencodableContentError(value);
-      }
-      return;
-    }
-    const target = this.#pendingNodes.get(id) ?? node;
-    if (key === "attributes" && isMdxJsxElement(target)) {
-      this.replaceNode(node, { ...target, attributes: value } as MdastTarget);
-      return;
-    }
-    if (key === "data") value = value != null ? JSON.stringify(value) : null;
-    this.#commandBuffer.setProperty(id, key, value);
+    requireNid(node as MdastNode, "setProperty", this.#refs);
+    this.setField(node, key, value);
   }
 
   textContent(
@@ -545,13 +543,7 @@ class MdastVisitorContextImpl implements MdastVisitorContext {
   }
 }
 
-type MdastVisitorResult =
-  | MdastNode
-  | RawMdastContent
-  | RawHtmlMdastContent
-  | undefined
-  | null
-  | void;
+type MdastVisitorResult = MdastContent | MdastContent[] | undefined | null | void;
 
 export type MdastVisitorFn<N extends MdastNode | Custom = MdastNode> = (
   node: Readonly<N>,
@@ -706,20 +698,25 @@ function isPlainReplacement(content: MdastContent): boolean {
   );
 }
 
-/** Replace `id` with several nodes in one command, root-wrapped so the engine
- *  splices the children in place of the node. */
-function emitMdastMultiReplace(
+/** Several nodes as one edit, root-wrapped so the engine splices them in at the target. */
+function emitMdastSequence(
   buffer: CommandBuffer,
+  cmd: number,
   id: number,
   nodes: readonly MdastContent[],
+  forReplace: boolean,
   refs: NodeRefs,
 ): void {
-  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
-    buffer.open(MDAST_ROOT);
-    for (const n of nodes) if (!emitMdastOp(buffer, n, false, true, refs)) return false;
-    buffer.close();
-    return true;
-  });
+  const ok = nodes.every(isPlainReplacement)
+    ? buffer.emitOpstreamCommand(cmd, id, () => {
+        buffer.open(MDAST_ROOT);
+        for (const n of nodes) if (!emitMdastOp(buffer, n, false, forReplace, refs)) return false;
+        buffer.close();
+        return true;
+      })
+    : buffer.emitSequenceCommand(cmd, id, nodes, (n) =>
+        emitMdastOp(buffer, n, true, forReplace, refs, true),
+      );
   if (!ok) throw unencodableContentError(nodes);
 }
 
@@ -825,6 +822,11 @@ function emitMdastOp(
   return true;
 }
 
+function mdastListFieldJson(key: "attributes" | "align", value: unknown): string {
+  if (key === "attributes") return attributesJson(value);
+  return JSON.stringify(Array.isArray(value) ? value.map(alignCode) : []);
+}
+
 function alignCode(a: unknown): number {
   return a === "left" ? 1 : a === "right" ? 2 : a === "center" ? 3 : 0;
 }
@@ -843,14 +845,6 @@ function isDirective(
     node.type === "containerDirective" ||
     node.type === "leafDirective" ||
     node.type === "textDirective"
-  );
-}
-
-function isMdxJsxElement(
-  node: Readonly<MdastTarget>,
-): node is MdxJsxFlowElement | MdxJsxTextElement {
-  return (
-    (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") && "attributes" in node
   );
 }
 
@@ -938,36 +932,6 @@ function isMdastTextValueSwap(
   );
 }
 
-// Returning the input node must not overwrite mutations queued through the context.
-function applyMdastVisitResult(
-  result: MdastVisitorResult,
-  nodeId: number,
-  returnBuffer: CommandBuffer,
-  refs: NodeRefs,
-  originalNode?: MdastNode,
-): void {
-  if (result === undefined || result === null) return;
-  if (result === originalNode) return;
-  const cls = classifyReturn(result);
-  switch (cls) {
-    case "raw_markdown":
-      returnBuffer.replace(nodeId, result as unknown as RawMdastContent);
-      break;
-    case "raw_html":
-      returnBuffer.replace(nodeId, result as unknown as RawHtmlMdastContent);
-      break;
-    case "structured_node": {
-      const node = result as MdastNode;
-      if (isMdastTextValueSwap(node, originalNode)) {
-        returnBuffer.setProperty(nodeId, "value", node.value);
-        break;
-      }
-      emitMdastTree(returnBuffer, "replace", nodeId, node as MdastContent, true, refs, true);
-      break;
-    }
-  }
-}
-
 /**
  * Walk an MDAST handle in Rust, dispatch matched nodes to JS visitor functions,
  * and collect mutations for the caller to apply. No arena buffers cross NAPI.
@@ -996,15 +960,12 @@ export function visitMdastHandle(
     sourceFormat,
     diagnostics,
   );
-  const returnBuffer = acquireCommandBuffer();
   const rustSubs = getMdastRustSubs(plugin);
   const matchBuf: Uint8Array = walkMdastHandle(handle, rustSubs);
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = ru32(matchView, 0);
 
-  let deferred:
-    | { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[]
-    | null = null;
+  let settling: Promise<void>[] | null = null;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -1024,25 +985,15 @@ export function visitMdastHandle(
     const result = sub.visitFn.call(plugin, node, context);
 
     if (result instanceof Promise) {
-      deferred ??= [];
-      deferred.push({ nodeId, promise: result, originalNode: node });
-    } else {
-      applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, node);
+      // An async visitor's return is its last edit, so it queues when the visitor settles.
+      (settling ??= []).push(result.then((settled) => context.applyReturn(settled, nodeId, node)));
+    } else if (result !== undefined) {
+      context.applyReturn(result, nodeId, node);
     }
   }
 
-  if (deferred) {
-    const visits = deferred;
-    return Promise.all(visits.map((visit) => visit.promise)).then((results) => {
-      for (let i = 0; i < visits.length; i++) {
-        const { nodeId, originalNode } = visits[i]!;
-        applyMdastVisitResult(results[i], nodeId, returnBuffer, resolver.refs, originalNode);
-      }
-      return finalizeMdastVisit(context, returnBuffer);
-    });
-  }
-
-  return finalizeMdastVisit(context, returnBuffer);
+  if (settling) return Promise.all(settling).then(() => finalizeMdastVisit(context, plugin));
+  return finalizeMdastVisit(context, plugin);
 }
 
 const MDAST_ROOT_SUBS: { nodeType: number; tagFilter: string[] }[] = [
@@ -1071,10 +1022,9 @@ export function visitMdastHook(
     sourceFormat,
     diagnostics,
   );
-  const returnBuffer = acquireCommandBuffer();
   const matchBuf: Uint8Array = walkMdastHandle(handle, MDAST_ROOT_SUBS);
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
-  if (ru32(matchView, 0) === 0) return finalizeMdastVisit(context, returnBuffer);
+  if (ru32(matchView, 0) === 0) return finalizeMdastVisit(context, plugin);
 
   const root = readMdastMatchedNode(
     matchView,
@@ -1087,16 +1037,17 @@ export function visitMdastHook(
 
   const result = hook.call(plugin, root, context);
   if (result instanceof Promise) {
-    return result.then(() => finalizeMdastVisit(context, returnBuffer));
+    return result.then(() => finalizeMdastVisit(context, plugin));
   }
-  return finalizeMdastVisit(context, returnBuffer);
+  return finalizeMdastVisit(context, plugin);
 }
 
 function finalizeMdastVisit(
   context: MdastVisitorContextImpl,
-  returnBuffer: CommandBuffer,
+  plugin: MdastPluginInstance,
 ): MdastVisitResult {
-  const commandBuffer = collectCommands(returnBuffer, context.getCommandBuffer());
+  context.removals.warn(plugin, "mdast");
+  const commandBuffer = takeCommands(context.getCommandBuffer());
   return {
     commandBuffer,
     diagnostics: context.getDiagnostics(),

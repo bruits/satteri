@@ -1,7 +1,6 @@
 // Keep hot decoders separate so MDAST and HAST objects do not make their call sites polymorphic.
 
 import { releaseCommandBuffer, type CommandBuffer } from "./command-buffer.js";
-import type { MdxJsxAttributeUnion } from "./types.js";
 
 /** Fields representable by named-value commands or explicit structured-field handlers. */
 type ScalarFieldValue = string | number | boolean | null;
@@ -43,27 +42,6 @@ export type SettableFieldKey<N, IsMdast extends boolean = false> = {
           : never;
 }[keyof N & string];
 
-/** Return a replacement copy with one named MDX JSX attribute upserted at the end. */
-export function withMdxJsxAttribute<
-  N extends { attributes: MdxJsxAttributeUnion[] | null | undefined },
->(node: N, name: string, value: unknown): N {
-  const attributes: MdxJsxAttributeUnion[] = [...(node.attributes ?? [])];
-  const index = attributes.findIndex(
-    (attribute) => attribute.type === "mdxJsxAttribute" && attribute.name === name,
-  );
-  if (index !== -1) attributes.splice(index, 1);
-  const attrValue =
-    value === true || value === null || value === undefined
-      ? null
-      : typeof value === "string"
-        ? value
-        : Array.isArray(value)
-          ? value.join(" ")
-          : String(value);
-  attributes.push({ type: "mdxJsxAttribute", name, value: attrValue });
-  return { ...node, attributes };
-}
-
 /** Plugin-level configuration, set via `options` on a plugin definition. */
 export interface PluginOptions {
   /**
@@ -98,6 +76,20 @@ export function asArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
+const COMMAND_ERROR = "command error: ";
+
+/** Runs the apply of one plugin's queued edits, naming that plugin in place of the native error's prefix. */
+export function withPluginErrors<T>(plugin: object | null | undefined, apply: () => T): T {
+  try {
+    return apply();
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith(COMMAND_ERROR)) throw error;
+    const name = (plugin as { name?: unknown } | null | undefined)?.name;
+    const label = `satteri: plugin "${typeof name === "string" ? name : "<anonymous>"}"`;
+    throw new Error(`${label}: ${error.message.slice(COMMAND_ERROR.length)}`, { cause: error });
+  }
+}
+
 export function unencodableContentError(content: unknown): Error {
   const type = (content as { type?: unknown } | null)?.type;
   return new Error(
@@ -111,6 +103,165 @@ export type NodeRefs = WeakMap<object, number>;
 
 /** Separates "belongs to another tree" from "never had an id"; arena ids are never negative. */
 export const FOREIGN_REF = -1;
+
+interface ChildResolver {
+  parentIdOf(id: number): number | undefined;
+  indexInParent(id: number): number | undefined;
+  childIdsOf(id: number): readonly number[];
+}
+
+/** A pass's removals, to warn once it ends when a plugin listed a node it removed, which stays removed. */
+export class RemovalTracker<TNode> {
+  #removed: Set<number> | undefined;
+  #listed: Set<number> | undefined;
+  /** Anchor id, then content, per insert. */
+  #inserted: unknown[] | undefined;
+  /** The last whole-list verdict, shared by the rest of that run of children. */
+  #runSiblings: readonly unknown[] | undefined;
+  #runParent = 0;
+  #runStart = 0;
+  #runWhole = false;
+  readonly #nodeId: (node: TNode, refs: NodeRefs) => number | undefined;
+  readonly #refs: NodeRefs;
+  readonly #resolver: ChildResolver;
+
+  constructor(
+    nodeId: (node: TNode, refs: NodeRefs) => number | undefined,
+    refs: NodeRefs,
+    resolver: ChildResolver,
+  ) {
+    this.#nodeId = nodeId;
+    this.#refs = refs;
+    this.#resolver = resolver;
+  }
+
+  removed(id: number): void {
+    (this.#removed ??= new Set()).add(id);
+  }
+
+  /** An insert places what it names, so a removal of any of it wins whichever came first. */
+  inserted(anchorId: number, content: unknown): void {
+    (this.#inserted ??= []).push(anchorId, content);
+  }
+
+  /** A replacement or children list naming a node already removed cannot bring it back. */
+  rebuilt(targetId: number, content: unknown): void {
+    // Kept tiny so the common no-removal case inlines into every replacement.
+    if (this.#removed !== undefined) this.#collect(this.#removed, targetId, content);
+  }
+
+  /** A visitor's return replaces the node it visited, and an empty array removes it. */
+  returned(targetId: number, result: unknown): void {
+    if (Array.isArray(result) && result.length === 0) this.removed(targetId);
+    else this.rebuilt(targetId, result);
+  }
+
+  warn(plugin: object, kind: "mdast" | "hast"): void {
+    const removed = this.#removed;
+    const inserted = this.#inserted;
+    if (removed !== undefined && inserted !== undefined) {
+      for (let i = 0; i < inserted.length; i += 2) {
+        this.#collect(removed, inserted[i] as number, inserted[i + 1]);
+      }
+    }
+    const name = (plugin as { name?: unknown }).name;
+    const label = `satteri: plugin "${typeof name === "string" ? name : "<anonymous>"}"`;
+    const listed = this.#listed?.size ?? 0;
+    if (listed > 0) {
+      console.warn(
+        `${label} listed ${listed} ${kind} node(s) it also removed, and a removed node stays ` +
+          "removed. To move a node, insert it without calling removeNode.",
+      );
+    }
+  }
+
+  #collect(removed: ReadonlySet<number>, editedId: number, content: unknown): void {
+    this.#runSiblings = undefined;
+    const listed = (this.#listed ??= new Set());
+    const visit = (
+      node: unknown,
+      siblings: readonly unknown[] | undefined,
+      index: number,
+    ): void => {
+      if (node === null || typeof node !== "object") return;
+      const id = this.#nodeId(node as TNode, this.#refs);
+      if (id !== undefined) {
+        if (
+          id !== FOREIGN_REF &&
+          removed.has(id) &&
+          !this.#passesOnWholeList(id, editedId, siblings, index)
+        ) {
+          listed.add(id);
+        }
+        return;
+      }
+      const children = (node as { children?: unknown }).children;
+      if (Array.isArray(children)) children.forEach((child, i) => visit(child, children, i));
+    };
+    if (Array.isArray(content)) content.forEach((item, i) => visit(item, content, i));
+    else visit(content, undefined, 0);
+  }
+
+  /** Content for the edited node that holds a parent's original children whole and in order, as `{ ...node }` does, only passes a removed one on. */
+  #passesOnWholeList(
+    id: number,
+    editedId: number,
+    siblings: readonly unknown[] | undefined,
+    index: number,
+  ): boolean {
+    const parentId = this.#resolver.parentIdOf(id);
+    const ownIndex = this.#resolver.indexInParent(id);
+    if (siblings === undefined || parentId === undefined || ownIndex === undefined) return false;
+    if (parentId !== editedId && !this.#isInside(parentId, editedId)) return false;
+    const start = index - ownIndex;
+    if (
+      siblings === this.#runSiblings &&
+      parentId === this.#runParent &&
+      start === this.#runStart
+    ) {
+      return this.#runWhole;
+    }
+    const original = this.#resolver.childIdsOf(parentId);
+    const whole =
+      start >= 0 &&
+      start + original.length <= siblings.length &&
+      original.every((childId, i) => {
+        const sibling = siblings[start + i];
+        return (
+          sibling !== null &&
+          typeof sibling === "object" &&
+          this.#nodeId(sibling as TNode, this.#refs) === childId
+        );
+      });
+    this.#runSiblings = siblings;
+    this.#runParent = parentId;
+    this.#runStart = start;
+    this.#runWhole = whole;
+    return whole;
+  }
+
+  #isInside(id: number, ancestorId: number): boolean {
+    for (let cur = this.#resolver.parentIdOf(id); cur !== undefined; ) {
+      if (cur === ancestorId) return true;
+      cur = this.#resolver.parentIdOf(cur);
+    }
+    return false;
+  }
+}
+
+/** Inserting a node next to or into itself would leave it in two places. */
+export function selfInsertError(method: string): Error {
+  return new Error(
+    `${method}: a node cannot be inserted next to or into itself. Pass structuredClone(node) to insert a copy.`,
+  );
+}
+
+/** The wrapper becomes a new parent, so an existing node would end up in two places. */
+export function existingWrapperError(): Error {
+  return new Error(
+    "wrapNode: the wrapper must be a new node, not one from the tree. Pass structuredClone(node) to wrap in a copy of an existing one.",
+  );
+}
 
 export function foreignContentError(): Error {
   return new Error(
@@ -141,19 +292,9 @@ export function makeRequireNid<TNode>(
   };
 }
 
-export function collectCommands(
-  returnBuffer: CommandBuffer,
-  contextBuffer: CommandBuffer,
-): Uint8Array {
-  let merged = EMPTY_BYTES;
-  const length = returnBuffer.length + contextBuffer.length;
-  if (length > 0) {
-    merged = new Uint8Array(length);
-    merged.set(returnBuffer.getBuffer());
-    merged.set(contextBuffer.getBuffer(), returnBuffer.length);
-  }
+export function takeCommands(buffer: CommandBuffer): Uint8Array {
   // Copy before releasing: later passes reuse the backing storage.
-  releaseCommandBuffer(returnBuffer);
-  releaseCommandBuffer(contextBuffer);
-  return merged;
+  const bytes = buffer.length > 0 ? buffer.getBuffer().slice() : EMPTY_BYTES;
+  releaseCommandBuffer(buffer);
+  return bytes;
 }

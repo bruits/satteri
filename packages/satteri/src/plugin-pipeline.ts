@@ -32,6 +32,7 @@ import {
 } from "./mdast/mdast-visitor.js";
 import type { HastPluginDefinition, MdastPluginDefinition } from "./plugin.js";
 import type { Data, SourceFormat } from "./types.js";
+import { withPluginErrors } from "./visitor-shared.js";
 
 export type MdastPipelineResult = {
   handle: MdastHandle;
@@ -106,7 +107,9 @@ export function runMdastPluginsOnHandle(
         return;
       }
       markHandleMutated(handle);
-      const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
+      const dropped = withPluginErrors(plugin, () =>
+        applyCommandsToMdastHandle(handle, r.commandBuffer),
+      );
       warnIfDroppedTransforms(dropped, plugin, "mdast");
     };
 
@@ -217,7 +220,9 @@ export function runHastPluginsCollectLast(
               collected = { commands, lastPlugin: plugin };
             } else if (commands.length > 0) {
               markHandleMutated(handle);
-              const dropped = applyCommandsToHandle(handle, commands);
+              const dropped = withPluginErrors(plugin, () =>
+                applyCommandsToHandle(handle, commands),
+              );
               warnIfDroppedTransforms(dropped, plugin, "hast");
             }
           },

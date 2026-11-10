@@ -2,6 +2,76 @@
 //!
 //! The command dispatch logic lives in `satteri_plugin_api::js_commands`.
 
+use std::fmt;
+
+use satteri_arena::{ArenaKind, Document, Hast, Mdast};
+
+use crate::hast::HastNodeType;
+use crate::hast::codec::decode_element_tag;
+use crate::mdast::MdastNodeType;
+
+/// A node as a plugin author finds it in the document: its type, and where it starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeLabel {
+    pub id: u32,
+    /// The node's type, or `<tag>` for an HTML element.
+    pub node_type: String,
+    /// 1-based line and column, for a node read from the source.
+    pub start: Option<(usize, usize)>,
+}
+
+impl NodeLabel {
+    pub fn of<K: ArenaKind>(arena: &Document<'_, K>, id: u32) -> Self {
+        let node = arena.get_node(id);
+        let node_type = if K::KIND_TAG == Mdast::KIND_TAG {
+            MdastNodeType::from_u8(node.node_type).map(|t| t.name().to_string())
+        } else if K::KIND_TAG == Hast::KIND_TAG {
+            HastNodeType::from_u8(node.node_type).map(|t| match t {
+                HastNodeType::Element if arena.get_type_data(id).len() >= 8 => {
+                    format!(
+                        "<{}>",
+                        arena.get_str(decode_element_tag(arena.get_type_data(id)))
+                    )
+                }
+                _ => t.name().to_string(),
+            })
+        } else {
+            None
+        };
+        // Offsets are recorded even when line and column tracking is off.
+        let start = if node.start_line > 0 {
+            Some((node.start_line as usize, node.start_column as usize))
+        } else if node.end_offset > node.start_offset {
+            arena
+                .source()
+                .get(..node.start_offset as usize)
+                .map(|before| {
+                    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+                    (
+                        before.matches('\n').count() + 1,
+                        before[line_start..].chars().count() + 1,
+                    )
+                })
+        } else {
+            None
+        };
+        NodeLabel {
+            id,
+            node_type: node_type.unwrap_or_else(|| "node".to_string()),
+            start,
+        }
+    }
+}
+
+impl fmt::Display for NodeLabel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.start {
+            Some((line, column)) => write!(f, "the {} at {line}:{column}", self.node_type),
+            None => write!(f, "the {} node without a source position", self.node_type),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum CommandError {
     UnexpectedEof,
@@ -36,16 +106,19 @@ pub enum CommandError {
     UnencodableNodeType(&'static str),
     /// An op-stream nests OPENs deeper than the replay supports.
     OpstreamTooDeep(usize),
-    /// `wrapNode` was issued against a node that is also removed in the same
-    /// command buffer. There's no defined way to "wrap then remove" or
-    /// "remove then wrap" the same anchor.
-    WrapOnRemovedNode(u32),
-    /// `prependChild` or `appendChild` was issued against a node that is
-    /// also removed. The removed node has no inside to receive children.
-    ChildPatchOnRemovedNode(u32),
-    /// A patch's anchor lives inside a subtree whose root was removed, so
-    /// the patch can never apply.
-    PatchOnRemovedSubtree(u32),
+    /// A patch has nowhere to land: by the time it applies, its node is no longer in the tree.
+    PatchOnRemovedSubtree(NodeLabel),
+    /// Children are added to a node that cannot hold any, such as text or a void element.
+    ChildrenOnLeaf(NodeLabel),
+    /// One payload names the same node twice; a node can only be in one place.
+    NodePlacedTwice(NodeLabel),
+    /// Content placed into or next to a node, or replacing the root, contains that node.
+    NodeInsideItself(NodeLabel),
+    /// Content placed into or next to `node` contains one of its ancestors.
+    AncestorPlacedInside {
+        ancestor: NodeLabel,
+        node: NodeLabel,
+    },
     /// An op-stream's `OP_OPEN`s and `OP_CLOSE`s did not pair up.
     UnbalancedOpstream,
     /// A document op-stream is not the one `root` wrapping the tree that
@@ -56,8 +129,7 @@ pub enum CommandError {
     /// A stored node's `type_data` is shorter than its declared layout, so a
     /// field write would spill into the next node's data.
     TypeDataTooShort,
-    /// A structurally valid but re-entrant patch shape (e.g. a payload ref
-    /// naming its own anchor's ancestor) that in-place application rejects.
+    /// A patch shape the apply cannot place, such as a sibling insert on the root.
     UnsupportedPatchShape(&'static str),
     /// A `wrapNode` `{raw}` payload with no usable wrapper; the string
     /// says why.
@@ -104,9 +176,6 @@ impl std::fmt::Display for CommandError {
             Self::OpstreamTooDeep(max) => {
                 write!(f, "content nests deeper than {max} levels")
             }
-            Self::WrapOnRemovedNode(id) => {
-                write!(f, "wrapNode targets node {id} which is also removed")
-            }
             Self::UnbalancedOpstream => {
                 write!(f, "unbalanced op-stream: OPEN and CLOSE ops do not pair up")
             }
@@ -125,13 +194,28 @@ impl std::fmt::Display for CommandError {
                     "stored node type_data is shorter than its layout requires"
                 )
             }
-            Self::ChildPatchOnRemovedNode(id) => write!(
+            Self::NodePlacedTwice(node) => write!(
                 f,
-                "prependChild/appendChild targets node {id} which is also removed"
+                "{node} is placed in two places, but a node can only be in one; place structuredClone(node) where you want a copy"
             ),
-            Self::PatchOnRemovedSubtree(id) => {
-                write!(f, "patch targets node {id} inside a removed subtree")
+            Self::NodeInsideItself(node) => write!(
+                f,
+                "content placed next to or into {node} contains that same node; place structuredClone(node) there for a copy"
+            ),
+            Self::ChildrenOnLeaf(node) => {
+                write!(
+                    f,
+                    "{node} cannot hold children, so nothing can be inserted into it"
+                )
             }
+            Self::AncestorPlacedInside { ancestor, node } => write!(
+                f,
+                "{ancestor} is placed next to or inside {node}, which it contains"
+            ),
+            Self::PatchOnRemovedSubtree(node) => write!(
+                f,
+                "an edit to {node} has nowhere to land: by then the node, or a subtree holding it, was removed or replaced"
+            ),
             Self::InvalidRawWrapper(reason) => {
                 write!(f, "wrapNode: {{raw}} wrapper {reason}")
             }

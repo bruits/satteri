@@ -92,14 +92,17 @@ impl PluginRunner {
 
             if has_cmds {
                 let patches = commands_to_patches(commands.iter().collect(), &current_arena);
-                if !patches.is_empty()
-                    && let Err(err) = apply_patches_strict(&mut current_arena, &patches)
-                {
-                    all_diagnostics.push(Diagnostic {
-                        message: format!("invalid patch combination: {err}"),
-                        node_id: None,
-                        severity: Severity::Error,
-                    });
+                if !patches.is_empty() {
+                    // A failing patch leaves the earlier ones applied, so patch a copy.
+                    let mut patched = current_arena.clone();
+                    match apply_patches_strict(&mut patched, &patches) {
+                        Ok(()) => current_arena = patched,
+                        Err(err) => all_diagnostics.push(Diagnostic {
+                            message: format!("invalid patch combination: {err}"),
+                            node_id: None,
+                            severity: Severity::Error,
+                        }),
+                    }
                 }
                 all_commands.extend(commands);
             }
@@ -130,7 +133,6 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
                 built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::Replace {
                     node_id: *node_id,
                     new_tree: PatchContent::Tree(sub),
-                    keep_children: false,
                 })
             }
             Command::Remove { node_id } => Some(Patch::Remove { node_id: *node_id }),

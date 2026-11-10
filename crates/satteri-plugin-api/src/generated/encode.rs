@@ -6,13 +6,12 @@ use crate::generated::wire_constants::{
 };
 #[cfg(feature = "mdx")]
 use crate::js_commands::intern_mdx_jsx_attrs;
-use crate::js_commands::{FieldCollector, HastFieldCollector, alloc_opt_str};
-use satteri_arena::{ArenaBuilder, Hast, Mdast, StringRef};
+use crate::js_commands::{FieldCollector, HastFieldCollector, alloc_opt_str, intern_element_props};
+use satteri_arena::{ArenaBuilder, Hast, Mdast};
 use satteri_ast::hast::codec::encode_element_data;
 #[cfg(feature = "mdx")]
 use satteri_ast::mdast::codec::encode_mdx_jsx_element_data;
 use satteri_ast::mdast::codec::{ColumnAlign, encode_directive_data, encode_table_data};
-use satteri_ast::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE};
 
 /// Largest fixed-field `type_data` layout; callers stack-allocate this much.
 pub(crate) const MAX_FIXED_TYPE_DATA: usize = 32;
@@ -171,7 +170,7 @@ pub(crate) fn encode_mdast_tail_from_ops(
         #[cfg(feature = "mdx")]
         100 | 101 => {
             let head = alloc_opt_str(builder, c.strs[OF_NAME as usize]);
-            let attrs = intern_mdx_jsx_attrs(&c.props, builder);
+            let attrs = intern_mdx_jsx_attrs(&c.props, builder.arena_mut());
             Some(encode_mdx_jsx_element_data(
                 head,
                 &attrs,
@@ -193,22 +192,13 @@ pub(crate) fn encode_hast_tail_from_ops(
     match node_type {
         1 => {
             let tag = builder.alloc_string(c.tag.unwrap_or("div"));
-            let mut props = Vec::with_capacity(c.props.len());
-            for &(name, kind, value) in &c.props {
-                let n = builder.alloc_string(name);
-                let v = if kind == PROP_BOOL_TRUE || kind == PROP_BOOL_FALSE {
-                    StringRef::empty()
-                } else {
-                    builder.alloc_string(value)
-                };
-                props.push((n, kind, v));
-            }
+            let props = intern_element_props(&c.props, builder.arena_mut());
             Some(encode_element_data(tag, &props))
         }
         #[cfg(feature = "mdx")]
         10 | 11 => {
             let head = builder.alloc_string(c.tag.unwrap_or(""));
-            let attrs = intern_mdx_jsx_attrs(&c.props, builder);
+            let attrs = intern_mdx_jsx_attrs(&c.props, builder.arena_mut());
             Some(encode_mdx_jsx_element_data(
                 head,
                 &attrs,

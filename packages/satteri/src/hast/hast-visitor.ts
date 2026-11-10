@@ -24,6 +24,7 @@ import type {
   MdxTextExpressionHast,
 } from "../mdx-types.js";
 import {
+  attributesJson,
   emitMdxAttr,
   OF_EXPLICIT,
   OF_NAME,
@@ -35,6 +36,8 @@ import {
   PROP_INT,
   PROP_TOKEN_LIST,
   PROP_STRING,
+  PropRows,
+  type PropSink,
 } from "../op-stream.js";
 import type { Data, HastRaw, SourceFormat } from "../types.js";
 import { HAST_OPSTREAM_TYPES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
@@ -53,18 +56,21 @@ import type { HastHandle } from "../handles.js";
 import { LazyChildResolver, markHandleMutated } from "../lazy-child-resolver.js";
 import {
   asArray,
-  collectCommands,
+  withPluginErrors,
+  takeCommands,
   FOREIGN_REF,
   foreignContentError,
   makeRequireNid,
   requireRootReplacement,
+  RemovalTracker,
+  existingWrapperError,
   ROOT_NODE_ID,
   rootReplacementError,
+  selfInsertError,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
   type SettableFieldKey,
-  withMdxJsxAttribute,
 } from "../visitor-shared.js";
 
 export type { HastHandle };
@@ -256,15 +262,15 @@ function emitHastTree(
   if (!ok) throw unencodableContentError(node);
 }
 
-/** Replace `id` with several nodes in one command, root-wrapped so the engine
- *  splices the children in place of the node. */
-function emitHastMultiReplace(
+/** Several nodes as one edit, root-wrapped so the engine splices them in at the target. */
+function emitHastSequence(
   buffer: CommandBuffer,
+  cmd: number,
   id: number,
   nodes: readonly HastContent[],
   refs: NodeRefs,
 ): void {
-  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
+  const ok = buffer.emitOpstreamCommand(cmd, id, () => {
     buffer.open(HAST_ROOT);
     for (const n of nodes) if (!emitHastOp(buffer, n, false, refs)) return false;
     buffer.close();
@@ -376,7 +382,17 @@ function emitHastOp(
   return true;
 }
 
-function emitHastProp(w: OpWriter, name: string, value: unknown): void {
+function propertiesJson(value: unknown): string {
+  const rows = new PropRows();
+  if (value !== null && typeof value === "object") {
+    for (const name in value as Record<string, unknown>) {
+      emitHastProp(rows, name, (value as Record<string, unknown>)[name]);
+    }
+  }
+  return JSON.stringify(rows.rows);
+}
+
+function emitHastProp(w: PropSink, name: string, value: unknown): void {
   if (value === true) w.prop(name, PROP_BOOL_TRUE, "");
   else if (value === false) w.prop(name, PROP_BOOL_FALSE, "");
   else if (typeof value === "string") w.prop(name, PROP_STRING, value);
@@ -389,11 +405,13 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
 class HastVisitorContextImpl implements HastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: HastDiagnostic[];
-  readonly #pendingNodes: Map<number, HastNode> = new Map();
+  /** Value nodes edited this pass, whose own return can no longer be sent as a value-only edit. */
+  #editedValueNodes: Set<number> | undefined;
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
   readonly #refs: NodeRefs;
+  readonly removals: RemovalTracker<HastNode>;
   readonly fileURL: URL | undefined;
   readonly data: Data;
   readonly sourceFormat: SourceFormat;
@@ -412,6 +430,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.fileURL = fileURL;
     this.#resolver = resolver;
     this.#refs = resolver.refs;
+    this.removals = new RemovalTracker(getNodeId, resolver.refs, resolver);
     this.data = data;
     this.sourceFormat = sourceFormat;
     this.#diagnostics = diagnostics;
@@ -426,7 +445,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   removeNode(node: HastNode): void {
     const id = requireNid(node, "removeNode", this.#refs);
     this.#commandBuffer.removeNode(id);
-    this.#pendingNodes.delete(id);
+    this.removals.removed(id);
   }
 
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
@@ -443,44 +462,65 @@ class HastVisitorContextImpl implements HastVisitorContext {
     ) {
       return;
     }
-    if (Array.isArray(newNode)) {
-      if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
-      // One command, so the node's replacement is its whole slot and a ref back
-      // to it resolves to all of it rather than to the last element.
-      if (id !== ROOT_NODE_ID && newNode.length > 1) {
-        emitHastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
-        this.#pendingNodes.delete(id);
+    this.removals.rebuilt(id, newNode);
+    if (onlyReplacement === undefined) {
+      const nodes = asArray(newNode);
+      if (nodes.length === 0) {
+        this.removeNode(node);
         return;
       }
-      let previous: HastContent | undefined;
-      for (const n of newNode) {
-        if (previous !== undefined)
-          emitHastTree(this.#commandBuffer, "insertBefore", id, previous, this.#refs);
-        previous = n;
-      }
-      if (previous === undefined) {
-        this.removeNode(node);
-      } else if (id === ROOT_NODE_ID) {
-        emitHastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
-      } else {
-        emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs, true);
-      }
-      if (previous === undefined) this.#pendingNodes.delete(id);
-      else this.#pendingNodes.set(id, previous);
+      if (id === ROOT_NODE_ID) throw rootReplacementError(nodes);
+      emitHastSequence(this.#commandBuffer, STRUCTURAL_CMD.replace, id, nodes, this.#refs);
       return;
     }
     if (id === ROOT_NODE_ID) {
-      emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
+      emitHastRootReplace(this.#commandBuffer, requireRootReplacement(onlyReplacement), this.#refs);
+    } else {
+      emitHastTree(this.#commandBuffer, "replace", id, onlyReplacement, this.#refs, true);
+    }
+    this.#noteEdit(node, id);
+  }
+
+  #noteEdit(node: HastNode, id: number): void {
+    if (node.type === "text" || node.type === "comment" || node.type === "raw") {
+      (this.#editedValueNodes ??= new Set()).add(id);
+    }
+  }
+
+  /** A visitor's return is its last edit, queued after its context calls. */
+  applyReturn(result: HastVisitorResult, nodeId: number, originalNode: HastNode): void {
+    // Returning the input node must not overwrite mutations queued through the context.
+    if (result == null || result === originalNode) return;
+    const buffer = this.#commandBuffer;
+    if (Array.isArray(result)) {
+      if (result.length === 1) {
+        this.applyReturn(result[0], nodeId, originalNode);
+        return;
+      }
+      this.removals.returned(nodeId, result);
+      if (result.length === 0) buffer.removeNode(nodeId);
+      else emitHastSequence(buffer, STRUCTURAL_CMD.replace, nodeId, result, this.#refs);
       return;
     }
-    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs, true);
-    this.#pendingNodes.set(id, newNode);
+    // A value-only edit stands in for the replacement only while nothing else has edited the node.
+    if (isTextValueSwap(result, originalNode) && !this.#editedValueNodes?.has(nodeId)) {
+      buffer.setProperty(nodeId, "value", (result as { value: string }).value);
+      return;
+    }
+    this.removals.rebuilt(nodeId, result);
+    emitHastTree(buffer, "replace", nodeId, result, this.#refs, true);
   }
 
   #splice(anchorId: number, content: HastContent | HastContent[], op: StructuralOp): void {
-    for (const n of asArray(content)) {
-      emitHastTree(this.#commandBuffer, op, anchorId, n, this.#refs, true);
+    const nodes = asArray(content);
+    for (const n of nodes) {
+      if (getNodeId(n, this.#refs) === anchorId) throw selfInsertError(op);
     }
+    this.removals.inserted(anchorId, content);
+    if (nodes.length === 1)
+      emitHastTree(this.#commandBuffer, op, anchorId, nodes[0]!, this.#refs, true);
+    else if (nodes.length > 1)
+      emitHastSequence(this.#commandBuffer, STRUCTURAL_CMD[op], anchorId, nodes, this.#refs);
   }
 
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
@@ -504,6 +544,10 @@ class HastVisitorContextImpl implements HastVisitorContext {
       return;
     }
     assertHastWrapParent(parentNode as HastContent);
+    const wrapperId = getNodeId(parentNode as HastNode, this.#refs);
+    if (wrapperId === FOREIGN_REF) throw foreignContentError();
+    if (wrapperId !== undefined) throw existingWrapperError();
+    this.removals.inserted(id, parentNode);
     emitHastTree(this.#commandBuffer, "wrapNode", id, parentNode as HastContent, this.#refs);
   }
 
@@ -533,7 +577,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   setProperty(node: HastNode, key: string, value: unknown): void {
     const id = requireNid(node, "setProperty", this.#refs);
+    this.#noteEdit(node, id);
     if (key === "children") {
+      this.removals.rebuilt(id, value);
       if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
@@ -554,60 +600,27 @@ class HastVisitorContextImpl implements HastVisitorContext {
       return;
     }
 
-    if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
-      if (this.#foldPendingJsxAttribute(node, id, key, value)) return;
-    }
-
     this.#commandBuffer.setProperty(id, key, value);
   }
 
   setField(node: HastNode, key: string, value: unknown): void {
     const id = requireNid(node, "setField", this.#refs);
-    if (this.#foldPendingField(node, id, key, value)) return;
+    this.#noteEdit(node, id);
     if (key === "children") {
+      this.removals.rebuilt(id, value);
       if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
       return;
     }
-    if (
-      (key === "attributes" &&
-        (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement")) ||
-      (key === "properties" && node.type === "element")
-    ) {
-      // These are structured fields, so re-encode the node rather than a scalar command.
-      this.replaceNode(node, { ...node, [key]: value } as HastContent);
-      return;
-    }
-    if (key === "data") {
-      this.#commandBuffer.setField(id, key, value != null ? JSON.stringify(value) : null);
-      return;
-    }
+    if (key === "data") value = value != null ? JSON.stringify(value) : null;
+    else if (key === "attributes") value = attributesJson(value);
+    else if (key === "properties") value = propertiesJson(value);
     this.#commandBuffer.setField(id, key, value);
   }
 
   setAttribute(node: HastNode, name: string, value: unknown): void {
-    const id = requireNid(node, "setAttribute", this.#refs);
-    if (this.#foldPendingJsxAttribute(node, id, name, value)) return;
-    this.#commandBuffer.setAttribute(id, name, value);
-  }
-
-  /** A queued replacement would discard the field, so fold it into a fresh replacement. */
-  #foldPendingField(node: HastNode, id: number, key: string, value: unknown): boolean {
-    const pending = this.#pendingNodes.get(id);
-    if (pending === undefined) return false;
-    this.replaceNode(node, { ...pending, [key]: value } as HastNode);
-    return true;
-  }
-
-  /** A queued replacement would discard the attribute, so fold it in instead. */
-  #foldPendingJsxAttribute(node: HastNode, id: number, name: string, value: unknown): boolean {
-    const pending = this.#pendingNodes.get(id);
-    if (pending?.type !== "mdxJsxFlowElement" && pending?.type !== "mdxJsxTextElement") {
-      return false;
-    }
-    this.replaceNode(node, withMdxJsxAttribute(pending, name, value));
-    return true;
+    this.#commandBuffer.setAttribute(requireNid(node, "setAttribute", this.#refs), name, value);
   }
 
   textContent(node: HastNode): string {
@@ -656,13 +669,15 @@ class HastVisitorContextImpl implements HastVisitorContext {
 /** A filtered visitor: Rust filters by tag/component name, only matched nodes cross the boundary. */
 export interface HastFilteredVisitor<N extends HastNode = HastNode> {
   filter: string[];
-  visit(node: Readonly<N>, ctx: HastVisitorContext): HastNode | void | Promise<HastNode | void>;
+  visit(node: Readonly<N>, ctx: HastVisitorContext): HastVisitorResult | Promise<HastVisitorResult>;
 }
+
+type HastVisitorResult = HastNode | HastContent[] | void;
 
 export type HastVisitorFn<N extends HastNode = HastNode> = (
   node: Readonly<N>,
   ctx: HastVisitorContext,
-) => HastNode | void | Promise<HastNode | void>;
+) => HastVisitorResult | Promise<HastVisitorResult>;
 
 export type HastHookFn = (
   root: Readonly<HastRoot>,
@@ -700,7 +715,7 @@ export interface HastVisitorInstance {
 interface ResolvedSubscription {
   nodeType: number;
   tagFilter: string[];
-  visitFn: (node: HastNode, ctx: HastVisitorContext) => HastNode | void;
+  visitFn: (node: HastNode, ctx: HastVisitorContext) => HastVisitorResult;
 }
 
 const FILTERED_METHODS = new Set(["element", "mdxJsxFlowElement", "mdxJsxTextElement"]);
@@ -778,23 +793,6 @@ const METHOD_TO_TYPE: Record<string, number> = Object.fromEntries(
   [...VISITOR_KEYS].map((name) => [name, NAME_TO_TYPE[name]!] as const),
 );
 
-// Returning the input node must not overwrite mutations queued through the context.
-function applyHastVisitResult(
-  result: HastNode | void,
-  nodeId: number,
-  returnBuffer: CommandBuffer,
-  originalNode: HastNode,
-  refs: NodeRefs,
-): void {
-  if (result == null) return;
-  if (result === originalNode) return;
-  if (isTextValueSwap(result, originalNode)) {
-    returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
-    return;
-  }
-  emitHastTree(returnBuffer, "replace", nodeId, result, refs, true);
-}
-
 // Explicit field checks avoid allocating Object.keys on the per-text-node hot path.
 function isTextValueSwap(result: HastNode, original: HastNode): boolean {
   if (result.type !== original.type) return false;
@@ -816,15 +814,12 @@ function dispatchMatches(
   matchBuf: Uint8Array,
   subs: ResolvedSubscription[],
   ctx: HastVisitorContextImpl,
-  returnBuffer: CommandBuffer,
   resolver: HastLazyChildResolver,
-): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
+): Promise<void>[] | null {
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = matchView.getUint32(0, true);
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
-  let deferred:
-    | { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[]
-    | null = null;
+  let settling: Promise<void>[] | null = null;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
@@ -836,14 +831,14 @@ function dispatchMatches(
     const node = readMatchedNode(wire, dataOffset, nodeId, sub.nodeType);
     const result = sub.visitFn(node, ctx);
     if (result instanceof Promise) {
-      deferred ??= [];
-      deferred.push({ nodeId, promise: result, originalNode: node });
-    } else {
-      applyHastVisitResult(result, nodeId, returnBuffer, node, resolver.refs);
+      // An async visitor's return is its last edit, so it queues when the visitor settles.
+      (settling ??= []).push(result.then((settled) => ctx.applyReturn(settled, nodeId, node)));
+    } else if (result !== undefined) {
+      ctx.applyReturn(result, nodeId, node);
     }
   }
 
-  return deferred;
+  return settling;
 }
 
 /**
@@ -875,15 +870,19 @@ export function visitHastHandle(
     diagnostics,
   );
   if (result instanceof Promise) {
-    return result.then((commands) => applyCollectedCommands(handle, commands));
+    return result.then((commands) => applyCollectedCommands(handle, commands, plugin));
   }
-  return applyCollectedCommands(handle, result);
+  return applyCollectedCommands(handle, result, plugin);
 }
 
-function applyCollectedCommands(handle: HastHandle, commands: Uint8Array): number {
+function applyCollectedCommands(
+  handle: HastHandle,
+  commands: Uint8Array,
+  plugin: HastVisitorInstance,
+): number {
   if (commands.length === 0) return 0;
   markHandleMutated(handle);
-  return applyCommandsToHandle(handle, commands);
+  return withPluginErrors(plugin, () => applyCommandsToHandle(handle, commands));
 }
 
 // Collect the last plugin’s commands so the caller can fuse their apply with rendering or compilation.
@@ -908,21 +907,15 @@ export function visitHastHandleCollect(
     sourceFormat,
     diagnostics,
   );
-  const returnBuffer = acquireCommandBuffer();
   const rustSubs = getRustSubs(plugin);
-  const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
+  const settling = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, resolver);
+  if (settling) return Promise.all(settling).then(() => finishHastVisit(ctx, plugin));
+  return finishHastVisit(ctx, plugin);
+}
 
-  if (deferred) {
-    return Promise.all(deferred.map((visit) => visit.promise)).then((results) => {
-      for (let i = 0; i < deferred.length; i++) {
-        const { nodeId, originalNode } = deferred[i]!;
-        applyHastVisitResult(results[i], nodeId, returnBuffer, originalNode, resolver.refs);
-      }
-      return collectCommands(returnBuffer, ctx.getCommandBuffer());
-    });
-  }
-
-  return collectCommands(returnBuffer, ctx.getCommandBuffer());
+function finishHastVisit(ctx: HastVisitorContextImpl, plugin: HastVisitorInstance): Uint8Array {
+  ctx.removals.warn(plugin, "hast");
+  return takeCommands(ctx.getCommandBuffer());
 }
 
 const HAST_ROOT_SUBS: { nodeType: number; tagFilter: string[] }[] = [
@@ -951,11 +944,9 @@ export function visitHastHookCollect(
     sourceFormat,
     diagnostics,
   );
-  const returnBuffer = acquireCommandBuffer();
   const matchBuf = walkHandle(handle, HAST_ROOT_SUBS);
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
-  if (matchView.getUint32(0, true) === 0)
-    return collectCommands(returnBuffer, ctx.getCommandBuffer());
+  if (matchView.getUint32(0, true) === 0) return finishHastVisit(ctx, plugin);
 
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
   const root = readMatchedNode(
@@ -966,9 +957,8 @@ export function visitHastHookCollect(
   ) as HastRoot;
 
   const result = hook.call(plugin, root, ctx);
-  if (result instanceof Promise)
-    return result.then(() => collectCommands(returnBuffer, ctx.getCommandBuffer()));
-  return collectCommands(returnBuffer, ctx.getCommandBuffer());
+  if (result instanceof Promise) return result.then(() => finishHastVisit(ctx, plugin));
+  return finishHastVisit(ctx, plugin);
 }
 
 export function visitHastHook(
@@ -992,7 +982,7 @@ export function visitHastHook(
     diagnostics,
   );
   if (result instanceof Promise) {
-    return result.then((commands) => applyCollectedCommands(handle, commands));
+    return result.then((commands) => applyCollectedCommands(handle, commands, plugin));
   }
-  return applyCollectedCommands(handle, result);
+  return applyCollectedCommands(handle, result, plugin);
 }

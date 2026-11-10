@@ -25,6 +25,7 @@ import {
   PAYLOAD_RAW,
   RAW_LITERAL_BRACES,
   PAYLOAD_OPSTREAM,
+  PAYLOAD_SEQUENCE,
 } from "./generated/wire-constants.js";
 
 type ReturnClass = "no_change" | "raw_markdown" | "raw_html" | "structured_node";
@@ -45,7 +46,7 @@ export function classifyReturn(value: unknown): ReturnClass {
 
 const INITIAL_SIZE = 4096;
 
-// collectCommands copies bytes before release, so pooled buffers cannot invalidate returned commands.
+// takeCommands copies bytes before release, so pooled buffers cannot invalidate returned commands.
 const COMMAND_BUFFER_POOL_MAX = 8;
 /** Backings above this are dropped on release so one huge compile does not retain megabytes forever. */
 export const COMMAND_BUFFER_RETAIN_MAX = 1 << 20;
@@ -123,6 +124,39 @@ export class CommandBuffer extends OpWriter {
     const lenPos = this.n;
     this.n += 4;
     return lenPos;
+  }
+
+  /** One structural command carrying `items` in order; raw items are parsed in place. */
+  emitSequenceCommand(
+    cmd: number,
+    nodeId: number,
+    items: readonly unknown[],
+    emitNode: (item: unknown) => boolean,
+  ): boolean {
+    this.#assertNotEncoding();
+    const commandStart = this.n;
+    this.ensure(10);
+    this.buf[this.n++] = cmd;
+    this.writeU32(nodeId);
+    this.buf[this.n++] = PAYLOAD_SEQUENCE;
+    this.writeU32(items.length);
+    for (const item of items) {
+      if (this.#writeRawPayload(item)) continue;
+      this.ensure(5);
+      this.buf[this.n++] = PAYLOAD_OPSTREAM;
+      const lenPos = this.n;
+      this.n += 4;
+      this.#inOpstream = true;
+      let ok = false;
+      try {
+        ok = emitNode(item);
+      } finally {
+        if (!ok) this.#abortOpstream(commandStart);
+      }
+      if (!ok) return false;
+      this.#endOpstream(lenPos);
+    }
+    return true;
   }
 
   #endOpstream(lenPos: number): void {
@@ -223,14 +257,24 @@ export class CommandBuffer extends OpWriter {
     this.writeStructuralCommand(CMD_REPLACE, nodeId, newNode);
   }
 
-  private writeRawCommand(cmd: number, nodeId: number, flags: number, s: string): void {
-    this.#assertNotEncoding();
-    this.ensure(7);
-    this.buf[this.n++] = cmd;
-    this.writeU32(nodeId);
+  #writeRawPayload(node: unknown): boolean {
+    const v = node as Record<string, unknown>;
+    let flags: number;
+    let raw: string;
+    if (typeof v.raw === "string") {
+      flags = v.mdxExpressions === false ? RAW_LITERAL_BRACES : 0;
+      raw = v.raw;
+    } else if (typeof v.rawHtml === "string") {
+      flags = RAW_LITERAL_BRACES;
+      raw = v.rawHtml;
+    } else {
+      return false;
+    }
+    this.ensure(2);
     this.buf[this.n++] = PAYLOAD_RAW;
     this.buf[this.n++] = flags;
-    this.utf8WithU32Len(s);
+    this.utf8WithU32Len(raw);
+    return true;
   }
 
   // This view aliases the buffer and must be copied before it is released to the pool.
@@ -239,14 +283,13 @@ export class CommandBuffer extends OpWriter {
   }
 
   private writeStructuralCommand(cmd: number, nodeId: number, node: unknown): void {
-    const v = node as Record<string, unknown>;
-    if (typeof v.raw === "string") {
-      const flags = v.mdxExpressions === false ? RAW_LITERAL_BRACES : 0;
-      this.writeRawCommand(cmd, nodeId, flags, v.raw as string);
-    } else if (typeof v.rawHtml === "string") {
-      this.writeRawCommand(cmd, nodeId, RAW_LITERAL_BRACES, v.rawHtml as string);
-    } else {
-      throw new Error("CommandBuffer: structural content must be {raw} or {rawHtml}");
-    }
+    this.#assertNotEncoding();
+    const commandStart = this.n;
+    this.ensure(5);
+    this.buf[this.n++] = cmd;
+    this.writeU32(nodeId);
+    if (this.#writeRawPayload(node)) return;
+    this.n = commandStart;
+    throw new Error("CommandBuffer: structural content must be {raw} or {rawHtml}");
   }
 }
