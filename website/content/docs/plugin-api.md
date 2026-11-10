@@ -443,6 +443,8 @@ declare module "satteri" {
 | `setAttribute(node, name, value)`       | Set one entry in the node's `attributes`                |
 | `setProperty(node, key, value)`         | Set one entry in a HAST element's `properties`          |
 
+`insertChildAt` and `removeChildAt` read `index` the way arrays do: a negative one counts from the end, as in `splice` and `at`. An `index` out of range makes `insertChildAt` insert at the nearer end and `removeChildAt` do nothing.
+
 `wrapNode` places the wrapped node as `parentNode`'s **first** child. If `parentNode` declares its own children, they are kept after it. Wrapping a heading in a `<div>` that holds an anchor link yields `<div><h2>…</h2><a>…</a></div>`. To put the node at an arbitrary position instead, return a replacement from the visitor.
 
 `parentNode` must be a node type that can hold children — a HAST element, an MDX JSX element, an MDAST container like `blockquote`, or a [custom node](#custom-nodes) declaring a `children` array. Leaf nodes (`html`, `text`, …) and leaf-shaped custom nodes have no slot for the wrapped node, so `wrapNode` rejects them. A void HAST element (`img`, `br`, …) is rejected for the same reason: it renders as a lone tag, so its children would never reach the output.
