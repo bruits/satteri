@@ -110,6 +110,30 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
+  test.each([
+    ["&#87;&#87;&#87;&#46;x&#46;y", "http://WWW.x.y", "WWW.x.y"],
+    ["http&#58;&#47;&#47;x&#46;y", "http://x.y", "http://x.y"],
+    ["a&#64;b&#46;com", "mailto:a@b.com", "a@b.com"],
+  ])("a trigger assembled across decoded appends: %s", (raw, url, label) => {
+    const md = `[${raw}`;
+    expectReferenceTakesFnr(md);
+    expect(spans(md)).toEqual([
+      ["text", "[", "["],
+      ["link", url, raw],
+      ["text", label, raw],
+    ]);
+  });
+
+  test("many decoded appends do not hide a later fallback trigger", () => {
+    const rawPrefix = "[" + "&#97; ".repeat(20000);
+    const rawUrl = "&#119;ww&#46;x&#46;y";
+    expect(spans(rawPrefix + rawUrl)).toEqual([
+      ["text", "[" + "a ".repeat(20000), rawPrefix],
+      ["link", "http://www.x.y", rawUrl],
+      ["text", "www.x.y", rawUrl],
+    ]);
+  });
+
   test("a backslash escape inside the match", () => {
     const md = "[www.x.y/a\\_b";
     expectReferenceTakesFnr(md);

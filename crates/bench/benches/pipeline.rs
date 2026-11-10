@@ -118,6 +118,28 @@ fn parse_deferred_autolinks(bencher: divan::Bencher) {
     bencher.bench(|| parse(divan::black_box(source.as_str()), opts));
 }
 
+/// A non-trail byte after a punctuation run must not cause suffix rescans;
+/// the final `!` also defeats a final-alphanumeric-only shortcut.
+#[divan::bench(args = [1000, 2000, 4000, 8000])]
+fn parse_url_punctuation(bencher: divan::Bencher, count: usize) {
+    let source = format!("https://example.com/{}a!\n", "!".repeat(count));
+    bencher.bench(|| parse_unpositioned(divan::black_box(source.as_str()), DEFAULT_OPTIONS));
+}
+
+#[divan::bench(args = [1000, 2000, 4000, 8000])]
+fn parse_url_entity_trail(bencher: divan::Bencher, count: usize) {
+    let source = format!("https://example.com/{}a!\n", "&NotAnEntity;".repeat(count));
+    bencher.bench(|| parse_unpositioned(divan::black_box(source.as_str()), DEFAULT_OPTIONS));
+}
+
+/// Source contains conservative fallback triggers, but the emitted text has none.
+#[divan::bench]
+fn parse_escaped_prose(bencher: divan::Bencher) {
+    let source =
+        "Ordinary &amp; prose with \\*escaped\\* punctuation and **bold** words.\n\n".repeat(300);
+    bencher.bench(|| parse_unpositioned(divan::black_box(source.as_str()), DEFAULT_OPTIONS));
+}
+
 /// Full pipeline: Markdown source → Arena → HTML string.
 #[divan::bench]
 fn full_pipeline_to_html(bencher: divan::Bencher) {
