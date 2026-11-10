@@ -17,9 +17,7 @@
     "packages/satteri/index.d.ts",
     "packages/satteri/index.js",
     "packages/satteri/browser.d.ts",
-    "packages/satteri/browser.js",
-    "wasi-worker.mjs",
-    "wasi-worker-browser.mjs"
+    "packages/satteri/browser.js"
   ],
   "overrides": [
     {

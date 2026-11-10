@@ -1,1 +1,1 @@
-export * from '@bruits/satteri-wasm32-wasi'
+export * from '@bruits/satteri-wasm32-wasip1'
