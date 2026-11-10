@@ -587,7 +587,7 @@ export function assertExtMdastConformance(md: string, extensions: ExtensionSet[]
   expect(actual).toEqual(expected);
 }
 
-function stripPositions(node: AnyNode): AnyNode {
+export function stripPositions(node: AnyNode): AnyNode {
   if (typeof node !== "object" || node === null) return node;
   const out = { ...node };
   delete out.data;

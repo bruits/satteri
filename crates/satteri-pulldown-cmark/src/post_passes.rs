@@ -1723,7 +1723,7 @@ pub(crate) fn merge_text(
 }
 
 #[cfg(feature = "mdx")]
-pub(crate) fn mdx_mark_and_unravel(arena: &mut SourceDocument<'_>) {
+pub(crate) fn mdx_mark_and_unravel(arena: &mut SourceDocument<'_>, soft_break_is_hard: bool) {
     let len = arena.len() as u32;
     // Only paragraphs containing inline MDX nodes can be promoted; without
     // any in the arena the per-paragraph work below is guaranteed wasted.
@@ -1764,6 +1764,13 @@ pub(crate) fn mdx_mark_and_unravel(arena: &mut SourceDocument<'_>) {
                         }
                     }
                 }
+                // A converted soft break stands in for the `\n` text mdx-js unravels across.
+                Some(MdastNodeType::Break)
+                    if soft_break_is_hard
+                        && matches!(
+                            arena.source().as_bytes().get(child.start_offset as usize),
+                            Some(b'\n' | b'\r')
+                        ) => {}
                 _ => {
                     all_mdx = false;
                     break;
@@ -1795,6 +1802,7 @@ pub(crate) fn mdx_mark_and_unravel(arena: &mut SourceDocument<'_>) {
                         }
                     }
                 }
+                Some(MdastNodeType::Break) => {}
                 _ => {
                     promoted.push(child_id);
                 }

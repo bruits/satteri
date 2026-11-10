@@ -849,6 +849,8 @@ bitflags::bitflags! {
         /// blockquotes, tables, table cells and thematic breaks. Implies
         /// [`ENABLE_HEADING_ATTRIBUTES`](Self::ENABLE_HEADING_ATTRIBUTES).
         const ENABLE_ATTRIBUTES = 1 << 24;
+        /// Every soft line break in inline content becomes a hard break (arena output only).
+        const ENABLE_BREAKS = 1 << 25;
     }
 }
 

@@ -2,6 +2,7 @@ import type { markdownToHtmlFast } from "#binding";
 import type { Features, MdxOnlyOptions } from "./compile-types.js";
 import {
   ENABLE_ATTRIBUTES,
+  ENABLE_BREAKS,
   ENABLE_DEFINITION_LIST,
   ENABLE_DIRECTIVE,
   ENABLE_FOOTNOTES,
@@ -64,6 +65,7 @@ function featuresToParseOptions(features: Features): number {
   if (features.subscript) options |= ENABLE_SUBSCRIPT;
   if (features.wikilinks) options |= ENABLE_WIKILINKS;
   if (features.definitionList) options |= ENABLE_DEFINITION_LIST;
+  if (features.breaks) options |= ENABLE_BREAKS;
 
   const smartPunctuation = features.smartPunctuation;
   if (typeof smartPunctuation === "object") {
