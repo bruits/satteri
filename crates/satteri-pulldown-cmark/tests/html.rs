@@ -19,6 +19,15 @@ fn ordered_list_after_indented_code_block_preserves_start_number() {
 }
 
 #[test]
+fn task_list_marker_before_crlf_keeps_the_task_item() {
+    let opts = Options::ENABLE_GFM | Options::ENABLE_TASKLISTS;
+    let expected = "<ul class=\"contains-task-list\">\n<li class=\"task-list-item\"><input type=\"checkbox\" disabled> b</li>\n</ul>\n";
+
+    assert_eq!(expected, parse_to_html_ext("- [ ]\n  b", opts));
+    assert_eq!(expected, parse_to_html_ext("- [ ]\r\n  b", opts));
+}
+
+#[test]
 fn html_test_1() {
     let original = r##"Little header
 

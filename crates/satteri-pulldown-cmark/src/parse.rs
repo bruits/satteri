@@ -1578,7 +1578,9 @@ impl<'input> ParserInner<'input> {
                             // Otherwise `[^X][Y]` would be resolved as a link whose
                             // text happens to start with `^`, which diverges from
                             // remark-gfm's two-node parse (footnote + trailing ref).
-                            let first_bracket_start = self.tree[tos.node].item.start;
+                            // An image keeps its `!` in the opener, so the label
+                            // starts at the opener's last byte.
+                            let first_bracket_start = self.tree[tos.node].item.end - 1;
                             let first_bracket_end = self.tree[cur_ix].item.end;
                             let first_bracket_text =
                                 &self.text[first_bracket_start..first_bracket_end];
@@ -1587,6 +1589,13 @@ impl<'input> ParserInner<'input> {
                                 // A code span can swallow the label's `]`, leaving `cur_ix` on a later one.
                                 && label_len == first_bracket_text.len()
                                 && self.allocs.footdefs.contains(&footlabel)
+                                // remark keeps `![^X][Y]` an image when `Y` is defined.
+                                && !(tos.ty == LinkStackTy::Image
+                                    && matches!(
+                                        scan_reference(&self.tree, block_text, next, self.options),
+                                        RefScan::LinkLabel(label, _)
+                                            if self.allocs.refdefs.get(label.as_ref()).is_some()
+                                    ))
                             {
                                 let footref = self.allocs.allocate_cow(footlabel);
                                 if let Some(def) = self
@@ -2356,12 +2365,7 @@ impl<'input> ParserInner<'input> {
         else {
             return false;
         };
-        // micromark ends a footnote call at whitespace, where the shared label scan collapses it.
-        len == label_text.len()
-            && !label_text.as_bytes()[..len]
-                .iter()
-                .any(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-            && self.allocs.footdefs.contains(&label)
+        len == label_text.len() && self.allocs.footdefs.contains(&label)
     }
 
     /// Returns next byte index, url and title.
@@ -3156,6 +3160,10 @@ fn scan_link_label<'text>(
         let linebreak_handler: &dyn Fn(&[u8]) -> Option<usize> = &|_| None;
         if let Some((byte_index, cow)) =
             scan_link_label_rest(&text[2..], linebreak_handler, tree.is_in_table())
+            // micromark ends a footnote label at whitespace, leaving `[^a b]` a link label.
+            && !bytes[2..byte_index + 1]
+                .iter()
+                .any(|&b| matches!(b, b' ' | b'\t'))
         {
             return Some((byte_index + 2, ReferenceLabel::Footnote(cow)));
         }

@@ -385,16 +385,28 @@ pub(crate) fn scan_autolink_literal(
     // from `raw_end` with the wider set.
     // Domain ends at the first non-domain char. Micromark's
     // `tokenizeDomain` walks only over chars that can appear in a
-    // domain (alphanumeric, `-`, `_`, `.`, non-ASCII); anything else
-    // ends the domain. Notably `]`, when not at a trail position, is
-    // *kept* in the URL body but is NOT part of the domain. So the
-    // underscore check applies only to labels left of any such char.
-    let construct_domain_end = body
-        .iter()
-        .position(|&b| {
-            !(b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b >= 0x80)
-        })
-        .unwrap_or(body.len());
+    // domain (alphanumeric, `-`, `_`, `.`, and non-ASCII other than
+    // Unicode punctuation and symbols); anything else ends the domain.
+    // Notably `]`, when not at a trail position, is *kept* in the URL
+    // body but is NOT part of the domain, and so is the `_` in
+    // `www.—_x`. So the underscore check applies only to labels left of
+    // any such char.
+    let mut construct_domain_end = body.len();
+    let mut i = 0;
+    while i < body.len() {
+        let b = body[i];
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' {
+            i += 1;
+        } else if b >= 0x80
+            && let Some(c) = char_at(body, i)
+            && !is_punctuation(c)
+        {
+            i += c.len_utf8();
+        } else {
+            construct_domain_end = i;
+            break;
+        }
+    }
     let domain = &body[..construct_domain_end];
     let construct_seen = domain
         .iter()

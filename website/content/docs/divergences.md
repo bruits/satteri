@@ -112,6 +112,23 @@ Apple
 | `remark-parse` + `remark-definition-list` | paragraph holding both lines; `<p>Apple\n~   Red.</p>`   |
 | Sätteri                                   | description list; `<dl><dt>Apple</dt><dd>Red.</dd></dl>` |
 
+### Lines after a nested footnote definition
+
+A footnote definition can hold another one, and a line continues a definition when it is indented four more columns. To check the inner definition, `micromark-extension-gfm-footnote` looks at the last indent it read, which is the outer definition's when the line has no more. So a line indented exactly four columns continues both, while one indented five continues only the outer definition. Sätteri asks for four more columns at each level, as for block quotes and list items.
+
+```markdown
+[^1]: [^2]: b
+
+    c
+```
+
+| Parser                        | `c`                                |
+| ----------------------------- | ---------------------------------- |
+| `remark-parse` + `remark-gfm` | paragraph in footnote definition 2 |
+| Sätteri                       | paragraph in footnote definition 1 |
+
+With five spaces before `c`, both put it in definition 1, and with eight, both put it in definition 2.
+
 ## Rendering
 
 ### Code block `data.lang`
