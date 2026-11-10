@@ -1,5 +1,11 @@
 # satteri
 
+## 0.11.8 — 2026-11-10
+
+### Patch changes
+
+- [e059665](https://github.com/bruits/satteri/commit/e0596659cbf3ef96db2ed917bd0b5b2d77c1075d) Added a `breaks` feature that turns line endings inside paragraphs and headings into hard breaks (`<br>`). — Thanks @Princesseuh!
+
 ## 0.11.7 — 2026-11-06
 
 ### Patch changes
