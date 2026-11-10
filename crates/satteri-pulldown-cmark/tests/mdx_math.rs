@@ -10,6 +10,30 @@ fn mdx_math_options() -> Options {
     Options::ENABLE_MDX | Options::ENABLE_MATH
 }
 
+#[test]
+fn deeply_indented_math_preserves_following_headings() {
+    let (_, errors) = parse("\t\t$$\r\r", mdx_math_options());
+    assert!(errors.is_empty());
+    for newline in ["\n", "\r", "\r\n"] {
+        for indent in ["    ", "\t\t"] {
+            let source =
+                format!("{indent}$${newline}# Hidden{newline}{indent}$${newline}# After{newline}");
+            let (arena, errors) = parse(&source, mdx_math_options());
+            assert!(errors.is_empty());
+            let headings: Vec<_> = arena
+                .nodes
+                .iter()
+                .filter(|node| node.node_type == MdastNodeType::Heading as u8)
+                .collect();
+            assert_eq!(headings.len(), 1);
+            assert_eq!(
+                headings[0].start_offset as usize,
+                source.find("# After").unwrap()
+            );
+        }
+    }
+}
+
 fn find_inline_math_value(arena: &Arena<Mdast>) -> Option<String> {
     (0..arena.len() as u32)
         .find(|&id| arena.get_node(id).node_type == MdastNodeType::InlineMath as u8)

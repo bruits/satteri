@@ -3404,7 +3404,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
             line_start.scan_space(indent);
             let mut close_line_start = line_start.clone();
-            if !close_line_start.scan_space(4 - indent) {
+            let closing_indent = if self.options.contains(Options::ENABLE_MDX) {
+                close_line_start.scan_all_space();
+                true
+            } else {
+                !close_line_start.scan_space(4 - indent)
+            };
+            if closing_indent {
                 let close_ix = ix + close_line_start.bytes_scanned();
                 if let Some(n) = scan_closing_math_fence(&bytes[close_ix..], n_fence_char) {
                     ix = close_ix + n;
