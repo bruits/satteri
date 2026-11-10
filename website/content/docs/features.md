@@ -21,6 +21,7 @@ markdownToHtml(source, {
     subscript: false,
     wikilinks: false,
     definitionList: false,
+    breaks: false,
     smartPunctuation: false,
     rawHtml: false,
   },
@@ -320,6 +321,23 @@ Apple
 A term fits on one line, as in pandoc: after a paragraph of two or more lines, a marker line continues the paragraph instead of starting a definition.
 
 A tight definition puts its content directly in the `<dd>`; a loose one — separated from its term by a blank line — wraps it in a `<p>`. The parser produces `descriptionList`, `descriptionTerm`, and `descriptionDetails` mdast nodes, each available to plugins.
+
+## Line breaks
+
+Default: `false`.
+
+```ts
+breaks?: boolean
+```
+
+Turns every line ending inside a paragraph or heading into a hard break, as if each line ended with two spaces:
+
+```text
+Roses are red
+Violets are blue
+```
+
+renders as `<p>Roses are red<br>\nViolets are blue</p>`, and plugins see a `break` node between the two lines. Line endings in code, raw HTML, and image alt text stay as written.
 
 ## Smart punctuation
 

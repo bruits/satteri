@@ -1964,9 +1964,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     #[inline(never)]
     fn can_join_plain_lines(&mut self) -> bool {
         self.link_mode != LinkMode::Expanded
-            && !self
-                .options
-                .intersects(Options::ENABLE_MDX | Options::ENABLE_DEFINITION_LIST)
+            && !self.options.intersects(
+                Options::ENABLE_MDX | Options::ENABLE_DEFINITION_LIST | Options::ENABLE_BREAKS,
+            )
             && self.tree.spine_len() == 1
             && self
                 .tree

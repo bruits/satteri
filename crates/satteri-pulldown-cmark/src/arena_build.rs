@@ -214,6 +214,7 @@ pub(crate) fn parse_document<'a>(
     let mut refdef_emitted: Vec<bool> = vec![false; refdefs_owned.len()];
 
     let mdx = options.contains(Options::ENABLE_MDX);
+    let soft_break_is_hard = options.contains(Options::ENABLE_BREAKS);
     // An unclosed MDX JSX tag can leave a container's node open past its own tree pop, so its end never gets fixed up.
     let defer_container_end = track_positions && !mdx;
 
@@ -973,9 +974,13 @@ pub(crate) fn parse_document<'a>(
                 }
 
                 // A text/soft-break sibling chain is one contiguous source range, so one zero-copy leaf replaces the item-by-item merge.
-                if let Some((run_last_ix, run_end)) =
-                    collect_text_run(&inner.tree, cur_ix, &item, source.as_bytes())
-                {
+                if let Some((run_last_ix, run_end)) = collect_text_run(
+                    &inner.tree,
+                    cur_ix,
+                    &item,
+                    source.as_bytes(),
+                    soft_break_is_hard,
+                ) {
                     let (end_line, end_column) = cursor.offset_to_line_col(run_end);
                     let merged = merge_text(
                         &mut builder,
@@ -2006,6 +2011,10 @@ pub(crate) fn parse_document<'a>(
                         );
                         inner.tree.next_sibling(cur_ix);
                     }
+                    ItemBody::SoftBreak if soft_break_is_hard => {
+                        builder.add_leaf_with_position(MdastNodeType::Break as u8, position, &[]);
+                        inner.tree.next_sibling(cur_ix);
+                    }
                     ItemBody::SoftBreak => {
                         let src_bytes = source.as_bytes();
                         let break_text = {
@@ -2251,7 +2260,7 @@ pub(crate) fn parse_document<'a>(
     #[cfg(feature = "mdx")]
     if options.contains(Options::ENABLE_MDX) && memchr::memchr2(b'<', b'{', source_bytes).is_some()
     {
-        mdx_mark_and_unravel(&mut arena);
+        mdx_mark_and_unravel(&mut arena, soft_break_is_hard);
     }
 
     // GFM extension: promote bare URLs (http://…, https://…, www.…) inside
@@ -2342,6 +2351,7 @@ fn collect_text_run(
     first_ix: TreeIndex,
     first: &Item,
     source: &[u8],
+    soft_break_is_hard: bool,
 ) -> Option<(TreeIndex, u32)> {
     if !matches!(
         first.body,
@@ -2365,8 +2375,9 @@ fn collect_text_run(
             ItemBody::Text {
                 backslash_escaped: false,
             } if it.start < it.end => {}
-            ItemBody::SoftBreak if matches!(&source[it.start..it.end], b"\n" | b"\r" | b"\r\n") => {
-            }
+            ItemBody::SoftBreak
+                if !soft_break_is_hard
+                    && matches!(&source[it.start..it.end], b"\n" | b"\r" | b"\r\n") => {}
             _ => break,
         }
         run_end = it.end;

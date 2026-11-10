@@ -133,6 +133,8 @@ export interface Features {
   wikilinks?: boolean;
   /** Definition lists (a term line then a `: definition`). Default: false. */
   definitionList?: boolean;
+  /** Turn every line ending inside a paragraph or heading into a hard break (`<br>`). Default: false. */
+  breaks?: boolean;
   /**
    * Smart punctuation à la SmartyPants. Default: false.
    *
