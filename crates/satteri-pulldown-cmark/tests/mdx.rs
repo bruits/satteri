@@ -346,10 +346,12 @@ fn esm_not_in_blockquote() {
 
 #[test]
 fn esm_template_escape_at_eof() {
-    use scan_mdx_esm;
     use satteri_pulldown_cmark::{MDX_OPTIONS, parse_no_positions};
     for source in ["export `\0\\", "export `\\", "import x from `\\"] {
-        assert_eq!(scan_mdx_esm(source.as_bytes()), Some(source.len()));
+        assert!(matches!(
+            mdx_events(source).as_slice(),
+            [Event::MdxEsm(value)] if value.as_ref() == source
+        ));
         let (document, _) = parse_no_positions(source, MDX_OPTIONS);
         assert!(
             document
