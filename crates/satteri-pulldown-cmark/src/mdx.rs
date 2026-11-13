@@ -1417,7 +1417,7 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
             }
         }
     }
-    Some(ix)
+    Some(ix.min(len))
 }
 
 /// Check if `<` starts a **block-level** MDX JSX element.

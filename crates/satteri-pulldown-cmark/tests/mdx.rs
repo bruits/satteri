@@ -344,6 +344,24 @@ fn esm_not_in_blockquote() {
     );
 }
 
+#[test]
+fn esm_template_escape_at_eof() {
+    use satteri_pulldown_cmark::{MDX_OPTIONS, parse_no_positions};
+    for source in ["export `\0\\", "export `\\", "import x from `\\"] {
+        assert!(matches!(
+            mdx_events(source).as_slice(),
+            [Event::MdxEsm(value)] if value.as_ref() == source
+        ));
+        let (document, _) = parse_no_positions(source, MDX_OPTIONS);
+        assert!(
+            document
+                .nodes
+                .iter()
+                .all(|node| node.end_offset as usize <= source.len())
+        );
+    }
+}
+
 // ===========================================================================
 // Expression flow
 // ===========================================================================
