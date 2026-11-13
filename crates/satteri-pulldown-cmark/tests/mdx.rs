@@ -344,6 +344,22 @@ fn esm_not_in_blockquote() {
     );
 }
 
+#[test]
+fn esm_template_escape_at_eof() {
+    use scan_mdx_esm;
+    use satteri_pulldown_cmark::{MDX_OPTIONS, parse_no_positions};
+    for source in ["export `\0\\", "export `\\", "import x from `\\"] {
+        assert_eq!(scan_mdx_esm(source.as_bytes()), Some(source.len()));
+        let (document, _) = parse_no_positions(source, MDX_OPTIONS);
+        assert!(
+            document
+                .nodes
+                .iter()
+                .all(|node| node.end_offset as usize <= source.len())
+        );
+    }
+}
+
 // ===========================================================================
 // Expression flow
 // ===========================================================================

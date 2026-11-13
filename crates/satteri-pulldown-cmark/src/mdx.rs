@@ -2631,23 +2631,3 @@ pub(crate) fn validate_jsx_expressions(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::scan_mdx_esm;
-    use crate::arena_build::{MDX_OPTIONS, parse_no_positions};
-
-    #[test]
-    fn esm_template_escape_at_eof_does_not_panic() {
-        for source in ["export `\0\\", "export `\\", "import x from `\\"] {
-            assert_eq!(scan_mdx_esm(source.as_bytes()), Some(source.len()));
-            let (document, _) = parse_no_positions(source, MDX_OPTIONS);
-            assert!(
-                document
-                    .nodes
-                    .iter()
-                    .all(|node| node.end_offset as usize <= source.len())
-            );
-        }
-    }
-}
