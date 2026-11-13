@@ -2331,7 +2331,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // with another attention run. A deferred autolink can still
                         // consume part of it, so only resolve pairs beyond its reach.
                         if c == b'*'
-                            && count == 2
+                            && (count == 2 || (count == 1 && self.link_mode != LinkMode::Expanded))
                             && can_open
                             && !can_close
                             && ix >= furthest_autolink_end
@@ -2345,12 +2345,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 close += 1;
                             }
                             if close > content_start
-                                && bytes.get(close..close + 2) == Some(b"**")
-                                && bytes.get(close + 2) != Some(&b'*')
+                                && bytes.get(close..close + count)
+                                    == Some(if count == 2 { &b"**"[..] } else { &b"*"[..] })
+                                && bytes.get(close + count) != Some(&b'*')
                                 && classify_delimiter_run(
                                     &self.text[start..],
                                     &self.text[close..],
-                                    2,
+                                    count,
                                     close - start,
                                     mode,
                                     self.options,
@@ -2360,13 +2361,17 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 if self.link_mode != LinkMode::Expanded {
                                     self.tree.append(Item {
                                         start: ix,
-                                        end: close + 2,
-                                        body: ItemBody::SourceStrong,
+                                        end: close + count,
+                                        body: if count == 2 {
+                                            ItemBody::SourceStrong
+                                        } else {
+                                            ItemBody::SourceEmphasis
+                                        },
                                     });
                                 } else {
                                     let strong = self.tree.append(Item {
                                         start: ix,
-                                        end: close + 2,
+                                        end: close + count,
                                         body: ItemBody::Strong,
                                     });
                                     let child = self.tree.create_node(Item {
@@ -2379,7 +2384,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     self.tree[strong].child = Some(child);
                                 }
                                 backslash_escaped = false;
-                                begin_text = close + 2;
+                                begin_text = close + count;
                                 last_inline_emission_end = begin_text;
                                 break 'marker begin_text - ix - 1;
                             }

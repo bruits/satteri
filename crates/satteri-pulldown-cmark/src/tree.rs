@@ -210,6 +210,7 @@ impl Tree<Item> {
                     matches!(
                         node.item.body,
                         ItemBody::SourceStrong
+                            | ItemBody::SourceEmphasis
                             | ItemBody::LiteralLink { .. }
                             | ItemBody::LiteralAutolink(_)
                     )

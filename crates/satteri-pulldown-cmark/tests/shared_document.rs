@@ -254,3 +254,45 @@ fn owned_arena_reuse_preserves_wire_when_sources_and_position_modes_change() {
         }
     }
 }
+
+#[test]
+fn compact_emphasis_preserves_image_alt_and_positions() {
+    use satteri_ast::mdast::{MdastNodeType, decode_string_ref_data};
+    use satteri_pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+    let source = "雪 *two\twords* ![*alt*](x)";
+    let (document, errors) = document::parse(source, DEFAULT_OPTIONS, true);
+    assert!(errors.is_empty());
+    assert_eq!(
+        mdast_to_html(&document),
+        "<p>雪 <em>two\twords</em> <img src=\"x\" alt=\"alt\"></p>\n"
+    );
+    let emphasis = (0..document.len() as u32)
+        .find(|&id| document.get_node(id).node_type == MdastNodeType::Emphasis as u8)
+        .unwrap();
+    let &[id] = document.get_children(emphasis) else {
+        panic!("one emphasis child")
+    };
+    let child = document.get_node(id);
+    assert_eq!(
+        document.get_str(decode_string_ref_data(document.get_type_data(id))),
+        "two\twords"
+    );
+    assert_eq!(
+        &source[child.start_offset as usize..child.end_offset as usize],
+        "two\twords"
+    );
+    assert_eq!(
+        (
+            child.start_line,
+            child.start_column,
+            child.end_line,
+            child.end_column
+        ),
+        (1, 4, 1, 13)
+    );
+    let events: Vec<_> = Parser::new_ext("*two*", Options::empty()).collect();
+    assert!(
+        matches!(&events[..], [Event::Start(Tag::Paragraph), Event::Start(Tag::Emphasis), Event::Text(value), Event::End(TagEnd::Emphasis), Event::End(TagEnd::Paragraph)] if value.as_ref() == "two")
+    );
+}
