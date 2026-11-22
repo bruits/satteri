@@ -276,12 +276,20 @@ impl<'a> LineStart<'a> {
         }
     }
 
+    /// As in remark-directive, only whitespace may follow the colons, so a line
+    /// such as `::: card` is content. On a miss the cursor is left unchanged.
     pub(crate) fn scan_closing_container_extensions_fence(&mut self, length: u8) -> bool {
         let fence_length = scan_while_max(&self.bytes[self.ix..], |c| c == b':', u8::MAX as usize);
-        if fence_length >= length as usize {
-            self.ix += fence_length;
+        if fence_length < length as usize {
+            return false;
+        }
+        let save = self.clone();
+        self.ix += fence_length;
+        self.scan_all_space();
+        if self.is_at_eol() {
             true
         } else {
+            *self = save;
             false
         }
     }
