@@ -323,3 +323,44 @@ fn container_extensions_test_27() {
 
     test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
+
+#[test]
+fn container_extensions_test_28() {
+    let original = r##":::warning
+Before
+
+::: card
+After
+:::
+"##;
+    let expected = r##""##;
+
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
+}
+
+#[test]
+fn container_extensions_test_29() {
+    let original = r##":::warning
+Before
+
+:::: note
+After
+:::
+"##;
+    let expected = r##""##;
+
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
+}
+
+#[test]
+fn container_extensions_test_30() {
+    let original = r##":::a
+content
+:::   
+after
+"##;
+    let expected = r##"<p>after</p>
+"##;
+
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
+}

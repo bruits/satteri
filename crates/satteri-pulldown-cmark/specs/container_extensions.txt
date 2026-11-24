@@ -268,3 +268,38 @@ text `:link[` more `code]` after
 .
 <p>text <code>:link[</code> more <code>code]</code> after</p>
 ````````````````````````````````
+
+A fence followed by text does not close the container:
+
+```````````````````````````````` example_container_extensions
+:::warning
+Before
+
+::: card
+After
+:::
+.
+````````````````````````````````
+
+Same, with a longer fence:
+
+```````````````````````````````` example_container_extensions
+:::warning
+Before
+
+:::: note
+After
+:::
+.
+````````````````````````````````
+
+A closing fence may be followed by whitespace:
+
+```````````````````````````````` example_container_extensions
+:::a
+content
+:::   
+after
+.
+<p>after</p>
+````````````````````````````````

@@ -2964,10 +2964,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     let mut probe = line_start.clone();
                     let _ = probe.scan_space_upto(3);
                     if probe.scan_closing_container_extensions_fence(length) {
-                        probe.scan_all_space();
-                        if probe.is_at_eol() {
-                            return true;
-                        }
+                        return true;
                     }
                 }
                 ItemBody::HtmlBlock(..)

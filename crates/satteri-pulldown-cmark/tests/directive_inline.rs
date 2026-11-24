@@ -284,3 +284,57 @@ fn quoted_braces_in_directive_attribute_are_not_mdx_expressions() {
         );
     }
 }
+
+#[test]
+fn fence_followed_by_text_does_not_close_container() {
+    for input in [
+        ":::warning\nBefore\n\n::: card\nAfter\n:::",
+        ":::warning\nBefore\n\n:::: note\nAfter\n:::",
+        ":::warning\nBefore\n::: card\nAfter\n:::",
+    ] {
+        let (arena, _) = parse(input, dir_options());
+
+        assert_eq!(
+            types_of(&arena, 0),
+            vec![MdastNodeType::ContainerDirective as u8],
+            "expected a single container directive for {input:?}"
+        );
+
+        let text: String = (0..arena.len() as u32)
+            .filter(|&id| arena.get_node(id).node_type == MdastNodeType::Text as u8)
+            .map(|id| node_value(&arena, id))
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(
+            text.contains("After"),
+            "content after the non-closing line was lost for {input:?}: {text}"
+        );
+        assert!(
+            !text.ends_with(":::"),
+            "the real closing fence leaked into the text for {input:?}: {text}"
+        );
+    }
+}
+
+#[test]
+fn closing_fence_may_be_followed_by_whitespace() {
+    let (arena, _) = parse(":::note\nContent\n:::   \nAfter", dir_options());
+    assert_eq!(
+        types_of(&arena, 0),
+        vec![
+            MdastNodeType::ContainerDirective as u8,
+            MdastNodeType::Paragraph as u8
+        ]
+    );
+}
+
+#[test]
+fn fence_followed_by_text_continues_lazy_paragraph() {
+    for input in ["> a\n::: card", "- a\n::: card\n"] {
+        let (arena, _) = parse(input, dir_options());
+        let paragraphs: Vec<u32> = (0..arena.len() as u32)
+            .filter(|&id| arena.get_node(id).node_type == MdastNodeType::Paragraph as u8)
+            .collect();
+        assert_eq!(paragraphs.len(), 1, "expected one paragraph for {input:?}");
+    }
+}
