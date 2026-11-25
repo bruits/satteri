@@ -1,5 +1,7 @@
 use satteri_pulldown_cmark::Options;
 
+// Spec examples can hold invisible characters on purpose (a zero-width space).
+#[allow(clippy::invisible_characters)]
 #[rustfmt::skip]
 mod suite;
 
