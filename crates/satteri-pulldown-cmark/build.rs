@@ -178,9 +178,11 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
         "footnotes" => FOOTNOTES | GFM,
         "heading_attrs" => HEADING_ATTRIBUTES,
         "attributes" => ATTRIBUTES | STRIKETHROUGH | TABLES | TASKLISTS | MATH,
-        // GFM as the npm package enables it by default; the
+        // GFM as the npm package enables it by default, and superscript; the
         // `_cjk_friendly_emphasis` suffixes add the amendments.
-        "cjk_friendly_emphasis" => GFM | TABLES | FOOTNOTES | STRIKETHROUGH | TASKLISTS,
+        "cjk_friendly_emphasis" => {
+            GFM | TABLES | FOOTNOTES | STRIKETHROUGH | TASKLISTS | SUPERSCRIPT
+        }
         "math" => MATH,
         // Multi-dollar math only: `$$...$$` and `$$` fences parse, but a lone
         // `$` stays literal (remark-math `singleDollarTextMath: false`).
@@ -287,6 +289,10 @@ impl<'a> Iterator for Spec<'a> {
                 .strip_prefix("_cjk_friendly_emphasis\n")
                 .or_else(|| tail.strip_prefix("_cjk_friendly_emphasis_strikethrough\n"))
             {
+                flags[6] = true;
+                (tail.len() - rest.len(), true)
+            } else if let Some(rest) = tail.strip_prefix("_cjk_friendly_emphasis_super_sub\n") {
+                flags[2] = true;
                 flags[6] = true;
                 (tail.len() - rest.len(), true)
             } else if tail.starts_with('\n') {

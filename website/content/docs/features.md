@@ -356,6 +356,8 @@ Lets `*` and `_` emphasis open and close next to CJK punctuation, following the 
 
 stays as written; with it, it renders as `<p>これは<strong>「重要」</strong>です</p>`. Text with no CJK character beside a delimiter is unaffected, except that punctuation followed by a variation selector counts as punctuation. Unlike remark-cjk-friendly, a `*` run next to `_` or `~` still opens and closes, as it does in remark without the plugin.
 
+The same rules apply to strikethrough (`これは~~「削除」~~です`), as [remark-cjk-friendly-gfm-strikethrough](https://github.com/tats-u/markdown-cjk-friendly/tree/main/packages/remark-cjk-friendly-gfm-strikethrough) applies them, and to subscript and superscript (`これは~「下付き」~です`, `これは^「上付き」^です`).
+
 ## Smart punctuation
 
 Default: `false`.

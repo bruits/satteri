@@ -6235,8 +6235,10 @@ fn classify_delimiter_run(
     let prev_ws = prev.is_some_and(char::is_whitespace);
     let next_ws = next.is_some_and(char::is_whitespace);
     let delim = suffix.as_bytes()[0];
-    let cjk_friendly =
-        options.contains(Options::ENABLE_CJK_FRIENDLY_EMPHASIS) && matches!(delim, b'*' | b'_');
+    // Strikethrough, subscript and superscript runs flank by the same rules as
+    // `*`, so the amendments apply to them too.
+    let cjk_friendly = options.contains(Options::ENABLE_CJK_FRIENDLY_EMPHASIS)
+        && matches!(delim, b'*' | b'_' | b'~' | b'^');
     // The amendments only reclassify a run between two characters that aren't
     // whitespace, so U+3000 IDEOGRAPHIC SPACE stays whitespace.
     let before = prev

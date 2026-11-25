@@ -446,12 +446,12 @@ _abc_漢
 <p>_abc_漢</p>
 ````````````````````````````````
 
-pulldown-cmark also applies the amended flanking rules to GFM strikethrough.
-Here strikethrough keeps remark-gfm's rules, which the amendments don't cover
-(remark-cjk-friendly leaves them to remark-cjk-friendly-gfm-strikethrough), so
-a tilde run beside CJK punctuation stays text. As in `strikethrough.txt`,
-remark-gfm also keeps `~~!~~` literal and lets a single tilde strike through
-inside a word, where pulldown-cmark does not.
+CJK-friendly emphasis should also apply the amended flanking rules to GFM
+strikethrough, while preserving existing strikethrough behavior. As in
+remark-cjk-friendly-gfm-strikethrough, a single tilde follows them too: it
+strikes through by the same rules as a double one, as remark-gfm has it. As in
+`strikethrough.txt`, remark-gfm also keeps `~~!~~` literal and lets a single
+tilde strike through inside a word, where pulldown-cmark does not.
 
 ```````````````````````````````` example_cjk_friendly_emphasis_strikethrough
 真~~（她~~
@@ -474,16 +474,73 @@ This~isn't~stricken, this ~is~
 
 Here I don't strike out an exclamation point~!~.
 .
-<p>真~~（她~~</p>
-<p>~~真，~~她</p>
+<p>真<del>（她</del></p>
+<p><del>真，</del>她</p>
 <p>This<del>is</del>stricken</p>
 <p>Here I strike out an exclamation point~~!~~.</p>
-<p>真~（她~</p>
-<p>~真，~她</p>
+<p>真<del>（她</del></p>
+<p><del>真，</del>她</p>
 <p>真_（她_</p>
 <p>_真，_她</p>
 <p>This<del>isn't</del>stricken, this <del>is</del></p>
 <p>Here I don't strike out an exclamation point~!~.</p>
+````````````````````````````````
+
+Strikethrough test cases are based on
+<https://github.com/tats-u/markdown-cjk-friendly/blob/e7bad674ba512a396b95db23c11c9206291eca99/testcases/gfm-strikethrough.md>.
+
+```````````````````````````````` example_cjk_friendly_emphasis_strikethrough
+a~~a()~~あ
+
+あ~~()a~~a
+
+𩸽~~()a~~a
+
+a~~a()~~𩸽
+
+葛󠄀~~()a~~a
+
+羽︀~~()a~~a
+
+a~~「a~~」
+
+「~~a」~~a
+
+~~a~~：~~a~~
+
+~~日本語。︀~~English.
+
+~~“︁a”︁~~a
+.
+<p>a<del>a()</del>あ</p>
+<p>あ<del>()a</del>a</p>
+<p>𩸽<del>()a</del>a</p>
+<p>a<del>a()</del>𩸽</p>
+<p>葛󠄀<del>()a</del>a</p>
+<p>羽︀<del>()a</del>a</p>
+<p>a<del>「a</del>」</p>
+<p>「<del>a」</del>a</p>
+<p><del>a</del>：<del>a</del></p>
+<p><del>日本語。︀</del>English.</p>
+<p><del>“︁a”︁</del>a</p>
+````````````````````````````````
+
+Subscript and superscript runs flank by the same rules as strikethrough, so
+they follow the amendments too.
+
+```````````````````````````````` example_cjk_friendly_emphasis_super_sub
+これは~「下付き」~です
+
+これは^「上付き」^です
+
+これは~~「削除」~~です
+
+H~2~Oとm^2^です
+.
+<p>これは<sub>「下付き」</sub>です</p>
+<p>これは<sup>「上付き」</sup>です</p>
+<p>これは<del>「削除」</del>です</p>
+<p>H<sub>2</sub>Oとm<sup>2</sup>です</p>
 ````````````````````````````````
 
 CJK-friendly emphasis should remain compatible with other enabled extensions.

@@ -110,6 +110,16 @@ describe("cjkFriendlyEmphasis: conformance vs remark-cjk-friendly", () => {
     expect(referenceHtml(md)).toBe("<p>a*<em>b</em>*</p>");
   });
 
+  // As remark-cjk-friendly-gfm-strikethrough renders strikethrough; subscript and
+  // superscript flank by the same rules.
+  test("strikethrough, subscript and superscript open and close beside CJK punctuation", () => {
+    const scripts = { ...FEATURES, subscript: true, superscript: true } satisfies Features;
+    expect(html("これは~~「削除」~~です")).toBe("<p>これは<del>「削除」</del>です</p>");
+    expect(html("これは~「下付き」~です", scripts)).toBe("<p>これは<sub>「下付き」</sub>です</p>");
+    expect(html("これは^「上付き」^です", scripts)).toBe("<p>これは<sup>「上付き」</sup>です</p>");
+    expect(referenceHtml("これは~~「削除」~~です")).toBe("<p>これは~~「削除」~~です</p>");
+  });
+
   test("the CommonMark examples render as without the feature", () => {
     const off = { gfm: false, frontmatter: false } satisfies Features;
     const on = { ...off, cjkFriendlyEmphasis: true } satisfies Features;
@@ -121,5 +131,6 @@ describe("cjkFriendlyEmphasis: conformance vs remark-cjk-friendly", () => {
 
   test("off by default", () => {
     expect(html("**テスト。**テスト", {})).toBe("<p>**テスト。**テスト</p>");
+    expect(html("これは~~「削除」~~です", {})).toBe("<p>これは~~「削除」~~です</p>");
   });
 });

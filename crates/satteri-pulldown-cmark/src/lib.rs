@@ -857,6 +857,7 @@ bitflags::bitflags! {
         /// Aligns delimiter run handling with the
         /// [CommonMark CJK-friendly amendments](https://github.com/tats-u/markdown-cjk-friendly/blob/main/specification.md),
         /// enabling emphasis around CJK characters without surrounding whitespace.
+        /// Strikethrough, subscript and superscript follow the same rules.
         const ENABLE_CJK_FRIENDLY_EMPHASIS = 1 << 26;
     }
 }
