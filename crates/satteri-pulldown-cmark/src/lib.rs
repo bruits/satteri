@@ -87,6 +87,7 @@ pub mod utils;
 
 pub mod arena_build;
 mod block_attributes;
+mod cjk;
 mod entities;
 mod firstpass;
 mod linklabel;
@@ -851,6 +852,12 @@ bitflags::bitflags! {
         const ENABLE_ATTRIBUTES = 1 << 24;
         /// Every soft line break in inline content becomes a hard break (arena output only).
         const ENABLE_BREAKS = 1 << 25;
+        /// CommonMark CJK-friendly emphasis heuristics.
+        ///
+        /// Aligns delimiter run handling with the
+        /// [CommonMark CJK-friendly amendments](https://github.com/tats-u/markdown-cjk-friendly/blob/main/specification.md),
+        /// enabling emphasis around CJK characters without surrounding whitespace.
+        const ENABLE_CJK_FRIENDLY_EMPHASIS = 1 << 26;
     }
 }
 

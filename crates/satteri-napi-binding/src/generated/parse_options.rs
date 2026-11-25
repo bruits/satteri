@@ -28,4 +28,5 @@ const _: () = {
     assert!(Options::ENABLE_MATH_MULTI_DOLLAR.bits() == 1 << 23);
     assert!(Options::ENABLE_ATTRIBUTES.bits() == 1 << 24);
     assert!(Options::ENABLE_BREAKS.bits() == 1 << 25);
+    assert!(Options::ENABLE_CJK_FRIENDLY_EMPHASIS.bits() == 1 << 26);
 };

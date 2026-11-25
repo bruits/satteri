@@ -3,6 +3,7 @@ import type { Features, MdxOnlyOptions } from "./compile-types.js";
 import {
   ENABLE_ATTRIBUTES,
   ENABLE_BREAKS,
+  ENABLE_CJK_FRIENDLY_EMPHASIS,
   ENABLE_DEFINITION_LIST,
   ENABLE_DIRECTIVE,
   ENABLE_FOOTNOTES,
@@ -66,6 +67,7 @@ function featuresToParseOptions(features: Features): number {
   if (features.wikilinks) options |= ENABLE_WIKILINKS;
   if (features.definitionList) options |= ENABLE_DEFINITION_LIST;
   if (features.breaks) options |= ENABLE_BREAKS;
+  if (features.cjkFriendlyEmphasis) options |= ENABLE_CJK_FRIENDLY_EMPHASIS;
 
   const smartPunctuation = features.smartPunctuation;
   if (typeof smartPunctuation === "object") {
