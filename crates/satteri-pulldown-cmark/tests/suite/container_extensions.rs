@@ -323,3 +323,78 @@ fn container_extensions_test_27() {
 
     test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
+
+#[test]
+fn container_extensions_test_28() {
+    let original = r##":::warning
+Before
+
+::: card
+After
+:::
+
+Outside
+"##;
+    let expected = r##"<p>Outside</p>
+"##;
+
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
+}
+
+#[test]
+fn container_extensions_test_29() {
+    let original = r##":::note
+Line one
+::: not a fence
+Line two
+:::
+
+Outside
+"##;
+    let expected = r##"<p>Outside</p>
+"##;
+
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
+}
+
+#[test]
+fn container_extensions_test_30() {
+    let original = r##":::note
+Content
+:::  
+
+Outside
+"##;
+    let expected = r##"<p>Outside</p>
+"##;
+
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
+}
+
+#[test]
+fn container_extensions_test_31() {
+    let original = r##":::tip Some title
+Body
+:::
+"##;
+    let expected = r##"<p>:::tip Some title
+Body
+:::</p>
+"##;
+
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
+}
+
+#[test]
+fn container_extensions_test_32() {
+    let original = r##"Paragraph
+:::tip Some title
+Body
+"##;
+    let expected = r##"<p>Paragraph
+:::tip Some title
+Body</p>
+"##;
+
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
+}

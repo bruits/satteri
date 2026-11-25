@@ -276,9 +276,14 @@ impl<'a> LineStart<'a> {
         }
     }
 
+    /// Scans a container directive's closing fence: at least `length` colons
+    /// with nothing but spaces or tabs after them on the line. A line that
+    /// carries anything else stays content of the directive, as in
+    /// micromark-extension-directive.
     pub(crate) fn scan_closing_container_extensions_fence(&mut self, length: u8) -> bool {
-        let fence_length = scan_while_max(&self.bytes[self.ix..], |c| c == b':', u8::MAX as usize);
-        if fence_length >= length as usize {
+        let rest = &self.bytes[self.ix..];
+        let fence_length = scan_ch_repeat(rest, b':');
+        if fence_length >= length as usize && scan_blank_line(&rest[fence_length..]).is_some() {
             self.ix += fence_length;
             true
         } else {

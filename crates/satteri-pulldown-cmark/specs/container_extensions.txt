@@ -268,3 +268,68 @@ text `:link[` more `code]` after
 .
 <p>text <code>:link[</code> more <code>code]</code> after</p>
 ````````````````````````````````
+
+Text after the colons keeps the line as content (issue #324):
+
+```````````````````````````````` example_container_extensions
+:::warning
+Before
+
+::: card
+After
+:::
+
+Outside
+.
+<p>Outside</p>
+````````````````````````````````
+
+Text after the colons inside a paragraph keeps the line as content:
+
+```````````````````````````````` example_container_extensions
+:::note
+Line one
+::: not a fence
+Line two
+:::
+
+Outside
+.
+<p>Outside</p>
+````````````````````````````````
+
+Whitespace after a closing fence still closes:
+
+```````````````````````````````` example_container_extensions
+:::note
+Content
+:::  
+
+Outside
+.
+<p>Outside</p>
+````````````````````````````````
+
+Text after an opening fence is not a directive:
+
+```````````````````````````````` example_container_extensions
+:::tip Some title
+Body
+:::
+.
+<p>:::tip Some title
+Body
+:::</p>
+````````````````````````````````
+
+An opening fence with trailing text does not interrupt a paragraph:
+
+```````````````````````````````` example_container_extensions
+Paragraph
+:::tip Some title
+Body
+.
+<p>Paragraph
+:::tip Some title
+Body</p>
+````````````````````````````````
