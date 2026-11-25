@@ -22,6 +22,7 @@ markdownToHtml(source, {
     wikilinks: false,
     definitionList: false,
     breaks: false,
+    cjkFriendlyEmphasis: false,
     smartPunctuation: false,
     rawHtml: false,
   },
@@ -338,6 +339,24 @@ Violets are blue
 ```
 
 renders as `<p>Roses are red<br>\nViolets are blue</p>`, and plugins see a `break` node between the two lines. Line endings in code, raw HTML, and image alt text stay as written.
+
+## CJK-friendly emphasis
+
+Default: `false`.
+
+```ts
+cjkFriendlyEmphasis?: boolean
+```
+
+Lets `*` and `_` emphasis open and close next to CJK punctuation, following the [CommonMark CJK-friendly amendments](https://github.com/tats-u/markdown-cjk-friendly/blob/main/specification.md), as [remark-cjk-friendly](https://github.com/tats-u/markdown-cjk-friendly/tree/main/packages/remark-cjk-friendly) does. CommonMark expects a space between a delimiter and the punctuation beside it, which Chinese, Japanese and Korean text doesn't use, so without the feature
+
+```text
+これは**「重要」**です
+```
+
+stays as written; with it, it renders as `<p>これは<strong>「重要」</strong>です</p>`. Text with no CJK character beside a delimiter is unaffected, except that punctuation followed by a variation selector counts as punctuation. Unlike remark-cjk-friendly, a `*` run next to `_` or `~` still opens and closes, as it does in remark without the plugin.
+
+The same rules apply to strikethrough (`これは~~「削除」~~です`), as [remark-cjk-friendly-gfm-strikethrough](https://github.com/tats-u/markdown-cjk-friendly/tree/main/packages/remark-cjk-friendly-gfm-strikethrough) applies them, and to subscript and superscript (`これは~「下付き」~です`, `これは^「上付き」^です`).
 
 ## Smart punctuation
 

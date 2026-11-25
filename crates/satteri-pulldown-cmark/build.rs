@@ -98,7 +98,11 @@ fn {}_test_{i}() {{
                     i = i + 1,
                     original = testcase.original,
                     expected = testcase.expected,
-                    base_options = base_options,
+                    base_options = if testcase.cjk_friendly_emphasis {
+                        base_options | CJK_FRIENDLY_EMPHASIS
+                    } else {
+                        base_options
+                    },
                     smart_punct = testcase.smart_punct,
                     metadata_blocks = testcase.metadata_blocks,
                     subscript = testcase.subscript,
@@ -174,6 +178,11 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
         "footnotes" => FOOTNOTES | GFM,
         "heading_attrs" => HEADING_ATTRIBUTES,
         "attributes" => ATTRIBUTES | STRIKETHROUGH | TABLES | TASKLISTS | MATH,
+        // GFM as the npm package enables it by default, and superscript; the
+        // `_cjk_friendly_emphasis` suffixes add the amendments.
+        "cjk_friendly_emphasis" => {
+            GFM | TABLES | FOOTNOTES | STRIKETHROUGH | TASKLISTS | SUPERSCRIPT
+        }
         "math" => MATH,
         // Multi-dollar math only: `$$...$$` and `$$` fences parse, but a lone
         // `$` stays literal (remark-math `singleDollarTextMath: false`).
@@ -207,6 +216,11 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
     }
 }
 
+/// `Options::ENABLE_CJK_FRIENDLY_EMPHASIS`, which the `_cjk_friendly_emphasis`
+/// suffixes add to a spec's base options.
+#[cfg(feature = "gen-tests")]
+const CJK_FRIENDLY_EMPHASIS: u32 = 1 << 26;
+
 #[cfg(feature = "gen-tests")]
 pub struct Spec<'a> {
     spec: &'a str,
@@ -229,6 +243,7 @@ pub struct TestCase {
     pub wikilinks: bool,
     pub deflists: bool,
     pub container_extensions: bool,
+    pub cjk_friendly_emphasis: bool,
 }
 
 #[cfg(feature = "gen-tests")]
@@ -247,10 +262,11 @@ impl<'a> Iterator for Spec<'a> {
             wikilinks,
             deflists,
             container_extensions,
+            cjk_friendly_emphasis,
         ) = self.spec.find(prefix).and_then(|pos| {
             let after = pos + prefix.len();
             let tail = &spec[after..];
-            let mut flags = [false; 6];
+            let mut flags = [false; 7];
             let (consumed, matched) = if let Some(rest) = tail.strip_prefix("_smartpunct\n") {
                 flags[0] = true;
                 (tail.len() - rest.len(), true)
@@ -269,6 +285,16 @@ impl<'a> Iterator for Spec<'a> {
             } else if let Some(rest) = tail.strip_prefix("_container_extensions\n") {
                 flags[5] = true;
                 (tail.len() - rest.len(), true)
+            } else if let Some(rest) = tail
+                .strip_prefix("_cjk_friendly_emphasis\n")
+                .or_else(|| tail.strip_prefix("_cjk_friendly_emphasis_strikethrough\n"))
+            {
+                flags[6] = true;
+                (tail.len() - rest.len(), true)
+            } else if let Some(rest) = tail.strip_prefix("_cjk_friendly_emphasis_super_sub\n") {
+                flags[2] = true;
+                flags[6] = true;
+                (tail.len() - rest.len(), true)
             } else if tail.starts_with('\n') {
                 (1, true)
             } else {
@@ -283,6 +309,7 @@ impl<'a> Iterator for Spec<'a> {
                     flags[3],
                     flags[4],
                     flags[5],
+                    flags[6],
                 ))
             } else {
                 None
@@ -308,6 +335,7 @@ impl<'a> Iterator for Spec<'a> {
             wikilinks,
             deflists,
             container_extensions,
+            cjk_friendly_emphasis,
         };
 
         Some(test_case)

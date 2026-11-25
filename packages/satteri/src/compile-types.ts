@@ -135,6 +135,8 @@ export interface Features {
   definitionList?: boolean;
   /** Turn every line ending inside a paragraph or heading into a hard break (`<br>`). Default: false. */
   breaks?: boolean;
+  /** Let `*` and `_` emphasis, strikethrough, subscript and superscript open and close beside CJK punctuation, per the CommonMark CJK-friendly amendments. Default: false. */
+  cjkFriendlyEmphasis?: boolean;
   /**
    * Smart punctuation à la SmartyPants. Default: false.
    *

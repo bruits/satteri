@@ -15,6 +15,7 @@ use satteri_arena::mdx_types::Location;
 use unicase::UniCase;
 
 use crate::block_attributes::{attribute_chain_start, may_end_inline_element};
+use crate::cjk::{classify_preceding_sequence, is_cjk_character};
 use crate::linklabel::{LinkLabel, scan_link_label_rest};
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
@@ -6233,9 +6234,36 @@ fn classify_delimiter_run(
     let next = suffix[run_len..].chars().next();
     let prev_ws = prev.is_some_and(char::is_whitespace);
     let next_ws = next.is_some_and(char::is_whitespace);
-    let prev_punct = !prev_ws && prev.is_some_and(is_punctuation);
-    let next_punct = !next_ws && next.is_some_and(is_punctuation);
     let delim = suffix.as_bytes()[0];
+    // Strikethrough, subscript and superscript runs flank by the same rules as
+    // `*`, so the amendments apply to them too.
+    let cjk_friendly = options.contains(Options::ENABLE_CJK_FRIENDLY_EMPHASIS)
+        && matches!(delim, b'*' | b'_' | b'~' | b'^');
+    // The amendments only reclassify a run between two characters that aren't
+    // whitespace, so U+3000 IDEOGRAPHIC SPACE stays whitespace.
+    let before = prev
+        .filter(|_| cjk_friendly && !prev_ws && !next_ws)
+        .map(|prev| {
+            classify_preceding_sequence(prev, || s[..ix - prev.len_utf8()].chars().next_back())
+        });
+    let prev_punct = match before {
+        Some(before) => before.is_punctuation,
+        None => !prev_ws && prev.is_some_and(is_punctuation),
+    };
+    let next_punct = !next_ws && next.is_some_and(is_punctuation);
+    // CJK text puts no space where CommonMark expects one, so a CJK character
+    // on either side lets the run open or close beside punctuation. `_` keeps
+    // CommonMark's rules, which only read punctuation.
+    let (cjk_open, cjk_close) = match before {
+        Some(before) if delim != b'_' => {
+            let next_cjk = next.is_some_and(is_cjk_character);
+            (
+                next_cjk || before.is_cjk || before.is_ideographic_variation_selector,
+                next_cjk || before.is_cjk,
+            )
+        }
+        _ => (false, false),
+    };
     let table = mode == TableParseMode::Active;
     let left_edge =
         table && s.as_bytes()[..ix].ends_with(b"|") && !s.as_bytes()[..ix].ends_with(br"\|");
@@ -6253,6 +6281,7 @@ fn classify_delimiter_run(
         false
     } else if delim == b'*' && next.is_some_and(|c| is_attention_marker(c, options))
         || (symmetric || subscript || loose_strike) && !next_punct
+        || cjk_open
     {
         true
     } else if loose_strike {
@@ -6273,6 +6302,7 @@ fn classify_delimiter_run(
         || subscript
         || delim == b'*' && prev.is_some_and(|c| is_attention_marker(c, options))
         || (symmetric || loose_strike || delim == b'"') && !prev_punct
+        || cjk_close
     {
         true
     } else {
