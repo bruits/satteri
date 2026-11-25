@@ -297,6 +297,56 @@ describe("Directive MDAST conformance", () => {
     });
   });
 
+  describe("fence lines with trailing text", () => {
+    test("text after a closing fence keeps the line as content", () => {
+      assertExtMdastConformance(":::warning\nBefore\n\n::: card\nAfter\n:::\n", DIR);
+    });
+
+    test("text after a longer closing fence keeps the line as content", () => {
+      assertExtMdastConformance(":::warning\nBefore\n\n:::: note\nAfter\n:::\n", DIR);
+    });
+
+    test("text after the colons inside a paragraph keeps the line as content", () => {
+      assertExtMdastConformance(":::note\nLine one\n::: not a fence\nLine two\n:::\n", DIR);
+    });
+
+    test("text after the colons inside a blockquote keeps the line as content", () => {
+      assertExtMdastConformance("> :::warning\n> Before\n>\n> ::: card\n> After\n> :::\n", DIR);
+    });
+
+    test("text after a closing fence with CRLF line endings", () => {
+      assertExtMdastConformance(":::warning\r\nBefore\r\n\r\n::: card\r\nAfter\r\n:::\r\n", DIR);
+    });
+
+    test("spaces and tabs after a closing fence still close", () => {
+      assertExtMdastConformance(":::note\ntext\n::: \t\n\nafter\n", DIR);
+    });
+
+    test("text after an opening fence is not a directive", () => {
+      assertExtMdastConformance(":::tip Some title\nBody\n:::\n", DIR);
+    });
+
+    test("text after a label and attributes is not a directive", () => {
+      assertExtMdastConformance(":::note[Title]{.big} extra\nBody\n:::\n", DIR);
+    });
+
+    test("an unclosed label after the name is not a directive", () => {
+      assertExtMdastConformance(":::note[Title\nBody\n:::\n", DIR);
+    });
+
+    test("spaces after an opening fence still open", () => {
+      assertExtMdastConformance(":::tip  \nBody\n:::\n", DIR);
+    });
+
+    test("an opening fence with trailing text does not interrupt a paragraph", () => {
+      assertExtMdastConformance("Paragraph\n:::tip Some title\nBody\n", DIR);
+    });
+
+    test("a valid opening fence still interrupts a paragraph", () => {
+      assertExtMdastConformance("Paragraph\n:::tip\nBody\n:::\n", DIR);
+    });
+  });
+
   describe("text directives: colon boundary in headings", () => {
     test("ASCII colon + CJK id_start consumes rest as directive name", () => {
       assertExtMdastConformance("## ガイド付き例:GatsbyレイアウトをAstroへ変換する", DIR);

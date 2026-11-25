@@ -657,8 +657,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // Container directive (:::+)
                     let fence_length = core::cmp::min(colon_count, u8::MAX as usize);
                     let after_colons = colon_start + colon_count;
-                    if let Some((mut dir_data, content_end)) =
-                        parse_directive_after_colons(self.text, bytes, after_colons)
+                    if let Some((mut dir_data, line_end)) =
+                        parse_container_directive_open(self.text, bytes, after_colons)
                     {
                         // initialSize per micromark-extension-directive: cols of
                         // leading whitespace before `:::` *after* outer-container
@@ -668,10 +668,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // Close any open list before opening a sibling directive,
                         // matching how blockquote handles the same transition.
                         self.finish_list(start_ix);
-                        // For block directives, advance to end of line
-                        let after = &bytes[content_end..];
-                        let ws = scan_space_or_tab(after);
-                        let line_end = content_end + ws + scan_nextline(&after[ws..]);
                         // `[label]` offsets (0/0 when no brackets) — capture
                         // before `dir_data` is moved into the allocator.
                         let label_start = dir_data.label_start;
@@ -2964,10 +2960,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     let mut probe = line_start.clone();
                     let _ = probe.scan_space_upto(3);
                     if probe.scan_closing_container_extensions_fence(length) {
-                        probe.scan_all_space();
-                        if probe.is_at_eol() {
-                            return true;
-                        }
+                        return true;
                     }
                 }
                 ItemBody::HtmlBlock(..)
@@ -4365,7 +4358,7 @@ fn scan_paragraph_interrupt_no_table(
         || scan_atx_heading(bytes).is_some()
         || scan_code_fence(bytes).is_some()
         || (math && scan_math_fence(bytes).is_some())
-        || (directive && scan_interrupting_container_extensions_fence(bytes))
+        || (directive && scan_interrupting_directive_fence(bytes))
         || scan_blockquote_start(bytes).is_some()
         || listitem_interrupts(bytes, current_container, tree)
         // HTML types 1–6 interrupt paragraphs. MDX disables HTML blocks
@@ -6097,6 +6090,38 @@ fn parse_directive_after_colons<'a>(
         },
         pos,
     ))
+}
+
+/// Parses a container directive's opening fence from just after its colons:
+/// `name[label]{attrs}`, then nothing but spaces or tabs up to the end of the
+/// line. Returns the directive data and the offset of the next line.
+///
+/// Anything else after the fence means the line does not open a directive, as
+/// in micromark-extension-directive, so the text is never silently dropped.
+fn parse_container_directive_open<'a>(
+    text: &'a str,
+    bytes: &'a [u8],
+    start: usize,
+) -> Option<(DirectiveAttrData<'a>, usize)> {
+    let (dir_data, content_end) = parse_directive_after_colons(text, bytes, start)?;
+    let rest_of_line = scan_blank_line(&bytes[content_end..])?;
+    Some((dir_data, content_end + rest_of_line))
+}
+
+/// Whether `data` starts a directive fence that can interrupt a paragraph.
+/// A container fence only does when the whole line is a valid opening fence;
+/// otherwise the line continues the paragraph, matching `parse_block`.
+fn scan_interrupting_directive_fence(data: &[u8]) -> bool {
+    if !scan_interrupting_container_extensions_fence(data) {
+        return false;
+    }
+    let colon_count = scan_ch_repeat(data, b':');
+    if colon_count < 3 {
+        return true;
+    }
+    let line = &data[..scan_nextline(data)];
+    core::str::from_utf8(line)
+        .is_ok_and(|text| parse_container_directive_open(text, line, colon_count).is_some())
 }
 
 /// Assumes `text_bytes` is preceded by `<`.
